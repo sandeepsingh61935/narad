@@ -71,6 +71,9 @@ async fn main() -> Result<()> {
         active_mode = %cfg.general.active_mode,
         sounds_enabled = cfg.audio.sounds_enabled,
         asr = %cfg.models.asr_english,
+        retain_audio = cfg.history.retain_audio,
+        text_retention_days = ?cfg.history.text_retention_days,
+        audio_retention_days = ?cfg.history.audio_retention_days,
         "naradd config loaded"
     );
 
@@ -85,6 +88,7 @@ async fn main() -> Result<()> {
     asr::ensure_default_pack_installed(&cfg.models.asr_english);
     let asr_engine = asr::try_load(&cfg.models.asr_english);
     let pipeline = PipelineHandle::new(cfg.clone(), store, asr_engine);
+    pipeline.start_retention_purge();
     let daemon = DaemonIpc::new(pipeline.clone());
 
     // Do not allow portal/GIO-launched copies to replace the systemd instance.

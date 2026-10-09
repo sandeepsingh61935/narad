@@ -44,6 +44,9 @@ struct PipelineInner {
     processing: AtomicBool,
 }
 
+/// How often uptime retention runs after the startup pass (FR-HIS-7).
+const RETENTION_PURGE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// Shared handle used by D-Bus IPC and the hotkeys task.
 #[derive(Clone)]
 pub struct PipelineHandle {
@@ -91,6 +94,51 @@ impl PipelineHandle {
 
     pub fn config(&self) -> NaradConfig {
         self.inner.config.clone()
+    }
+
+    /// FR-HIS-7: purge once now, then every 24 hours of uptime.
+    ///
+    /// `retain_audio` is not a timer. Audio TTL runs only when `audio_retention_days` is set.
+    pub fn start_retention_purge(&self) {
+        self.purge_history_retention();
+        let handle = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(RETENTION_PURGE_EVERY).await;
+                handle.purge_history_retention();
+            }
+        });
+    }
+
+    fn purge_history_retention(&self) {
+        let text_days = self.inner.config.history.text_retention_days;
+        let audio_days = self.inner.config.history.audio_retention_days;
+        if text_days.is_none() && audio_days.is_none() {
+            return;
+        }
+        let now_ms = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(elapsed) => elapsed.as_millis() as i64,
+            Err(err) => {
+                warn!(error = %err, "history retention purge skipped; clock before epoch");
+                return;
+            }
+        };
+        match self.with_store(|store| {
+            store
+                .purge_retention(now_ms, text_days, audio_days)
+                .map_err(|err| err.to_string())
+        }) {
+            Ok(stats) => {
+                if stats.text_deleted > 0 || stats.audio_cleared > 0 {
+                    info!(
+                        text_deleted = stats.text_deleted,
+                        audio_cleared = stats.audio_cleared,
+                        "history retention purge"
+                    );
+                }
+            }
+            Err(err) => warn!(error = %err, "history retention purge failed"),
+        }
     }
 
     pub fn with_store<F, R>(&self, f: F) -> Result<R, String>

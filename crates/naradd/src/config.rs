@@ -13,6 +13,7 @@ pub struct NaradConfig {
     pub audio: AudioConfig,
     pub general: GeneralConfig,
     pub models: ModelsConfig,
+    pub history: HistoryConfig,
 }
 
 impl Default for NaradConfig {
@@ -22,6 +23,7 @@ impl Default for NaradConfig {
             audio: AudioConfig::default(),
             general: GeneralConfig::default(),
             models: ModelsConfig::default(),
+            history: HistoryConfig::default(),
         }
     }
 }
@@ -98,20 +100,46 @@ impl Default for ModelsConfig {
     }
 }
 
+/// History retention (FR-HIS-7). Audio stays off until the user enables it (NFR-S-3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HistoryConfig {
+    /// Store utterance audio. This task only persists the flag; it does not write files.
+    pub retain_audio: bool,
+    /// Delete history rows older than this many days. Absent means keep text forever.
+    pub text_retention_days: Option<u32>,
+    /// Unlink audio and clear `audio_path` after this many days. Absent means keep audio forever.
+    /// Enabling `retain_audio` does not start a timer until this is set.
+    pub audio_retention_days: Option<u32>,
+}
+
+impl Default for HistoryConfig {
+    fn default() -> Self {
+        Self {
+            retain_audio: false,
+            text_retention_days: None,
+            audio_retention_days: None,
+        }
+    }
+}
+
 /// `~/.config/narad/config.toml` or `$XDG_CONFIG_HOME/narad/config.toml`.
 pub fn resolve_config_path() -> Option<PathBuf> {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         return Some(PathBuf::from(xdg).join("narad").join("config.toml"));
     }
-    std::env::var("HOME")
-        .ok()
-        .map(|home| PathBuf::from(home).join(".config").join("narad").join("config.toml"))
+    std::env::var("HOME").ok().map(|home| {
+        PathBuf::from(home)
+            .join(".config")
+            .join("narad")
+            .join("config.toml")
+    })
 }
 
 /// Read and parse an existing config file.
 pub fn load(path: &Path) -> Result<NaradConfig> {
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("read config {}", path.display()))?;
+    let text =
+        fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
     toml::from_str(&text).with_context(|| format!("parse config {}", path.display()))
 }
 
@@ -151,6 +179,9 @@ mod tests {
         assert_eq!(cfg.audio.max_duration_secs, 300);
         assert_eq!(cfg.general.active_mode, "plain");
         assert_eq!(cfg.models.asr_english, "parakeet-ctc-110m-int8");
+        assert!(!cfg.history.retain_audio);
+        assert_eq!(cfg.history.text_retention_days, None);
+        assert_eq!(cfg.history.audio_retention_days, None);
     }
 
     #[test]
@@ -213,5 +244,39 @@ asr_english = "whisper-small-en"
         assert_eq!(cfg.activation.dictate_hotkey, "Ctrl+Alt+Space");
         assert_eq!(cfg.activation.hold_tap_threshold_ms, 250);
         assert_eq!(cfg.models.asr_english, "parakeet-ctc-110m-int8");
+        assert!(!cfg.history.retain_audio);
+        assert_eq!(cfg.history.text_retention_days, None);
+        assert_eq!(cfg.history.audio_retention_days, None);
+    }
+
+    #[test]
+    fn default_retention_round_trips_blank() {
+        let cfg = NaradConfig::default();
+        let text = toml::to_string_pretty(&cfg).expect("serialize");
+        assert!(text.contains("retain_audio = false"));
+        assert!(!text.contains("text_retention_days"));
+        assert!(!text.contains("audio_retention_days"));
+        let loaded: NaradConfig = toml::from_str(&text).expect("parse");
+        assert_eq!(loaded.history, HistoryConfig::default());
+    }
+
+    #[test]
+    fn retention_days_round_trip_when_set() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"
+[history]
+retain_audio = true
+text_retention_days = 4
+audio_retention_days = 2
+"#,
+        )
+        .expect("write");
+        let cfg = load(&path).expect("load");
+        assert!(cfg.history.retain_audio);
+        assert_eq!(cfg.history.text_retention_days, Some(4));
+        assert_eq!(cfg.history.audio_retention_days, Some(2));
     }
 }

@@ -12,6 +12,19 @@ type ConfigDraft = Omit<DashboardConfig, "activation"> & {
   };
 };
 
+/** Blank or missing means keep that kind forever. Non-negative numbers are whole days. */
+function optionalDays(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value === "string") {
+    if (value.trim() === "") return null;
+    return optionalDays(Number(value));
+  }
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return Math.round(value);
+}
+
 function roundedThreshold(value: unknown): number | null {
   if (typeof value === "string") {
     if (value.trim() === "") return null;
@@ -42,6 +55,11 @@ export function prepareConfigForSave(config: ConfigDraft): PreparedConfig {
       },
       models: {
         asr_english: config.models.asr_english.trim(),
+      },
+      history: {
+        retain_audio: config.history.retain_audio,
+        text_retention_days: optionalDays(config.history.text_retention_days),
+        audio_retention_days: optionalDays(config.history.audio_retention_days),
       },
     },
   };

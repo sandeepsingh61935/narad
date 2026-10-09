@@ -15,6 +15,14 @@ export type DashboardConfig = {
   models: {
     asr_english: string;
   };
+  history: {
+    /** Keep utterance audio. Off until the user turns it on. */
+    retain_audio: boolean;
+    /** Days before text rows are deleted. Null means keep text forever. */
+    text_retention_days: number | null;
+    /** Days before audio files are removed. Null means keep audio forever. */
+    audio_retention_days: number | null;
+  };
 };
 
 export const ACTIVE_MODES = ["plain", "email", "bullet", "code"] as const;
@@ -37,6 +45,11 @@ export function defaultConfig(): DashboardConfig {
     },
     models: {
       asr_english: "parakeet-ctc-110m-int8",
+    },
+    history: {
+      retain_audio: false,
+      text_retention_days: null,
+      audio_retention_days: null,
     },
   };
 }

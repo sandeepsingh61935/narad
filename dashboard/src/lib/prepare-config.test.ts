@@ -60,6 +60,45 @@ test("a negative threshold is rejected and the config is left unchanged", () => 
   assert.deepEqual(input, before);
 });
 
+test("default retention is off and both durations are blank", () => {
+  const config = defaultConfig();
+  assert.equal(config.history.retain_audio, false);
+  assert.equal(config.history.text_retention_days, null);
+  assert.equal(config.history.audio_retention_days, null);
+});
+
+test("a settings save keeps retention keys", () => {
+  const input = defaultConfig();
+  input.history.retain_audio = true;
+  input.history.text_retention_days = 4;
+  input.history.audio_retention_days = null;
+  input.activation.dictate_hotkey = "  Ctrl+Alt+D  ";
+
+  const result = prepareConfigForSave(input);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.config.activation.dictate_hotkey, "Ctrl+Alt+D");
+  assert.equal(result.config.history.retain_audio, true);
+  assert.equal(result.config.history.text_retention_days, 4);
+  assert.equal(result.config.history.audio_retention_days, null);
+});
+
+test("blank retention durations stay blank", () => {
+  const input = defaultConfig();
+  input.history.retain_audio = false;
+  input.history.text_retention_days = "   " as unknown as number;
+  input.history.audio_retention_days = "" as unknown as number;
+
+  const result = prepareConfigForSave(input);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.config.history.retain_audio, false);
+  assert.equal(result.config.history.text_retention_days, null);
+  assert.equal(result.config.history.audio_retention_days, null);
+});
+
 test("a non-numeric threshold is rejected", () => {
   for (const hold_tap_threshold_ms of ["nope", "", "  ", Number.NaN, Number.POSITIVE_INFINITY, null]) {
     const input = defaultConfig();

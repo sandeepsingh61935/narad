@@ -61,6 +61,8 @@ pub struct AudioConfig {
     pub max_duration_secs: u32,
     /// PipeWire source node name or serial (FR-AUD-4). Empty follows the system default.
     pub input_target: String,
+    /// RNNoise on captured PCM before VAD/ASR (FR-AUD-5). Off leaves samples unchanged.
+    pub noise_suppression: bool,
 }
 
 impl Default for AudioConfig {
@@ -70,6 +72,7 @@ impl Default for AudioConfig {
             auto_stop_silence_secs: 2,
             max_duration_secs: 300,
             input_target: String::new(),
+            noise_suppression: false,
         }
     }
 }
@@ -183,6 +186,7 @@ mod tests {
         assert_eq!(cfg.audio.auto_stop_silence_secs, 2);
         assert_eq!(cfg.audio.max_duration_secs, 300);
         assert_eq!(cfg.audio.input_target, "");
+        assert!(!cfg.audio.noise_suppression);
         assert_eq!(cfg.general.active_mode, "plain");
         assert_eq!(cfg.models.asr_english, "parakeet-ctc-110m-int8");
         assert!(!cfg.history.retain_audio);
@@ -269,6 +273,7 @@ asr_english = "whisper-small-en"
         assert_eq!(cfg.history.text_retention_days, None);
         assert_eq!(cfg.history.audio_retention_days, None);
         assert_eq!(cfg.audio.input_target, "");
+        assert!(!cfg.audio.noise_suppression);
     }
 
     #[test]
@@ -282,6 +287,25 @@ asr_english = "whisper-small-en"
         fs::write(&path, "[audio]\ninput_target = \"alsa_input.usb\"\n").expect("write");
         let cfg = load(&path).expect("load");
         assert_eq!(cfg.audio.input_target, "alsa_input.usb");
+        assert!(!cfg.audio.noise_suppression);
+    }
+
+    #[test]
+    fn noise_suppression_defaults_off_and_round_trips() {
+        let cfg = NaradConfig::default();
+        assert!(!cfg.audio.noise_suppression);
+        let text = toml::to_string_pretty(&cfg).expect("serialize");
+        assert!(text.contains("noise_suppression = false"));
+
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "[audio]\nsounds_enabled = true\n").expect("write");
+        let cfg = load(&path).expect("load");
+        assert!(!cfg.audio.noise_suppression);
+
+        fs::write(&path, "[audio]\nnoise_suppression = true\n").expect("write");
+        let cfg = load(&path).expect("load");
+        assert!(cfg.audio.noise_suppression);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 mod asr;
 mod audio;
 mod config;
+mod denoise;
 mod hotkeys;
 mod insert;
 mod ipc;

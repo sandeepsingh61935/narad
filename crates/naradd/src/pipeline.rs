@@ -11,6 +11,7 @@ use zbus::Connection;
 
 use crate::asr::{self, AsrEngine};
 use crate::audio::{self, CaptureHandle};
+use crate::denoise;
 use crate::config::NaradConfig;
 use crate::insert::{self, InsertOutcome};
 use crate::ipc::DaemonIpc;
@@ -488,6 +489,8 @@ impl PipelineHandle {
             .min(u32::MAX);
 
         let samples_16k = audio::resample_to_16k(&raw_samples, device_rate);
+        // Off: same 16 kHz buffer, no denoise pass (FR-AUD-5).
+        let samples_16k = denoise::apply(samples_16k, self.inner.config.audio.noise_suppression);
         let trimmed = match audio::trim_silence(&samples_16k, audio::TARGET_SAMPLE_RATE) {
             Some(t) => t,
             None => {

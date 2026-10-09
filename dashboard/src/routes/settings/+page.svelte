@@ -6,21 +6,18 @@
     defaultConfig,
     type DashboardConfig,
   } from "$lib/config";
+  import { prepareConfigForSave } from "$lib/prepare-config";
 
   let config = $state<DashboardConfig>(defaultConfig());
   let loading = $state(true);
-  let saving = $state(false);
   let error = $state<string | null>(null);
-  let saveMessage = $state<string | null>(null);
-  let dirty = $state(false);
+  let saveChain: Promise<void> = Promise.resolve();
 
   async function load() {
     loading = true;
     error = null;
-    saveMessage = null;
     try {
       config = await invoke<DashboardConfig>("load_config");
-      dirty = false;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       config = defaultConfig();
@@ -29,37 +26,33 @@
     }
   }
 
-  async function save() {
-    saving = true;
-    error = null;
-    saveMessage = null;
-    try {
-      const threshold = Number(config.activation.hold_tap_threshold_ms);
-      if (!Number.isFinite(threshold) || threshold < 0) {
-        throw new Error("Hold/tap threshold must be a non-negative number.");
-      }
-      config.activation.hold_tap_threshold_ms = Math.round(threshold);
-      config.activation.dictate_hotkey = config.activation.dictate_hotkey.trim();
-      config.general.active_mode = config.general.active_mode.trim() || "plain";
-      config.models.asr_english = config.models.asr_english.trim();
-      await invoke("save_config", { config });
-      dirty = false;
-      saveMessage = "Saved";
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-    } finally {
-      saving = false;
+  function commit() {
+    const prepared = prepareConfigForSave(config);
+    if (!prepared.ok) {
+      error = prepared.error;
+      return;
     }
+    error = null;
+    const toSave = prepared.config;
+    config = toSave;
+    saveChain = saveChain.then(
+      () => persist(toSave),
+      () => persist(toSave),
+    );
   }
 
-  function markDirty() {
-    dirty = true;
-    saveMessage = null;
+  async function persist(toSave: DashboardConfig) {
+    try {
+      await invoke("save_config", { config: toSave });
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
   }
 
   function onSubmit(event: Event) {
     event.preventDefault();
-    void save();
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) active.blur();
   }
 
   onMount(() => {
@@ -70,9 +63,6 @@
 <div class="page">
   <header class="header">
     <h1>Settings</h1>
-    {#if dirty}
-      <span class="dirty" role="status">Unsaved changes</span>
-    {/if}
   </header>
 
   <main class="main">
@@ -80,7 +70,7 @@
       <p class="status">Loading…</p>
     {:else}
       <form class="form" onsubmit={onSubmit}>
-        <fieldset class="group" oninput={markDirty}>
+        <fieldset class="group">
           <legend>Activation</legend>
 
           <label class="field" for="dictate-hotkey">
@@ -91,6 +81,7 @@
               bind:value={config.activation.dictate_hotkey}
               autocomplete="off"
               spellcheck="false"
+              onblur={commit}
             />
           </label>
 
@@ -102,6 +93,7 @@
               min="0"
               step="1"
               bind:value={config.activation.hold_tap_threshold_ms}
+              onblur={commit}
             />
           </label>
 
@@ -110,7 +102,7 @@
           </p>
         </fieldset>
 
-        <fieldset class="group" oninput={markDirty}>
+        <fieldset class="group">
           <legend>Audio</legend>
 
           <label class="field check" for="sounds-enabled">
@@ -118,13 +110,19 @@
               id="sounds-enabled"
               type="checkbox"
               bind:checked={config.audio.sounds_enabled}
-              onchange={markDirty}
+              onchange={(event) => {
+                const target = event.currentTarget;
+                if (target instanceof HTMLInputElement) {
+                  config.audio.sounds_enabled = target.checked;
+                }
+                commit();
+              }}
             />
             <span class="label">Sound cues enabled</span>
           </label>
         </fieldset>
 
-        <fieldset class="group" oninput={markDirty}>
+        <fieldset class="group">
           <legend>General</legend>
 
           <label class="field" for="active-mode">
@@ -132,7 +130,13 @@
             <select
               id="active-mode"
               bind:value={config.general.active_mode}
-              onchange={markDirty}
+              onchange={(event) => {
+                const target = event.currentTarget;
+                if (target instanceof HTMLSelectElement) {
+                  config.general.active_mode = target.value;
+                }
+                commit();
+              }}
             >
               {#each ACTIVE_MODES as mode}
                 <option value={mode}>{mode}</option>
@@ -148,7 +152,7 @@
           </label>
         </fieldset>
 
-        <fieldset class="group" oninput={markDirty}>
+        <fieldset class="group">
           <legend>Models</legend>
 
           <label class="field" for="asr-english">
@@ -160,28 +164,19 @@
               bind:value={config.models.asr_english}
               autocomplete="off"
               spellcheck="false"
+              onblur={commit}
             />
           </label>
         </fieldset>
 
         <div class="actions">
-          <button type="submit" disabled={saving || !dirty}>
-            {saving ? "Saving…" : "Save"}
-          </button>
-          <button
-            type="button"
-            class="ghost"
-            disabled={saving || loading}
-            onclick={() => load()}
-          >
+          <button type="button" class="ghost" onclick={() => load()}>
             Reload
           </button>
         </div>
 
         {#if error}
           <p class="feedback error" role="alert">{error}</p>
-        {:else if saveMessage}
-          <p class="feedback" role="status">{saveMessage}</p>
         {/if}
       </form>
     {/if}
@@ -211,11 +206,6 @@
     font-weight: 600;
     line-height: 22px;
     letter-spacing: -0.01em;
-  }
-
-  .dirty {
-    font-size: 12px;
-    color: var(--accent);
   }
 
   .main {
@@ -311,31 +301,15 @@
     border-color: var(--accent);
   }
 
-  .actions button:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .actions button[type="submit"]:not(:disabled) {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #1c1b1a;
-    font-weight: 600;
-  }
-
   .ghost {
     background: transparent !important;
     border-color: transparent !important;
     color: var(--text-secondary);
   }
 
-  .feedback {
+  .feedback.error {
     margin: 0;
     font-size: 13px;
-    color: var(--success);
-  }
-
-  .feedback.error {
     color: var(--destructive);
   }
 </style>

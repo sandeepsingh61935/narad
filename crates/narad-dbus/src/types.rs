@@ -16,6 +16,8 @@ impl SessionState {
     pub const INSERTED: &str = "inserted";
     /// Brief outcome after cancel (FR-DOT-2); daemon returns to idle shortly after.
     pub const CANCELLED: &str = "cancelled";
+    /// Brief outcome after undo removes the last insertion (FR-INS-5).
+    pub const UNDONE: &str = "undone";
 }
 
 /// One history row returned by [`DaemonProxy::history`].

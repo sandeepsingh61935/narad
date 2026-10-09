@@ -5,13 +5,13 @@
 //! ## Phase 1 surface
 //!
 //! Methods: `Start`, `Stop`, `Cancel`, `Toggle`, `History`, `ReinsertEntry`, `DeleteEntries`,
-//! `PasteLast` (FR-INS-4), `ReportFocus` (FR-CTX-1).
+//! `PasteLast` (FR-INS-4), `UndoLast` (FR-INS-5), `ReportFocus` (FR-CTX-1).
 //! Signals: `StateChanged`, `Level`, `EntryAdded`.
 //! Properties: `Mode`, `Paused` (writable), `HudVisible` (writable).
 //!
 //! ## Deferred (Phase 2+)
 //!
-//! Not defined in this crate yet: `UndoLast`, `SelectionCommand`, `Transcribe`,
+//! Not defined in this crate yet: `SelectionCommand`, `Transcribe`,
 //! `ListModels`, `SetActiveModel`, `Benchmark`.
 
 pub const SERVICE_NAME: &str = "dev.narad.Daemon";
@@ -55,6 +55,15 @@ mod tests {
     }
 
     #[test]
+    fn session_state_undo_outcome_fr_ins_5() {
+        assert_eq!(SessionState::UNDONE, "undone");
+        assert_ne!(SessionState::UNDONE, SessionState::INSERTED);
+        assert_ne!(SessionState::UNDONE, SessionState::COPIED);
+        assert_ne!(SessionState::UNDONE, SessionState::CANCELLED);
+        assert_ne!(SessionState::UNDONE, SessionState::ERROR);
+    }
+
+    #[test]
     fn hud_visible_property_name_matches_architecture() {
         assert_eq!(PROP_HUD_VISIBLE, "HudVisible");
     }
@@ -71,6 +80,14 @@ mod tests {
     fn paste_last_is_on_the_daemon_proxy() {
         async fn assert_sig(proxy: &DaemonProxy<'_>) {
             let _ = proxy.paste_last().await;
+        }
+        let _ = assert_sig;
+    }
+
+    #[test]
+    fn undo_last_is_on_the_daemon_proxy() {
+        async fn assert_sig(proxy: &DaemonProxy<'_>) {
+            let _ = proxy.undo_last().await;
         }
         let _ = assert_sig;
     }

@@ -1,0 +1,84 @@
+/* Quiet Precision tokens — docs/DESIGN.md + Stitch quiet_precision/DESIGN.md */
+
+:root {
+  --bg: #fafaf8;
+  --surface: #ffffff;
+  --surface-elevated: #ffffff;
+  --border: #e6e4df;
+  --text: #1c1b1a;
+  --text-secondary: #66625d;
+  --text-disabled: #a8a49e;
+  --accent: #e08a1e;
+  --accent-hover: #c77514;
+  --destructive: #d9534f;
+  --success: #4e9a64;
+  --radius: 0.5rem;
+  --radius-lg: 0.75rem;
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 0.75rem;
+  --space-lg: 1rem;
+  --space-xl: 1.5rem;
+  --font: Inter, system-ui, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1b1a;
+    --surface: #252321;
+    --surface-elevated: #2e2b28;
+    --border: #33302d;
+    --text: #ededeb;
+    --text-secondary: #9e9a94;
+    --text-disabled: #595551;
+    --accent: #e08a1e;
+    --accent-hover: #f59e32;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea,
+a {
+  font: inherit;
+  color: inherit;
+}
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="option"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

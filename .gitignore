@@ -1,0 +1,14 @@
+/target/
+**/node_modules/
+/dashboard/dist/
+/graphify-out/
+*.db
+.env
+.DS_Store
+# Large ASR packs (download via spikes/asr-bench/scripts/download-models.sh)
+/spikes/asr-bench/models/
+/spikes/asr-bench/fixtures/*.wav
+/spikes/asr-bench/.venv/
+*.shell-extension.zip
+# Agent scratch (SDD ledgers, review packages)
+.superpowers/

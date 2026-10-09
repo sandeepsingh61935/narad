@@ -1,0 +1,8 @@
+---
+description: graphify — follow repo AGENTS.md graphify section
+alwaysApply: true
+---
+
+# graphify
+
+Authority: root [`AGENTS.md`](../../AGENTS.md) § graphify. When `graphify-out/graph.json` exists and the question is about structure, call graph, or data flow, run `graphify query` before broad tree walks.

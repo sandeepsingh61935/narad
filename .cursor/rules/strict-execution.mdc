@@ -1,0 +1,8 @@
+---
+description: Strict execution — follow repo AGENTS.md (cross-tool contract)
+alwaysApply: true
+---
+
+# Strict execution
+
+Authority: root [`AGENTS.md`](../../AGENTS.md). Follow that file for scope, evidence, spec binding, and the operating loop. Do not invent a parallel Cursor-only policy.

@@ -1,0 +1,19 @@
+[package]
+name = "spike-hotkeys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Phase 0 throwaway spike: hotkeys"
+
+[[bin]]
+name = "spike-hotkeys"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+ashpd = { version = "0.13", default-features = false, features = ["global_shortcuts", "tokio"] }
+futures-util = "0.3"
+tokio = { workspace = true, features = ["signal"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

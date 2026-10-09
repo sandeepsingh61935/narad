@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Narad Hotkeys Spike
+Comment=Phase 0 GlobalShortcuts portal probe (throwaway)
+# Exec is rewritten at runtime to an absolute path by spike-hotkeys.
+Exec=spike-hotkeys
+Icon=input-keyboard
+Terminal=true
+Categories=Development;
+StartupNotify=false

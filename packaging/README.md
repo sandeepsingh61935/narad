@@ -13,7 +13,7 @@ Install the dictation daemon as a **systemd user service** and optionally the GN
 
 ```bash
 sudo dnf install -y webkit2gtk4.1-devel libsoup3-devel openssl-devel
-cd dashboard && pnpm install && pnpm tauri dev
+cd dashboard && bun install && bun run tauri dev
 ```
 
 ## 1. Daemon (systemd --user)

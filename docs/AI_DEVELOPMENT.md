@@ -134,7 +134,7 @@ Use separate chats per shape when possible so context stays on-rails.
 - [x] Workspace scaffold (`crates/*`, `spikes/*`, `extension/`)
 - [x] Phase 0 spike code landed → `graphify update .` (AST graph) + `graphify hook install`
 - [x] `.gitignore` covers `.superpowers/` (SDD scratch)
-- [ ] Per-crate `cargo`/`pnpm` scripts as packages appear — document in package READMEs, not here
+- [ ] Per-crate `cargo`/`bun` scripts as packages appear — document in package READMEs, not here
 - [ ] CI mirrors the checks ladder for the packages that exist
 
 ## 10. Phase discipline

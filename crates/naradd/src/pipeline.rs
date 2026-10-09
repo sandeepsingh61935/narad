@@ -26,6 +26,12 @@ struct SessionRuntime {
     listen_generation: u64,
     /// Cancel flag observed by the processing task.
     cancel: Arc<AtomicBool>,
+    /// Latest app id from `ReportFocus`. Empty or never reported is `None`.
+    focused_app: Option<String>,
+    /// Focused app when this recording started. Written to history `app_id` (FR-CTX-1).
+    app_id_at_start: Option<String>,
+    /// Focused app when text was last pasted. In memory for later undo / terminal chord.
+    app_id_at_paste: Option<String>,
 }
 
 struct PipelineInner {
@@ -58,6 +64,9 @@ impl PipelineHandle {
                     listen_started: None,
                     listen_generation: 0,
                     cancel: Arc::new(AtomicBool::new(false)),
+                    focused_app: None,
+                    app_id_at_start: None,
+                    app_id_at_paste: None,
                 }),
                 store: Mutex::new(store),
                 asr: Mutex::new(asr),
@@ -117,6 +126,17 @@ impl PipelineHandle {
             .lock()
             .map_err(|e| format!("state lock: {e}"))?;
         st.hud_visible = visible;
+        Ok(())
+    }
+
+    /// Cache the focused app id. Empty string clears it (`None`).
+    pub fn report_focus(&self, app_id: &str) -> Result<(), String> {
+        let mut st = self
+            .inner
+            .state
+            .lock()
+            .map_err(|e| format!("state lock: {e}"))?;
+        st.focused_app = normalize_app_id(app_id);
         Ok(())
     }
 
@@ -183,6 +203,7 @@ impl PipelineHandle {
                 }
             }
             st.cancel.store(false, Ordering::SeqCst);
+            snapshot_focus_at_start(&mut st);
         }
 
         audio::play_cue("start", self.inner.config.audio.sounds_enabled);
@@ -389,31 +410,8 @@ impl PipelineHandle {
             InsertOutcome::Copied => InsertStatus::Skipped,
         };
 
-        let entry_id = {
-            let mut store = self
-                .inner
-                .store
-                .lock()
-                .map_err(|e| format!("store lock: {e}"))?;
-            store
-                .insert(&NewHistoryEntry {
-                    duration_ms,
-                    mode,
-                    src_lang: "en".into(),
-                    dst_lang: "en".into(),
-                    asr_model: model_id,
-                    mt_model: None,
-                    llm_model: None,
-                    app_id: None,
-                    raw_text: text,
-                    final_text,
-                    insert_status,
-                    cleanup_flagged: false,
-                    audio_path: None,
-                    pinned: false,
-                })
-                .map_err(|e| e.to_string())?
-        };
+        let entry_id =
+            self.commit_dictation(duration_ms, mode, model_id, text, final_text, insert_status)?;
         self.emit_entry_added(entry_id).await;
 
         self.inner.processing.store(false, Ordering::SeqCst);
@@ -445,6 +443,11 @@ impl PipelineHandle {
                 .ok_or_else(|| format!("entry {id} not found"))?
         };
         let outcome = insert::insert_text(&entry.final_text, false).await;
+        if matches!(outcome, InsertOutcome::Inserted) {
+            if let Ok(mut st) = self.inner.state.lock() {
+                note_paste_focus(&mut st);
+            }
+        }
         match outcome {
             InsertOutcome::Inserted => Ok(()),
             InsertOutcome::Copied => {
@@ -506,5 +509,142 @@ impl PipelineHandle {
                 warn!(error = %err, "emit EntryAdded");
             }
         }
+    }
+
+    /// Persist one live utterance. History `app_id` is the focus frozen at record start.
+    /// A successful paste also remembers the app focused now.
+    fn commit_dictation(
+        &self,
+        duration_ms: u32,
+        mode: String,
+        asr_model: String,
+        raw_text: String,
+        final_text: String,
+        insert_status: InsertStatus,
+    ) -> Result<i64, String> {
+        let app_id = {
+            let mut st = self
+                .inner
+                .state
+                .lock()
+                .map_err(|e| format!("state lock: {e}"))?;
+            if insert_status == InsertStatus::Success {
+                note_paste_focus(&mut st);
+            }
+            st.app_id_at_start.clone()
+        };
+        let mut store = self
+            .inner
+            .store
+            .lock()
+            .map_err(|e| format!("store lock: {e}"))?;
+        store
+            .insert(&NewHistoryEntry {
+                duration_ms,
+                mode,
+                src_lang: "en".into(),
+                dst_lang: "en".into(),
+                asr_model,
+                mt_model: None,
+                llm_model: None,
+                app_id,
+                raw_text,
+                final_text,
+                insert_status,
+                cleanup_flagged: false,
+                audio_path: None,
+                pinned: false,
+            })
+            .map_err(|e| e.to_string())
+    }
+}
+
+fn normalize_app_id(app_id: &str) -> Option<String> {
+    if app_id.is_empty() {
+        None
+    } else {
+        Some(app_id.to_string())
+    }
+}
+
+fn snapshot_focus_at_start(st: &mut SessionRuntime) {
+    st.app_id_at_start = st.focused_app.clone();
+}
+
+fn note_paste_focus(st: &mut SessionRuntime) {
+    st.app_id_at_paste = st.focused_app.clone();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use narad_core::store::HistoryStore;
+    use tempfile::TempDir;
+
+    fn test_pipe() -> (TempDir, PipelineHandle) {
+        let dir = TempDir::new().expect("tempdir");
+        let store = HistoryStore::open(dir.path().join("t.db")).expect("open");
+        let pipe = PipelineHandle::new(NaradConfig::default(), store, None);
+        (dir, pipe)
+    }
+
+    fn mark_started(pipe: &PipelineHandle) {
+        let mut st = pipe.inner.state.lock().expect("state");
+        snapshot_focus_at_start(&mut st);
+    }
+
+    fn insert_hello(pipe: &PipelineHandle) -> i64 {
+        pipe.commit_dictation(
+            10,
+            "plain".into(),
+            "test".into(),
+            "hello".into(),
+            "hello".into(),
+            InsertStatus::Success,
+        )
+        .expect("insert")
+    }
+
+    fn stored_app(pipe: &PipelineHandle, id: i64) -> Option<String> {
+        pipe.with_store(|store| {
+            Ok(store
+                .get(id)
+                .map_err(|e| e.to_string())?
+                .expect("row")
+                .app_id)
+        })
+        .expect("store")
+    }
+
+    #[test]
+    fn reported_focus_is_what_the_next_insert_stores() {
+        let (_dir, pipe) = test_pipe();
+
+        mark_started(&pipe);
+        let id = insert_hello(&pipe);
+        assert!(id > 0);
+        assert_eq!(stored_app(&pipe, id), None);
+        assert_eq!(pipe.inner.state.lock().unwrap().app_id_at_paste, None);
+
+        pipe.report_focus("").expect("clear");
+        mark_started(&pipe);
+        let id = insert_hello(&pipe);
+        assert!(id > 0);
+        assert_eq!(stored_app(&pipe, id), None);
+
+        pipe.report_focus("org.gnome.TextEditor").expect("report");
+        mark_started(&pipe);
+        pipe.report_focus("org.gnome.Terminal")
+            .expect("later focus");
+        let id = insert_hello(&pipe);
+        assert!(id > 0);
+        assert_eq!(
+            stored_app(&pipe, id).as_deref(),
+            Some("org.gnome.TextEditor")
+        );
+        assert_eq!(
+            pipe.inner.state.lock().unwrap().app_id_at_paste.as_deref(),
+            Some("org.gnome.Terminal")
+        );
     }
 }

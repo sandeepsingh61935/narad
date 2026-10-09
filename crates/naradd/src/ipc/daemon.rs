@@ -1,4 +1,4 @@
-//! D-Bus server for `dev.narad.Daemon` (Phase 1).
+//! D-Bus server for `dev.narad.Daemon`.
 
 use narad_core::store::HistoryEntry as CoreHistoryEntry;
 use narad_dbus::HistoryEntry;
@@ -111,6 +111,10 @@ impl DaemonIpc {
                 Ok(())
             })
             .map_err(zbus::fdo::Error::Failed)
+    }
+
+    async fn report_focus(&self, app_id: &str) -> zbus::fdo::Result<()> {
+        self.pipeline.report_focus(app_id).map_err(lock_err)
     }
 
     #[zbus(signal)]

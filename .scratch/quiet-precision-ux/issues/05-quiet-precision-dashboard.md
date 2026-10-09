@@ -6,7 +6,11 @@
 
 **Status:** claimed
 
-- [ ] Global tokens match the hex values above for both prefers-color-scheme values.
-- [ ] History and Settings use those tokens. Delete is the only destructive color.
-- [ ] Below the narrow breakpoint, the detail pane is under the list and every action remains reachable.
-- [ ] No Record button, avatar, buffer readout, PID, or gsettings copy is introduced.
+- [x] Global tokens match the hex values above for both prefers-color-scheme values.
+- [x] History and Settings use those tokens. Delete is the only destructive color.
+- [x] Below the narrow breakpoint, the detail pane is under the list and every action remains reachable.
+- [x] No Record button, avatar, buffer readout, PID, or gsettings copy is introduced.
+
+## Answer
+
+Fast-forwarded as `16cbebc`, then review fixes `22e6deb` and `1d7e2c4`. Token test locks the spec hex values. Narrow history stacks under 800px. 22 tests passed and `svelte-check` was clean on `feat/quiet-precision-ux` at `1d7e2c4`.

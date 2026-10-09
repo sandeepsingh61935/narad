@@ -1,7 +1,8 @@
 //! Client proxy and method signatures for `dev.narad.Daemon` (Phase 1).
 //!
-//! Phase 2+ D-Bus methods are intentionally omitted here: `PasteLast`, `UndoLast`,
+//! Phase 2+ D-Bus methods still omitted: `PasteLast`, `UndoLast`,
 //! `SelectionCommand`, `Transcribe`, `ListModels`, `SetActiveModel`, `Benchmark`.
+//! `ReportFocus` is included (FR-CTX-1).
 
 use crate::types::HistoryEntry;
 use zbus::proxy;
@@ -35,6 +36,12 @@ pub trait Daemon {
 
     /// Clients may pass a slice; the daemon interface deserializes as `Vec<i64>`.
     async fn delete_entries(&self, ids: &[i64]) -> zbus::Result<()>;
+
+    /// Focused application id from the shell extension (FR-CTX-1).
+    ///
+    /// Empty string clears the cached focus. The daemon snapshots this when
+    /// recording starts (history `app_id`) and again when text is pasted.
+    async fn report_focus(&self, app_id: &str) -> zbus::Result<()>;
 
     #[zbus(signal)]
     fn state_changed(&self, state: &str) -> zbus::Result<()>;

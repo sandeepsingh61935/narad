@@ -4,7 +4,8 @@
 //!
 //! ## Phase 1 surface
 //!
-//! Methods: `Start`, `Stop`, `Cancel`, `Toggle`, `History`, `ReinsertEntry`, `DeleteEntries`.
+//! Methods: `Start`, `Stop`, `Cancel`, `Toggle`, `History`, `ReinsertEntry`, `DeleteEntries`,
+//! `ReportFocus` (FR-CTX-1).
 //! Signals: `StateChanged`, `Level`, `EntryAdded`.
 //! Properties: `Mode`, `Paused`, `HudVisible`.
 //!
@@ -56,5 +57,13 @@ mod tests {
     #[test]
     fn hud_visible_property_name_matches_architecture() {
         assert_eq!(PROP_HUD_VISIBLE, "HudVisible");
+    }
+
+    #[test]
+    fn report_focus_is_on_the_daemon_proxy() {
+        async fn assert_sig(proxy: &DaemonProxy<'_>) {
+            let _ = proxy.report_focus("").await;
+        }
+        let _ = assert_sig;
     }
 }

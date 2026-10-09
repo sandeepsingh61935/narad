@@ -1,0 +1,22 @@
+[package]
+name = "spike-insert"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Phase 0 throwaway spike: insert"
+
+[[bin]]
+name = "spike-insert"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+ashpd = { version = "0.13", features = ["remote_desktop", "clipboard", "screencast"] }
+clap = { workspace = true }
+enumflags2 = "0.7"
+futures-util = "0.3"
+reis = "0.7"
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "time"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

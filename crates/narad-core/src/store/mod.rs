@@ -1,4 +1,4 @@
-//! SQLite + FTS5 history store (FR-HIS-1, FR-HIS-3).
+//! SQLite + FTS5 history store (FR-HIS-1, FR-HIS-3, FR-HIS-7).
 //!
 //! Entry primary keys are `i64` values from SQLite `INTEGER PRIMARY KEY AUTOINCREMENT`
 //! (the stable `rowid` for FTS5 external-content sync).
@@ -21,6 +21,15 @@ pub enum StoreError {
     InvalidInsertStatus,
     #[error("system time before Unix epoch")]
     InvalidTimestamp,
+}
+
+/// How many rows a retention pass changed (FR-HIS-7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PurgeStats {
+    /// History rows deleted because they were older than the text TTL.
+    pub text_deleted: u32,
+    /// Rows whose audio file was unlinked and `audio_path` cleared.
+    pub audio_cleared: u32,
 }
 
 /// History database: `entries` table plus FTS5 virtual table `entries_fts`.
@@ -111,7 +120,8 @@ impl HistoryStore {
             ",
         )?;
         let rows = stmt.query_map(params![limit, offset], row_to_entry)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     /// Full-text search over `raw_text` and `final_text` (FTS5).
@@ -136,7 +146,8 @@ impl HistoryStore {
             ",
         )?;
         let rows = stmt.query_map(params![query, limit, offset], row_to_entry)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     /// Delete entries by id. Returns the number of rows removed.
@@ -155,6 +166,96 @@ impl HistoryStore {
         tx.commit()?;
         Ok(deleted)
     }
+
+    /// Apply text and audio retention (FR-HIS-7).
+    ///
+    /// `now_ms` is Unix epoch milliseconds. A `None` duration keeps that kind
+    /// forever and touches nothing. Text TTL deletes the row. Audio TTL unlinks
+    /// the file when `audio_path` is set and nulls `audio_path`; the text row stays.
+    /// A text delete also unlinks audio so the file is not orphaned.
+    pub fn purge_retention(
+        &mut self,
+        now_ms: i64,
+        text_retention_days: Option<u32>,
+        audio_retention_days: Option<u32>,
+    ) -> Result<PurgeStats, StoreError> {
+        let mut stats = PurgeStats::default();
+        if let Some(days) = text_retention_days {
+            stats.text_deleted = self.delete_older_than(cutoff_ms(now_ms, days))?;
+        }
+        if let Some(days) = audio_retention_days {
+            stats.audio_cleared = self.clear_audio_older_than(cutoff_ms(now_ms, days))?;
+        }
+        Ok(stats)
+    }
+
+    /// Delete rows with `created_at` strictly before `cutoff_ms`.
+    fn delete_older_than(&mut self, cutoff_ms: i64) -> Result<u32, StoreError> {
+        let paths = audio_paths_before(&self.conn, cutoff_ms)?;
+        for path in paths {
+            let _ = unlink_audio(&path);
+        }
+        let deleted = self.conn.execute(
+            "DELETE FROM entries WHERE created_at < ?1",
+            params![cutoff_ms],
+        )?;
+        Ok(deleted as u32)
+    }
+
+    /// Unlink audio and null `audio_path` for rows strictly before `cutoff_ms`.
+    fn clear_audio_older_than(&mut self, cutoff_ms: i64) -> Result<u32, StoreError> {
+        let rows = {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, audio_path FROM entries
+                 WHERE created_at < ?1 AND audio_path IS NOT NULL",
+            )?;
+            let collected = stmt
+                .query_map(params![cutoff_ms], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            collected
+        };
+        let mut cleared = 0u32;
+        for (id, path) in rows {
+            if !path.is_empty() && unlink_audio(&path).is_err() {
+                continue;
+            }
+            cleared += self.conn.execute(
+                "UPDATE entries SET audio_path = NULL WHERE id = ?1 AND audio_path IS NOT NULL",
+                params![id],
+            )? as u32;
+        }
+        Ok(cleared)
+    }
+}
+
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+fn cutoff_ms(now_ms: i64, days: u32) -> i64 {
+    now_ms.saturating_sub((days as i64).saturating_mul(DAY_MS))
+}
+
+fn audio_paths_before(conn: &Connection, cutoff_ms: i64) -> Result<Vec<String>, StoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT audio_path FROM entries
+         WHERE created_at < ?1 AND audio_path IS NOT NULL",
+    )?;
+    let paths = stmt
+        .query_map(params![cutoff_ms], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(paths)
+}
+
+/// Remove a retained audio file. Missing files count as already gone.
+fn unlink_audio(path: &str) -> std::io::Result<()> {
+    if path.is_empty() {
+        return Ok(());
+    }
+    match std::fs::remove_file(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
 }
 
 fn now_millis() -> Result<i64, StoreError> {
@@ -167,11 +268,7 @@ fn now_millis() -> Result<i64, StoreError> {
 fn row_to_entry(row: &Row) -> Result<HistoryEntry, rusqlite::Error> {
     let status_str: String = row.get(12)?;
     let insert_status = InsertStatus::from_str(&status_str).ok_or_else(|| {
-        rusqlite::Error::InvalidColumnType(
-            12,
-            "insert_status".into(),
-            rusqlite::types::Type::Text,
-        )
+        rusqlite::Error::InvalidColumnType(12, "insert_status".into(), rusqlite::types::Type::Text)
     })?;
     Ok(HistoryEntry {
         id: row.get(0)?,
@@ -318,5 +415,107 @@ mod tests {
         let rows = store.list(0, 1).expect("list");
         assert_eq!(rows[0].id, id);
         assert_eq!(rows[0].insert_status, InsertStatus::Skipped);
+    }
+
+    fn set_created_at(store: &HistoryStore, id: i64, created_at: i64) {
+        store
+            .conn
+            .execute(
+                "UPDATE entries SET created_at = ?1 WHERE id = ?2",
+                params![created_at, id],
+            )
+            .expect("backdate");
+    }
+
+    #[test]
+    fn text_ttl_deletes_rows_older_than_n_days() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        let old_id = store
+            .insert(&sample_new("old line", "old line"))
+            .expect("old");
+        let edge_id = store.insert(&sample_new("edge", "edge")).expect("edge");
+        let fresh_id = store.insert(&sample_new("fresh", "fresh")).expect("fresh");
+
+        let now = 1_700_000_000_000_i64;
+        let days: u32 = 4;
+        set_created_at(&store, old_id, cutoff_ms(now, days) - 1);
+        set_created_at(&store, edge_id, cutoff_ms(now, days));
+        set_created_at(&store, fresh_id, now);
+
+        let stats = store.purge_retention(now, Some(days), None).expect("purge");
+        assert_eq!(stats.text_deleted, 1);
+        assert_eq!(stats.audio_cleared, 0);
+        assert!(store.get(old_id).expect("get old").is_none());
+        assert!(store.get(edge_id).expect("get edge").is_some());
+        assert_eq!(
+            store
+                .get(fresh_id)
+                .expect("get fresh")
+                .expect("fresh")
+                .final_text,
+            "fresh"
+        );
+        let hits = store.search("old", 0, 10).expect("search");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn blank_text_ttl_deletes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wav = dir.path().join("keep.wav");
+        std::fs::write(&wav, b"not-audio").expect("wav");
+        let mut store = HistoryStore::open(dir.path().join("t.db")).expect("open");
+        let mut entry = sample_new("keep me", "keep me");
+        entry.audio_path = Some(wav.display().to_string());
+        let id = store.insert(&entry).expect("insert");
+        let now = 1_700_000_000_000_i64;
+        set_created_at(&store, id, now - 400 * DAY_MS);
+
+        let stats = store.purge_retention(now, None, None).expect("purge");
+        assert_eq!(stats, PurgeStats::default());
+        let row = store.get(id).expect("get").expect("row");
+        assert_eq!(row.final_text, "keep me");
+        assert_eq!(row.audio_path.as_deref(), Some(wav.to_str().unwrap()));
+        assert!(wav.is_file());
+    }
+
+    #[test]
+    fn audio_ttl_nulls_path_and_keeps_the_row() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let old_wav = dir.path().join("old.wav");
+        let fresh_wav = dir.path().join("fresh.wav");
+        std::fs::write(&old_wav, b"old").expect("old wav");
+        std::fs::write(&fresh_wav, b"fresh").expect("fresh wav");
+        let mut store = HistoryStore::open(dir.path().join("t.db")).expect("open");
+
+        let mut old = sample_new("spoken", "spoken");
+        old.audio_path = Some(old_wav.display().to_string());
+        let old_id = store.insert(&old).expect("old");
+        let mut fresh = sample_new("later", "later");
+        fresh.audio_path = Some(fresh_wav.display().to_string());
+        let fresh_id = store.insert(&fresh).expect("fresh");
+
+        let now = 1_700_000_000_000_i64;
+        let days: u32 = 3;
+        set_created_at(&store, old_id, cutoff_ms(now, days) - 1);
+        set_created_at(&store, fresh_id, now);
+
+        let stats = store.purge_retention(now, None, Some(days)).expect("purge");
+        assert_eq!(stats.text_deleted, 0);
+        assert_eq!(stats.audio_cleared, 1);
+        assert!(!old_wav.exists());
+        assert!(fresh_wav.is_file());
+
+        let old_row = store.get(old_id).expect("get").expect("row stays");
+        assert_eq!(old_row.final_text, "spoken");
+        assert!(old_row.audio_path.is_none());
+        assert!(store
+            .get(fresh_id)
+            .expect("get fresh")
+            .expect("fresh")
+            .audio_path
+            .is_some());
+        assert_eq!(store.list(0, 10).expect("list").len(), 2);
     }
 }

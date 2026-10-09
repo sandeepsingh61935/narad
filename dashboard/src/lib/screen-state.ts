@@ -1,5 +1,4 @@
-import { displayText } from "./history";
-import type { HistoryEntry, TextView } from "./history";
+import { displayText, type HistoryEntry, type TextView } from "./history";
 
 export type HistoryScreenInput = {
   loading: boolean;

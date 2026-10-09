@@ -1,5 +1,5 @@
-import { displayText } from "./history.ts";
-import type { HistoryEntry, TextView } from "./history.ts";
+import { displayText } from "./history";
+import type { HistoryEntry, TextView } from "./history";
 
 export type HistoryScreenInput = {
   loading: boolean;

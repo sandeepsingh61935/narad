@@ -49,7 +49,10 @@ export function prepareConfigForSave(config: ConfigDraft): PreparedConfig {
         dictate_hotkey: config.activation.dictate_hotkey.trim(),
         hold_tap_threshold_ms,
       },
-      audio: { ...config.audio },
+      audio: {
+        ...config.audio,
+        input_target: config.audio.input_target.trim(),
+      },
       general: {
         active_mode: config.general.active_mode.trim() || "plain",
       },

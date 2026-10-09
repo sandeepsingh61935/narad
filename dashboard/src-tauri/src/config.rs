@@ -52,6 +52,9 @@ pub struct AudioConfig {
     pub auto_stop_silence_secs: u32,
     /// Round-tripped; not edited in basic Settings UI.
     pub max_duration_secs: u32,
+    /// PipeWire source id (FR-AUD-4). Empty follows the system default.
+    /// Round-tripped so a settings save does not drop a daemon-set target.
+    pub input_target: String,
 }
 
 impl Default for AudioConfig {
@@ -60,6 +63,7 @@ impl Default for AudioConfig {
             sounds_enabled: true,
             auto_stop_silence_secs: 2,
             max_duration_secs: 300,
+            input_target: String::new(),
         }
     }
 }
@@ -184,5 +188,27 @@ text_retention_days = 4
         assert_eq!(again.history, cfg.history);
         assert_eq!(again.activation.dictate_hotkey, "Ctrl+Alt+D");
         assert_eq!(again.activation.hold_tap_threshold_ms, 250);
+        assert_eq!(again.audio.input_target, "");
+    }
+
+    #[test]
+    fn reserialize_keeps_input_target() {
+        let raw = r#"
+[audio]
+sounds_enabled = false
+input_target = "alsa_input.usb"
+
+[activation]
+dictate_hotkey = "Ctrl+Alt+D"
+"#;
+        let cfg: DashboardConfig = toml::from_str(raw).expect("parse");
+        assert_eq!(cfg.audio.input_target, "alsa_input.usb");
+        assert!(!cfg.audio.sounds_enabled);
+        let text = toml::to_string_pretty(&cfg).expect("serialize");
+        assert!(text.contains("input_target = \"alsa_input.usb\""));
+        let again: DashboardConfig = toml::from_str(&text).expect("reparse");
+        assert_eq!(again.audio.input_target, "alsa_input.usb");
+        assert_eq!(again.audio.auto_stop_silence_secs, 2);
+        assert_eq!(again.audio.max_duration_secs, 300);
     }
 }

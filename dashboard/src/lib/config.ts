@@ -8,6 +8,8 @@ export type DashboardConfig = {
     sounds_enabled: boolean;
     auto_stop_silence_secs: number;
     max_duration_secs: number;
+    /** PipeWire source id. Empty follows the system default (FR-AUD-4). */
+    input_target: string;
   };
   general: {
     active_mode: string;
@@ -39,6 +41,7 @@ export function defaultConfig(): DashboardConfig {
       sounds_enabled: true,
       auto_stop_silence_secs: 2,
       max_duration_secs: 300,
+      input_target: "",
     },
     general: {
       active_mode: "plain",

@@ -60,6 +60,32 @@ test("a negative threshold is rejected and the config is left unchanged", () => 
   assert.deepEqual(input, before);
 });
 
+test("a settings save keeps the mic target", () => {
+  const input = defaultConfig();
+  assert.equal(input.audio.input_target, "");
+  input.audio.input_target = "  alsa_input.pci-0000_00_1f.3.analog-stereo  ";
+
+  const result = prepareConfigForSave(input);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.config.audio.input_target, "alsa_input.pci-0000_00_1f.3.analog-stereo");
+  assert.equal(result.config.audio.sounds_enabled, true);
+  assert.equal(result.config.audio.auto_stop_silence_secs, 2);
+  assert.equal(result.config.audio.max_duration_secs, 300);
+});
+
+test("a blank mic target stays empty", () => {
+  const input = defaultConfig();
+  input.audio.input_target = "   ";
+
+  const result = prepareConfigForSave(input);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.config.audio.input_target, "");
+});
+
 test("default retention is off and both durations are blank", () => {
   const config = defaultConfig();
   assert.equal(config.history.retain_audio, false);

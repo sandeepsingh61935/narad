@@ -1,0 +1,17 @@
+[package]
+name = "narad-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Narad CLI client"
+
+[[bin]]
+name = "narad"
+path = "src/main.rs"
+
+[dependencies]
+narad-dbus = { path = "../narad-dbus" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+zbus = { workspace = true, features = ["tokio"] }

@@ -1,0 +1,180 @@
+/* Quiet Precision — floating HUD (Stitch). Dark theme default. */
+
+.narad-hud {
+    spacing: 10px;
+    padding: 0;
+}
+
+.narad-hud-anchor {
+    width: 28px;
+    height: 28px;
+    border-radius: 9999px;
+    background-color: rgba(255, 255, 255, 0.10);
+    border: 1px solid rgba(255, 255, 255, 0.20);
+}
+
+.narad-hud-anchor:hover {
+    background-color: rgba(255, 255, 255, 0.15);
+}
+
+.narad-hud-anchor-core {
+    width: 8px;
+    height: 8px;
+    border-radius: 9999px;
+    background-color: rgba(230, 226, 223, 0.80);
+}
+
+.narad-hud-anchor:hover .narad-hud-anchor-core {
+    background-color: #e08a1e;
+}
+
+/* Listening */
+.narad-hud-anchor-listening {
+    background-color: #e08a1e;
+    border-color: rgba(224, 138, 30, 0.55);
+}
+
+.narad-hud-anchor-listening .narad-hud-anchor-core {
+    width: 14px;
+    height: 14px;
+    background-color: transparent;
+}
+
+.narad-hud-anchor-listening StIcon {
+    icon-size: 14px;
+    color: #1c1b1a;
+}
+
+/* Processing */
+.narad-hud-anchor-processing {
+    background-color: rgba(224, 138, 30, 0.80);
+    border-color: rgba(255, 255, 255, 0.10);
+}
+
+.narad-hud-anchor-processing .narad-hud-anchor-core {
+    width: 10px;
+    height: 10px;
+    background-color: #e08a1e;
+}
+
+/* Copied / inserted success */
+.narad-hud-anchor-copied {
+    background-color: rgba(78, 154, 100, 0.90);
+    border-color: rgba(78, 154, 100, 0.50);
+}
+
+.narad-hud-anchor-copied StLabel {
+    color: #1c1b1a;
+    font-weight: 700;
+    font-size: 11px;
+}
+
+/* Cancelled */
+.narad-hud-anchor-cancelled {
+    background-color: rgba(158, 154, 148, 0.35);
+    border-color: rgba(158, 154, 148, 0.45);
+}
+
+.narad-hud-anchor-cancelled StLabel {
+    color: #e6e2df;
+    font-weight: 700;
+    font-size: 11px;
+}
+
+/* Error */
+.narad-hud-anchor-error {
+    background-color: rgba(217, 83, 79, 0.20);
+    border-color: rgba(217, 83, 79, 0.50);
+}
+
+.narad-hud-anchor-error StIcon {
+    icon-size: 14px;
+    color: #d9534f;
+}
+
+/* Companion pill */
+.narad-hud-pill {
+    height: 32px;
+    padding: 0 12px;
+    spacing: 8px;
+    border-radius: 9999px;
+    background-color: rgba(30, 29, 27, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.narad-hud-pill-listening {
+    border-color: rgba(224, 138, 30, 0.35);
+}
+
+.narad-hud-pill-copied {
+    border-color: rgba(78, 154, 100, 0.35);
+}
+
+.narad-hud-pill-cancelled {
+    border-color: rgba(158, 154, 148, 0.35);
+}
+
+.narad-hud-pill-error {
+    border-color: rgba(217, 83, 79, 0.40);
+}
+
+.narad-hud-wave {
+    spacing: 2px;
+    height: 16px;
+}
+
+.narad-hud-wave-bar {
+    width: 2px;
+    border-radius: 9999px;
+    background-color: #e08a1e;
+}
+
+.narad-hud-text {
+    color: #edebeb;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.narad-hud-text-muted {
+    color: #9e9a94;
+    font-size: 11px;
+    font-family: monospace;
+}
+
+.narad-hud-text-accent {
+    color: #f59e32;
+    font-size: 11px;
+    font-family: monospace;
+}
+
+.narad-hud-text-success {
+    color: #edebeb;
+    font-size: 12px;
+}
+
+.narad-hud-text-error {
+    color: #ffb4ab;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.narad-hud-keycap {
+    padding: 1px 6px;
+    border-radius: 4px;
+    background-color: rgba(255, 255, 255, 0.10);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    color: #e6e2df;
+    font-size: 9px;
+    font-family: monospace;
+    font-weight: 600;
+}
+
+.narad-hud-hint {
+    padding: 2px 8px;
+    border-radius: 4px;
+    background-color: rgba(0, 0, 0, 0.80);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    color: #9e9a94;
+    font-size: 10px;
+    font-family: monospace;
+}

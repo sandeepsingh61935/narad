@@ -1,0 +1,8 @@
+{
+  "uuid": "narad@narad.dev",
+  "name": "Narad",
+  "description": "Floating Quiet Precision dictation HUD for Narad (D-Bus driven)",
+  "shell-version": ["50"],
+  "session-modes": ["user"],
+  "url": "https://narad.dev"
+}

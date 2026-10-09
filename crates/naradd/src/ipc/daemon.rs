@@ -139,6 +139,11 @@ impl DaemonIpc {
     }
 
     #[zbus(property)]
+    async fn set_paused(&self, value: bool) -> zbus::fdo::Result<()> {
+        self.pipeline.set_paused(value).map_err(lock_err)
+    }
+
+    #[zbus(property)]
     async fn hud_visible(&self) -> zbus::fdo::Result<bool> {
         let (_, _, _, hud) = self.pipeline.snapshot_props().map_err(lock_err)?;
         Ok(hud)

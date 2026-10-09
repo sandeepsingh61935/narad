@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use narad_core::store::{HistoryStore, InsertStatus, NewHistoryEntry};
-use narad_dbus::{OBJECT_PATH, SessionState};
+use narad_dbus::{SessionState, OBJECT_PATH};
 use tracing::{info, warn};
 use zbus::Connection;
 
@@ -129,6 +129,16 @@ impl PipelineHandle {
         Ok(())
     }
 
+    pub fn set_paused(&self, paused: bool) -> Result<(), String> {
+        let mut st = self
+            .inner
+            .state
+            .lock()
+            .map_err(|e| format!("state lock: {e}"))?;
+        st.paused = paused;
+        Ok(())
+    }
+
     /// Cache the focused app id. Empty string clears it (`None`).
     pub fn report_focus(&self, app_id: &str) -> Result<(), String> {
         let mut st = self
@@ -192,8 +202,7 @@ impl PipelineHandle {
                 .state
                 .lock()
                 .map_err(|e| format!("state lock: {e}"))?;
-            if st.dbus_state == SessionState::LISTENING
-                || st.dbus_state == SessionState::PROCESSING
+            if st.dbus_state == SessionState::LISTENING || st.dbus_state == SessionState::PROCESSING
             {
                 return Ok(());
             }
@@ -311,12 +320,7 @@ impl PipelineHandle {
             let capture = st.capture.take();
             let started = st.listen_started.take();
             st.dbus_state = SessionState::PROCESSING.to_string();
-            (
-                capture,
-                started,
-                st.mode.clone(),
-                st.cancel.clone(),
-            )
+            (capture, started, st.mode.clone(), st.cancel.clone())
         };
 
         audio::play_cue("stop", self.inner.config.audio.sounds_enabled);
@@ -359,10 +363,7 @@ impl PipelineHandle {
         // Run decode on a blocking pool; lock only inside the worker (Standards #5).
         let asr_slot = Arc::clone(&self.inner);
         let transcribed = tokio::task::spawn_blocking(move || {
-            let asr_guard = asr_slot
-                .asr
-                .lock()
-                .map_err(|e| format!("asr lock: {e}"))?;
+            let asr_guard = asr_slot.asr.lock().map_err(|e| format!("asr lock: {e}"))?;
             match asr_guard.as_ref() {
                 Some(engine) => engine
                     .transcribe(&trimmed, audio::TARGET_SAMPLE_RATE)
@@ -405,24 +406,21 @@ impl PipelineHandle {
 
         let final_text = text.clone();
         let outcome = insert::insert_text(&final_text, false).await;
-        let insert_status = match outcome {
-            InsertOutcome::Inserted => InsertStatus::Success,
-            InsertOutcome::Copied => InsertStatus::Skipped,
-        };
-
-        let entry_id =
-            self.commit_dictation(duration_ms, mode, model_id, text, final_text, insert_status)?;
-        self.emit_entry_added(entry_id).await;
+        let history_id =
+            self.record_dictation(duration_ms, mode, model_id, text, final_text, outcome)?;
+        if let Some(id) = history_id {
+            self.emit_entry_added(id).await;
+        }
 
         self.inner.processing.store(false, Ordering::SeqCst);
         match outcome {
             InsertOutcome::Inserted => {
-                info!(entry_id, "inserted");
+                info!(?history_id, "inserted");
                 self.set_state(SessionState::INSERTED).await;
                 self.schedule_idle_after(Duration::from_millis(1200));
             }
             InsertOutcome::Copied => {
-                info!(entry_id, "copied (no focus / paste failed)");
+                info!(?history_id, "copied (no focus / paste failed)");
                 self.set_state(SessionState::COPIED).await;
                 self.schedule_idle_after(Duration::from_secs(2));
             }
@@ -511,7 +509,50 @@ impl PipelineHandle {
         }
     }
 
-    /// Persist one live utterance. History `app_id` is the focus frozen at record start.
+    /// Paste already happened (`outcome`). Write a history row unless paused (FR-HIS-7).
+    ///
+    /// `Ok(None)` means no row, so the caller must not emit `EntryAdded`.
+    /// Explicit transcribe / re-insert must call [`Self::commit_dictation`], not this.
+    fn record_dictation(
+        &self,
+        duration_ms: u32,
+        mode: String,
+        asr_model: String,
+        raw_text: String,
+        final_text: String,
+        outcome: InsertOutcome,
+    ) -> Result<Option<i64>, String> {
+        let insert_status = match outcome {
+            InsertOutcome::Inserted => InsertStatus::Success,
+            InsertOutcome::Copied => InsertStatus::Skipped,
+        };
+        let paused = {
+            let mut st = self
+                .inner
+                .state
+                .lock()
+                .map_err(|e| format!("state lock: {e}"))?;
+            if st.paused && insert_status == InsertStatus::Success {
+                note_paste_focus(&mut st);
+            }
+            st.paused
+        };
+        if paused {
+            return Ok(None);
+        }
+        self.commit_dictation(
+            duration_ms,
+            mode,
+            asr_model,
+            raw_text,
+            final_text,
+            insert_status,
+        )
+        .map(Some)
+    }
+
+    /// Persist one utterance. Not paused-gated.
+    /// History `app_id` is the focus frozen at record start.
     /// A successful paste also remembers the app focused now.
     fn commit_dictation(
         &self,
@@ -646,5 +687,80 @@ mod tests {
             pipe.inner.state.lock().unwrap().app_id_at_paste.as_deref(),
             Some("org.gnome.Terminal")
         );
+    }
+
+    /// Stand-in for `insert::insert_text`: non-empty text pastes successfully.
+    fn paste_success(text: &str) -> InsertOutcome {
+        assert!(!text.is_empty());
+        InsertOutcome::Inserted
+    }
+
+    fn history_len(pipe: &PipelineHandle) -> usize {
+        pipe.with_store(|store| {
+            store
+                .list(0, 50)
+                .map(|rows| rows.len())
+                .map_err(|e| e.to_string())
+        })
+        .expect("history len")
+    }
+
+    fn dictate(pipe: &PipelineHandle, text: &str) -> Result<Option<i64>, String> {
+        let outcome = paste_success(text);
+        pipe.record_dictation(
+            12,
+            "plain".into(),
+            "test".into(),
+            text.into(),
+            text.into(),
+            outcome,
+        )
+    }
+
+    #[test]
+    fn paused_dictation_pastes_without_a_row_and_unpaused_inserts() {
+        let (_dir, pipe) = test_pipe();
+        pipe.set_paused(true).expect("pause");
+        assert!(pipe.snapshot_props().expect("props").2);
+
+        let paused_id = dictate(&pipe, "hello").expect("paused dictation succeeds");
+        assert!(paused_id.is_none());
+        assert_eq!(history_len(&pipe), 0);
+
+        let copied = pipe
+            .record_dictation(
+                12,
+                "plain".into(),
+                "test".into(),
+                "hello".into(),
+                "hello".into(),
+                InsertOutcome::Copied,
+            )
+            .expect("paused copy succeeds");
+        assert!(copied.is_none());
+        assert_eq!(history_len(&pipe), 0);
+
+        // Ungated writer still inserts while paused (future transcribe / re-insert).
+        let explicit = insert_hello(&pipe);
+        assert!(explicit > 0);
+        assert_eq!(history_len(&pipe), 1);
+
+        pipe.set_paused(false).expect("unpause");
+        assert!(!pipe.snapshot_props().expect("props").2);
+        let id = dictate(&pipe, "hello")
+            .expect("unpaused dictation")
+            .expect("history id");
+        assert!(id > 0);
+        assert_eq!(history_len(&pipe), 2);
+        let final_text = pipe
+            .with_store(|store| {
+                Ok(store
+                    .get(id)
+                    .map_err(|e| e.to_string())?
+                    .expect("row")
+                    .final_text)
+            })
+            .expect("row");
+        assert_eq!(final_text, "hello");
     }
 }

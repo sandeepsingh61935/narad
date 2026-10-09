@@ -4,10 +4,14 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** claimed
+**Status:** resolved
 
-- [ ] A valid edit normalizes the threshold to an integer, trims the hotkey, mode, and model id, and is what gets saved.
-- [ ] A blank mode becomes "plain".
-- [ ] A negative or non-numeric threshold is rejected with the exact sentence above and does not replace the saved config.
-- [ ] The Settings page saves from blur or change. It has no Save button and no unsaved badge.
-- [ ] The validation is a pure function tested with Node's built-in test runner. No new dependency.
+- [x] A valid edit normalizes the threshold to an integer, trims the hotkey, mode, and model id, and is what gets saved.
+- [x] A blank mode becomes "plain".
+- [x] A negative or non-numeric threshold is rejected with the exact sentence above and does not replace the saved config.
+- [x] The Settings page saves from blur or change. It has no Save button and no unsaved badge.
+- [x] The validation is a pure function tested with Node's built-in test runner. No new dependency.
+
+## Answer
+
+`prepareConfigForSave` and the Settings page landed in `05f8b1f`, merged as `c55c10d`. Text fields save on blur. The checkbox and the select save on change. Invalid thresholds do not call save.

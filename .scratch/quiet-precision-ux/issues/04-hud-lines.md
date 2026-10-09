@@ -4,7 +4,7 @@
 
 **Blocked by:** 01: Screen-state model
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] Each HUD state renders the primary sentence from the shared model. No "Hide Dot", no whisper-base.en, no model id on the processing pill.
 - [ ] Reduced motion leaves a static listening glyph and the mode label, and does not start the waveform tick.

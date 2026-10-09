@@ -4,7 +4,7 @@
 
 **Blocked by:** 01: Screen-state model
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] The page renders only the words returned by the screen-state model for empty, no-matches, daemon-unreachable, status, preview, detail, and insert labels.
 - [ ] Keyboard bindings match the spec and do nothing while typing in the search field, except Esc, which still closes the detail.

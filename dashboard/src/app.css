@@ -1,3 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 /* Quiet Precision tokens — docs/DESIGN.md + Stitch quiet_precision/DESIGN.md */
 
 :root {

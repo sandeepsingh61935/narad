@@ -64,6 +64,10 @@ a {
   color: inherit;
 }
 
+kbd {
+  font-family: var(--font-mono);
+}
+
 :focus {
   outline: none;
 }

@@ -180,6 +180,20 @@
     void loadHistory();
   }
 
+  function modelInStatus(
+    status: string,
+  ): { before: string; model: string; after: string } | null {
+    if (modelId === "") return null;
+    const marker = ` · ${modelId} · `;
+    const at = status.indexOf(marker);
+    if (at < 0) return null;
+    return {
+      before: status.slice(0, at + 3),
+      model: modelId,
+      after: status.slice(at + 3 + modelId.length),
+    };
+  }
+
   function moveSelection(delta: number) {
     if (entries.length === 0) return;
     const idx =
@@ -286,7 +300,14 @@
         <button type="button" onclick={clearSearch}>{screen.clear}</button>
       </div>
     {:else if screen.kind === "results"}
-      <p class="status">{screen.status}</p>
+      {@const marked = modelInStatus(screen.status)}
+      <p class="status">
+        {#if marked}
+          {marked.before}<span class="model-id">{marked.model}</span>{marked.after}
+        {:else}
+          {screen.status}
+        {/if}
+      </p>
       <div class="workspace" class:with-detail={detail != null}>
         <ul class="list" role="listbox" aria-label="History entries">
           {#each screen.rows as row (row.id)}
@@ -371,6 +392,7 @@
     display: flex;
     flex-direction: column;
     min-height: 100%;
+    min-width: 0;
   }
 
   .header {
@@ -432,9 +454,9 @@
   }
 
   .main {
-    flex: 1;
+    flex: 1 0 auto;
     padding: var(--space-md) var(--space-xl) var(--space-xl);
-    min-height: 0;
+    min-width: 0;
   }
 
   .status {
@@ -461,9 +483,10 @@
 
   .workspace {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-lg);
     align-items: start;
+    min-width: 0;
   }
 
   @media (min-width: 800px) {
@@ -479,6 +502,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     background: var(--surface);
+    min-width: 0;
     overflow: hidden;
   }
 
@@ -534,9 +558,8 @@
     line-height: 18px;
   }
 
-  .mode {
+  .model-id {
     font-family: var(--font-mono);
-    font-size: 12px;
   }
 
   .sep {
@@ -549,6 +572,8 @@
     background: var(--surface);
     padding: var(--space-lg);
     min-height: 12rem;
+    min-width: 0;
+    max-width: 100%;
   }
 
   .detail-text {
@@ -597,7 +622,7 @@
   }
 
   .action-feedback.error {
-    color: var(--destructive);
+    color: var(--text);
   }
 
   .sr-only {

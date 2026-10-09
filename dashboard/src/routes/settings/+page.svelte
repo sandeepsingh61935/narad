@@ -78,6 +78,7 @@
             <input
               id="dictate-hotkey"
               type="text"
+              class="mono"
               bind:value={config.activation.dictate_hotkey}
               autocomplete="off"
               spellcheck="false"
@@ -310,6 +311,6 @@
   .feedback.error {
     margin: 0;
     font-size: 13px;
-    color: var(--destructive);
+    color: var(--text);
   }
 </style>

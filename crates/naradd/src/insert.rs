@@ -380,11 +380,32 @@ fn restore_clipboard_text(text: &str) -> Result<()> {
     copy_via_wl_copy(text)
 }
 
+/// Test stand-in for the portal paste. `None` uses the real inserter.
+#[cfg(test)]
+static TEST_INSERTS: std::sync::Mutex<Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>> =
+    std::sync::Mutex::new(None);
+
+/// Record paste text and skip the portal. Only the naradd test binary calls this.
+#[cfg(test)]
+pub(crate) fn set_test_insert_log(log: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>) {
+    *TEST_INSERTS.lock().expect("test insert log") = log;
+}
+
 /// Insert `text` at the focused cursor; on failure leave it on the clipboard (FR-INS-1/2/3).
 ///
 /// `terminal`: Ctrl+Shift+V when true, else Ctrl+V. Callers keep `false` until Phase 2
 /// app context can detect terminals (FR-CTX-1); do not invent detection here.
 pub async fn insert_text(text: &str, terminal: bool) -> InsertOutcome {
+    #[cfg(test)]
+    if let Some(log) = TEST_INSERTS.lock().expect("test insert log").clone() {
+        log.lock().expect("test insert entries").push(text.to_string());
+        return if text.is_empty() {
+            InsertOutcome::Copied
+        } else {
+            InsertOutcome::Inserted
+        };
+    }
+
     if text.is_empty() {
         return InsertOutcome::Copied;
     }

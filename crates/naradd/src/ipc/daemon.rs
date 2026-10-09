@@ -103,6 +103,13 @@ impl DaemonIpc {
             .map_err(zbus::fdo::Error::Failed)
     }
 
+    async fn paste_last(&self) -> zbus::fdo::Result<()> {
+        self.pipeline
+            .paste_last()
+            .await
+            .map_err(zbus::fdo::Error::Failed)
+    }
+
     /// Server-side takes owned `Vec` so zbus can deserialize the array body.
     async fn delete_entries(&self, ids: Vec<i64>) -> zbus::fdo::Result<()> {
         self.pipeline

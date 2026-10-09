@@ -571,6 +571,46 @@ impl PipelineHandle {
         Ok(())
     }
 
+    /// Paste the newest history row's `final_text` (FR-INS-4).
+    ///
+    /// Not [`Self::reinsert`]: no entry id. A copied (`skipped`) row still counts.
+    /// No final text signals the HUD error outcome and pastes nothing.
+    pub async fn paste_last(&self) -> Result<(), String> {
+        let Some(text) = self.newest_final_text()? else {
+            self.set_state(SessionState::ERROR).await;
+            self.schedule_idle_after(Duration::from_millis(800));
+            return Ok(());
+        };
+        let outcome = insert::insert_text(&text, false).await;
+        if matches!(outcome, InsertOutcome::Inserted) {
+            if let Ok(mut st) = self.inner.state.lock() {
+                note_paste_focus(&mut st);
+            }
+        }
+        match outcome {
+            InsertOutcome::Inserted => Ok(()),
+            InsertOutcome::Copied => {
+                self.set_state(SessionState::COPIED).await;
+                self.schedule_idle_after(Duration::from_secs(2));
+                Ok(())
+            }
+        }
+    }
+
+    /// Newest row by `created_at`, then id. Empty `final_text` is nothing to paste.
+    fn newest_final_text(&self) -> Result<Option<String>, String> {
+        self.with_store(|store| {
+            let rows = store.list(0, 1).map_err(|e| e.to_string())?;
+            Ok(rows.into_iter().next().and_then(|row| {
+                if row.final_text.is_empty() {
+                    None
+                } else {
+                    Some(row.final_text)
+                }
+            }))
+        })
+    }
+
     pub async fn reinsert(&self, id: i64) -> Result<(), String> {
         let entry = {
             let store = self
@@ -929,6 +969,75 @@ mod tests {
             text.into(),
             outcome,
         )
+    }
+
+    #[tokio::test]
+    async fn paste_last_picks_newest_final() {
+        use std::sync::{Arc, Mutex};
+
+        let (_dir, pipe) = test_pipe();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        insert::set_test_insert_log(Some(Arc::clone(&log)));
+        struct ClearLog;
+        impl Drop for ClearLog {
+            fn drop(&mut self) {
+                insert::set_test_insert_log(None);
+            }
+        }
+        let _clear = ClearLog;
+
+        pipe.paste_last().await.expect("empty history");
+        assert!(log.lock().expect("log").is_empty());
+        assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::ERROR);
+
+        let older = pipe
+            .commit_dictation(
+                10,
+                "plain".into(),
+                "test".into(),
+                "older raw".into(),
+                "older final".into(),
+                InsertStatus::Success,
+            )
+            .expect("older");
+        let newest = pipe
+            .commit_dictation(
+                11,
+                "plain".into(),
+                "test".into(),
+                "newest raw".into(),
+                "newest final".into(),
+                InsertStatus::Skipped,
+            )
+            .expect("newest copied");
+        assert!(newest > older);
+
+        pipe.paste_last().await.expect("paste newest");
+        assert_eq!(log.lock().expect("log").as_slice(), ["newest final"]);
+        let status = pipe
+            .with_store(|store| {
+                Ok(store
+                    .get(newest)
+                    .map_err(|e| e.to_string())?
+                    .expect("row")
+                    .insert_status)
+            })
+            .expect("status");
+        assert_eq!(status, InsertStatus::Skipped);
+        assert_eq!(history_len(&pipe), 2);
+
+        pipe.commit_dictation(
+            12,
+            "plain".into(),
+            "test".into(),
+            "blank raw".into(),
+            String::new(),
+            InsertStatus::Success,
+        )
+        .expect("empty final");
+        pipe.paste_last().await.expect("no final text");
+        assert_eq!(log.lock().expect("log").as_slice(), ["newest final"]);
+        assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::ERROR);
     }
 
     #[test]

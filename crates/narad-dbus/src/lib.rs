@@ -7,7 +7,7 @@
 //! Methods: `Start`, `Stop`, `Cancel`, `Toggle`, `History`, `ReinsertEntry`, `DeleteEntries`,
 //! `ReportFocus` (FR-CTX-1).
 //! Signals: `StateChanged`, `Level`, `EntryAdded`.
-//! Properties: `Mode`, `Paused`, `HudVisible`.
+//! Properties: `Mode`, `Paused` (writable), `HudVisible` (writable).
 //!
 //! ## Deferred (Phase 2+)
 //!
@@ -63,6 +63,15 @@ mod tests {
     fn report_focus_is_on_the_daemon_proxy() {
         async fn assert_sig(proxy: &DaemonProxy<'_>) {
             let _ = proxy.report_focus("").await;
+        }
+        let _ = assert_sig;
+    }
+
+    #[test]
+    fn paused_is_writable_on_the_daemon_proxy() {
+        async fn assert_sig(proxy: &DaemonProxy<'_>) {
+            let _ = proxy.set_paused(true).await;
+            let _ = proxy.paused().await;
         }
         let _ = assert_sig;
     }

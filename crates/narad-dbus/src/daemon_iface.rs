@@ -55,8 +55,14 @@ pub trait Daemon {
     #[zbus(property)]
     fn mode(&self) -> zbus::Result<String>;
 
+    /// When true, a finished dictation still pastes but writes no history row
+    /// and emits no `EntryAdded` (FR-HIS-7). Explicit transcribe and re-insert
+    /// are not gated. Writable; proxy exposes `set_paused`.
     #[zbus(property)]
     fn paused(&self) -> zbus::Result<bool>;
+
+    #[zbus(property)]
+    fn set_paused(&self, value: bool) -> zbus::Result<()>;
 
     /// Floating HUD visibility (ARCHITECTURE §6 / FR-DOT-3). Writable; proxy exposes `set_hud_visible`.
     #[zbus(property)]

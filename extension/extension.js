@@ -31,6 +31,9 @@ const DaemonIfaceXml = `
       <arg type="s" direction="in" name="mode"/>
     </method>
     <method name="Cancel"/>
+    <method name="ReportFocus">
+      <arg type="s" direction="in" name="app_id"/>
+    </method>
     <signal name="StateChanged">
       <arg type="s" name="state"/>
     </signal>
@@ -63,6 +66,8 @@ export default class NaradExtension extends Extension {
         this._nameWatch = 0;
         this._escAction = null;
         this._accelHandler = 0;
+        this._focusHandler = 0;
+        this._focusMissWarned = false;
         this._waveTimer = 0;
         this._elapsedTimer = 0;
         this._elapsedSec = 0;
@@ -271,6 +276,7 @@ export default class NaradExtension extends Extension {
 
         this._applyState('idle');
         this._watchDaemon();
+        this._watchFocus();
     }
 
     _hudPositionPath() {
@@ -406,6 +412,74 @@ export default class NaradExtension extends Extension {
         });
 
         console.log('[narad] connected to dev.narad.Daemon');
+        this._reportFocus();
+    }
+
+    _watchFocus() {
+        try {
+            this._focusHandler = global.display.connect('notify::focus-window', () => {
+                this._reportFocus();
+            });
+        } catch (e) {
+            console.warn(`[narad] focus watch failed: ${e.message}`);
+            this._focusHandler = 0;
+        }
+    }
+
+    /** GTK application id, else wm_class; "" when nothing is focused (FR-CTX-1). */
+    _focusedAppId() {
+        let win = null;
+        try {
+            win = global.display.focus_window;
+        } catch (e) {
+            console.warn(`[narad] focus window failed: ${e.message}`);
+            return '';
+        }
+        if (!win)
+            return '';
+
+        const gtkId = this._windowString(win, 'get_gtk_application_id', 'gtk_application_id');
+        if (gtkId)
+            return gtkId;
+        return this._windowString(win, 'get_wm_class', 'wm_class');
+    }
+
+    _windowString(win, method, prop) {
+        try {
+            const value = (typeof win[method] === 'function') ? win[method]() : win[prop];
+            return (typeof value === 'string') ? value : '';
+        } catch (e) {
+            console.warn(`[narad] ${method} failed: ${e.message}`);
+            return '';
+        }
+    }
+
+    _reportFocus() {
+        if (!this._proxy) {
+            if (!this._focusMissWarned) {
+                console.warn('[narad] ReportFocus skipped; daemon proxy missing');
+                this._focusMissWarned = true;
+            }
+            return;
+        }
+        this._focusMissWarned = false;
+
+        let appId = '';
+        try {
+            appId = this._focusedAppId();
+        } catch (e) {
+            console.warn(`[narad] focused app id failed: ${e.message}`);
+            appId = '';
+        }
+
+        try {
+            this._proxy.ReportFocusRemote(appId, (_result, error) => {
+                if (error)
+                    console.warn(`[narad] ReportFocus failed: ${error.message}`);
+            });
+        } catch (e) {
+            console.warn(`[narad] ReportFocus failed: ${e.message}`);
+        }
     }
 
     _onDaemonVanished() {
@@ -762,6 +836,10 @@ export default class NaradExtension extends Extension {
         if (this._accelHandler) {
             global.display.disconnect(this._accelHandler);
             this._accelHandler = 0;
+        }
+        if (this._focusHandler) {
+            global.display.disconnect(this._focusHandler);
+            this._focusHandler = 0;
         }
         this._releaseGrab();
         this._press = null;

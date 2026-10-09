@@ -1,0 +1,125 @@
+@layer theme, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@source "./";
+
+@theme {
+  --color-on-surface-variant: #d9c3b0;
+  --color-on-background: #e6e2df;
+  --color-surface-container-low: #1c1b1a;
+  --color-surface-container-lowest: #0f0e0d;
+  --color-primary-fixed: #ffdcbe;
+  --color-background: #141312;
+  --color-on-error: #690005;
+  --color-secondary: #ffb3ae;
+  --color-tertiary-container: #00aae2;
+  --color-surface-tint: #ffb86f;
+  --color-error: #ffb4ab;
+  --color-on-error-container: #ffdad6;
+  --color-on-tertiary-fixed-variant: #004c68;
+  --color-outline: #a18d7c;
+  --color-primary-fixed-dim: #ffb86f;
+  --color-secondary-fixed-dim: #ffb3ae;
+  --color-primary: #ffb86f;
+  --color-on-tertiary: #003549;
+  --color-on-primary-container: #502d00;
+  --color-surface-variant: #363433;
+  --color-on-secondary: #68000b;
+  --color-inverse-primary: #8a5100;
+  --color-on-primary-fixed-variant: #693c00;
+  --color-surface-container-high: #2b2a29;
+  --color-on-tertiary-container: #003a50;
+  --color-on-primary: #4a2800;
+  --color-inverse-on-surface: #31302f;
+  --color-tertiary-fixed: #c3e8ff;
+  --color-on-tertiary-fixed: #001e2c;
+  --color-tertiary-fixed-dim: #78d1ff;
+  --color-primary-container: #e08a1e;
+  --color-on-surface: #e6e2df;
+  --color-surface-bright: #3a3938;
+  --color-secondary-container: #8b191d;
+  --color-surface-dim: #141312;
+  --color-tertiary: #78d1ff;
+  --color-on-secondary-container: #ff9992;
+  --color-on-primary-fixed: #2c1600;
+  --color-on-secondary-fixed-variant: #8b191d;
+  --color-error-container: #93000a;
+  --color-on-secondary-fixed: #410004;
+  --color-outline-variant: #534435;
+  --color-inverse-surface: #e6e2df;
+  --color-surface: #141312;
+  --color-secondary-fixed: #ffdad7;
+  --color-surface-container: #201f1e;
+  --color-surface-container-highest: #363433;
+
+  --spacing-space-lg: 1rem;
+  --spacing-space-xl: 1.5rem;
+  --spacing-space-sm: 0.5rem;
+  --spacing-space-xs: 0.25rem;
+  --spacing-space-md: 0.75rem;
+  --spacing-gutter: 0.75rem;
+  --spacing-margin: 1rem;
+
+  --font-label-code: "JetBrains Mono", ui-monospace, monospace;
+  --font-body-default: Inter, system-ui, sans-serif;
+  --font-headline-md: Inter, system-ui, sans-serif;
+  --font-headline-lg: Inter, system-ui, sans-serif;
+  --font-keycap: "JetBrains Mono", ui-monospace, monospace;
+  --font-body-muted: Inter, system-ui, sans-serif;
+
+  --text-label-code: 12px;
+  --text-label-code--line-height: 16px;
+  --text-label-code--letter-spacing: -0.01em;
+  --text-label-code--font-weight: 500;
+
+  --text-body-default: 14px;
+  --text-body-default--line-height: 20px;
+  --text-body-default--letter-spacing: 0em;
+  --text-body-default--font-weight: 400;
+
+  --text-headline-md: 16px;
+  --text-headline-md--line-height: 22px;
+  --text-headline-md--letter-spacing: -0.01em;
+  --text-headline-md--font-weight: 600;
+
+  --text-headline-lg: 20px;
+  --text-headline-lg--line-height: 26px;
+  --text-headline-lg--letter-spacing: -0.015em;
+  --text-headline-lg--font-weight: 600;
+
+  --text-keycap: 11px;
+  --text-keycap--line-height: 14px;
+  --text-keycap--letter-spacing: 0.02em;
+  --text-keycap--font-weight: 600;
+
+  --text-body-muted: 13px;
+  --text-body-muted--line-height: 18px;
+  --text-body-muted--letter-spacing: 0em;
+  --text-body-muted--font-weight: 400;
+
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-full: 9999px;
+}
+
+@utility py-0.2 {
+  padding-top: calc(var(--spacing) * 0.2);
+  padding-bottom: calc(var(--spacing) * 0.2);
+}
+
+.material-symbols-outlined {
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+}

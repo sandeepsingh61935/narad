@@ -4,7 +4,7 @@
 
 **Blocked by:** 02: Settings save when the control changes; 03: History page speaks the model
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] Global tokens match the hex values above for both prefers-color-scheme values.
 - [ ] History and Settings use those tokens. Delete is the only destructive color.

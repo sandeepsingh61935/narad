@@ -4,10 +4,14 @@
 
 **Blocked by:** 01: Screen-state model
 
-**Status:** claimed
+**Status:** resolved
 
-- [ ] The page renders only the words returned by the screen-state model for empty, no-matches, daemon-unreachable, status, preview, detail, and insert labels.
-- [ ] Keyboard bindings match the spec and do nothing while typing in the search field, except Esc, which still closes the detail.
-- [ ] Copy, Re-insert, and Delete call the existing dashboard commands and toast those verbs.
-- [ ] Delete removes that one entry and does not offer Undo.
-- [ ] Long text is clamped in the row and shown in full in the detail, including Devanagari and line breaks.
+- [x] The page renders only the words returned by the screen-state model for empty, no-matches, daemon-unreachable, status, preview, detail, and insert labels.
+- [x] Keyboard bindings match the spec and do nothing while typing in the search field, except Esc, which still closes the detail.
+- [x] Copy, Re-insert, and Delete call the existing dashboard commands and toast those verbs.
+- [x] Delete removes that one entry and does not offer Undo.
+- [x] Long text is clamped in the row and shown in full in the detail, including Devanagari and line breaks.
+
+## Answer
+
+Merged as `f488722` (`62daa2f` on `feat/qp-03-history-page`). `session_status` only reads existing `Paused` and `Mode`. 18 tests passed and `svelte-check` was clean after the merge.

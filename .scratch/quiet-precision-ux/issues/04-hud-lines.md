@@ -4,8 +4,12 @@
 
 **Blocked by:** 01: Screen-state model
 
-**Status:** claimed
+**Status:** resolved
 
-- [ ] Each HUD state renders the primary sentence from the shared model. No "Hide Dot", no whisper-base.en, no model id on the processing pill.
-- [ ] Reduced motion leaves a static listening glyph and the mode label, and does not start the waveform tick.
-- [ ] No new D-Bus API. The right-click menu is not built. Only an existing hide label is renamed.
+- [x] Each HUD state renders the primary sentence from the shared model. No "Hide Dot", no whisper-base.en, no model id on the processing pill.
+- [x] Reduced motion leaves a static listening glyph and the mode label, and does not start the waveform tick.
+- [x] No new D-Bus API. The right-click menu is not built. Only an existing hide label is renamed.
+
+## Answer
+
+Fast-forwarded onto `feat/quiet-precision-ux` as `d88d285`. Copied reason is `No text field focused`. The waveform tick runs only when `St.Settings` animations are enabled. There was no Hide Dot label to rename. HUD parity test is included in the 18 passing tests.

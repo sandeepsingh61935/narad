@@ -1,4 +1,4 @@
-//! Mic capture via PipeWire `pw-record` + energy VAD trim (FR-AUD-1/2/6).
+//! Mic capture via PipeWire `pw-record` + energy VAD trim (FR-AUD-1/2/4/6).
 //!
 //! Uses `pw-record` so the daemon does not need ALSA headers at build time
 //! (ARCHITECTURE allows PipeWire). Mic process lives only while listening.
@@ -28,19 +28,13 @@ pub struct CaptureHandle {
 
 impl CaptureHandle {
     /// Spawn `pw-record` for mono f32 @ 16 kHz raw PCM on stdout.
-    pub fn start() -> Result<Self> {
+    ///
+    /// An empty `input_target` omits `--target` so PipeWire uses the default source (FR-AUD-4).
+    pub fn start(input_target: &str) -> Result<Self> {
         let sample_rate = TARGET_SAMPLE_RATE;
+        let args = pw_record_args(sample_rate, input_target);
         let mut child = Command::new("pw-record")
-            .args([
-                "--rate",
-                &sample_rate.to_string(),
-                "--channels",
-                "1",
-                "--format",
-                "f32",
-                "--raw",
-                "-",
-            ])
+            .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -122,6 +116,31 @@ impl Drop for CaptureHandle {
             let _ = h.join();
         }
     }
+}
+
+/// Argv for `pw-record` mono f32 raw PCM. Blank `input_target` omits `--target` (FR-AUD-4).
+pub fn pw_record_args(sample_rate: i32, input_target: &str) -> Vec<String> {
+    let mut args = vec![
+        "--rate".to_string(),
+        sample_rate.to_string(),
+        "--channels".to_string(),
+        "1".to_string(),
+        "--format".to_string(),
+        "f32".to_string(),
+        "--raw".to_string(),
+        "-".to_string(),
+    ];
+    let target = input_target.trim();
+    if !target.is_empty() {
+        // Options before the `-` file operand.
+        let file = args.pop();
+        args.push("--target".to_string());
+        args.push(target.to_string());
+        if let Some(file) = file {
+            args.push(file);
+        }
+    }
+    args
 }
 
 fn read_pcm_loop(
@@ -441,6 +460,31 @@ mod tests {
         let s: Vec<f32> = (0..100).map(|i| i as f32).collect();
         let out = resample_to_16k(&s, 32_000);
         assert!((out.len() as i32 - 50).abs() <= 1);
+    }
+
+    #[test]
+    fn empty_target_omits_pw_record_target_flag() {
+        for target in ["", "   "] {
+            let args = pw_record_args(TARGET_SAMPLE_RATE, target);
+            assert!(
+                !args.iter().any(|arg| arg == "--target"),
+                "target {target:?} argv {args:?}"
+            );
+            assert_eq!(args.last().map(String::as_str), Some("-"));
+        }
+    }
+
+    #[test]
+    fn set_target_passes_pw_record_target() {
+        let id = "alsa_input.pci-0000_00_1f.3.analog-stereo";
+        let args = pw_record_args(TARGET_SAMPLE_RATE, id);
+        let pos = args.iter().position(|arg| arg == "--target").expect("flag");
+        assert_eq!(args[pos + 1], id);
+        assert_eq!(args.iter().filter(|arg| *arg == "--target").count(), 1);
+        assert!(
+            pos + 1 < args.len() - 1,
+            "--target stays before the file operand"
+        );
     }
 
     #[test]

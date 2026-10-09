@@ -59,6 +59,8 @@ pub struct AudioConfig {
     /// Hard cap on a single recording in seconds (FR-AUD-3; enforced as a listen timer).
     /// `0` disables the cap only. It does not restore the default.
     pub max_duration_secs: u32,
+    /// PipeWire source node name or serial (FR-AUD-4). Empty follows the system default.
+    pub input_target: String,
 }
 
 impl Default for AudioConfig {
@@ -67,6 +69,7 @@ impl Default for AudioConfig {
             sounds_enabled: true,
             auto_stop_silence_secs: 2,
             max_duration_secs: 300,
+            input_target: String::new(),
         }
     }
 }
@@ -179,6 +182,7 @@ mod tests {
         assert!(cfg.audio.sounds_enabled);
         assert_eq!(cfg.audio.auto_stop_silence_secs, 2);
         assert_eq!(cfg.audio.max_duration_secs, 300);
+        assert_eq!(cfg.audio.input_target, "");
         assert_eq!(cfg.general.active_mode, "plain");
         assert_eq!(cfg.models.asr_english, "parakeet-ctc-110m-int8");
         assert!(!cfg.history.retain_audio);
@@ -264,6 +268,20 @@ asr_english = "whisper-small-en"
         assert!(!cfg.history.retain_audio);
         assert_eq!(cfg.history.text_retention_days, None);
         assert_eq!(cfg.history.audio_retention_days, None);
+        assert_eq!(cfg.audio.input_target, "");
+    }
+
+    #[test]
+    fn absent_input_target_is_empty_and_set_id_loads() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "[audio]\nsounds_enabled = true\n").expect("write");
+        let cfg = load(&path).expect("load");
+        assert_eq!(cfg.audio.input_target, "");
+
+        fs::write(&path, "[audio]\ninput_target = \"alsa_input.usb\"\n").expect("write");
+        let cfg = load(&path).expect("load");
+        assert_eq!(cfg.audio.input_target, "alsa_input.usb");
     }
 
     #[test]

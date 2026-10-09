@@ -294,7 +294,8 @@ impl PipelineHandle {
 
         audio::play_cue("start", self.inner.config.audio.sounds_enabled);
 
-        let capture = CaptureHandle::start().map_err(|e| e.to_string())?;
+        let capture = CaptureHandle::start(&self.inner.config.audio.input_target)
+            .map_err(|e| e.to_string())?;
         let rms_bits = capture.rms_bits.clone();
 
         let listen_gen = {

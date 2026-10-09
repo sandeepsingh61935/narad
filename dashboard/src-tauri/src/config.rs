@@ -32,6 +32,8 @@ impl Default for DashboardConfig {
 #[serde(default)]
 pub struct ActivationConfig {
     pub dictate_hotkey: String,
+    /// Press-only paste of the newest final text (FR-INS-4). Round-tripped so a save does not drop it.
+    pub paste_last_hotkey: String,
     pub hold_tap_threshold_ms: u64,
 }
 
@@ -39,6 +41,7 @@ impl Default for ActivationConfig {
     fn default() -> Self {
         Self {
             dictate_hotkey: "Ctrl+Alt+Space".to_string(),
+            paste_last_hotkey: "Ctrl+Alt+V".to_string(),
             hold_tap_threshold_ms: 250,
         }
     }
@@ -190,8 +193,26 @@ text_retention_days = 4
         let again: DashboardConfig = toml::from_str(&text).expect("reparse");
         assert_eq!(again.history, cfg.history);
         assert_eq!(again.activation.dictate_hotkey, "Ctrl+Alt+D");
+        assert_eq!(again.activation.paste_last_hotkey, "Ctrl+Alt+V");
         assert_eq!(again.activation.hold_tap_threshold_ms, 250);
         assert_eq!(again.audio.input_target, "");
+    }
+
+    #[test]
+    fn reserialize_keeps_paste_last_hotkey() {
+        let raw = r#"
+[activation]
+dictate_hotkey = "Ctrl+Alt+Space"
+paste_last_hotkey = "Ctrl+Shift+V"
+"#;
+        let cfg: DashboardConfig = toml::from_str(raw).expect("parse");
+        assert_eq!(cfg.activation.dictate_hotkey, "Ctrl+Alt+Space");
+        assert_eq!(cfg.activation.paste_last_hotkey, "Ctrl+Shift+V");
+        let text = toml::to_string_pretty(&cfg).expect("serialize");
+        assert!(text.contains("dictate_hotkey = \"Ctrl+Alt+Space\""));
+        assert!(text.contains("paste_last_hotkey = \"Ctrl+Shift+V\""));
+        let again: DashboardConfig = toml::from_str(&text).expect("reparse");
+        assert_eq!(again.activation, cfg.activation);
     }
 
     #[test]

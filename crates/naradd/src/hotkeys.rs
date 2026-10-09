@@ -18,7 +18,13 @@ use crate::pipeline::PipelineHandle;
 
 /// Reverse-DNS id; must match `{APP_ID}.desktop`.
 pub const APP_ID: &str = "dev.narad.Narad";
-const SHORTCUT_ID: &str = "narad-dictate";
+const DICTATE_ID: &str = "narad-dictate";
+const PASTE_LAST_ID: &str = "narad-paste-last";
+
+/// Paste-last is a press. Key-repeat while held must not paste again. Release is not hold/tap.
+pub(crate) fn paste_last_should_fire(already_down: bool) -> bool {
+    !already_down
+}
 
 fn applications_dir() -> Option<PathBuf> {
     if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
@@ -95,7 +101,7 @@ pub fn to_portal_trigger(hotkey: &str) -> String {
     parts.join("+")
 }
 
-/// Bind the dictate hotkey and forward Activated/Deactivated into the pipeline (hold vs tap).
+/// Bind dictate (hold/tap) and paste-last (press) and forward portal events into the pipeline.
 pub async fn run(pipeline: PipelineHandle) -> Result<()> {
     let exe = std::env::current_exe().context("current_exe")?;
     let desktop = ensure_desktop_file(&exe)?;
@@ -107,27 +113,42 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
         .context("Registry.Register failed")?;
     info!(app_id = APP_ID, "registered host app with portal Registry");
 
-    let trigger = {
+    let (trigger, paste_trigger, threshold_ms) = {
         let cfg = pipeline.config();
-        to_portal_trigger(&cfg.activation.dictate_hotkey)
+        (
+            to_portal_trigger(&cfg.activation.dictate_hotkey),
+            to_portal_trigger(&cfg.activation.paste_last_hotkey),
+            cfg.activation.hold_tap_threshold_ms,
+        )
     };
-    let threshold_ms = pipeline.config().activation.hold_tap_threshold_ms;
 
     let portal = GlobalShortcuts::new()
         .await
         .context("connect GlobalShortcuts portal")?;
-    info!(version = portal.version(), trigger = %trigger, "GlobalShortcuts connected");
+    info!(
+        version = portal.version(),
+        trigger = %trigger,
+        paste_last = %paste_trigger,
+        "GlobalShortcuts connected"
+    );
 
     let session = portal
         .create_session(CreateSessionOptions::default())
         .await
         .context("GlobalShortcuts.CreateSession")?;
 
-    let shortcut = NewShortcut::new(SHORTCUT_ID, "Narad dictate (hold or tap)")
+    let dictate = NewShortcut::new(DICTATE_ID, "Narad dictate (hold or tap)")
         .preferred_trigger(Some(trigger.as_str()));
+    let paste_last = NewShortcut::new(PASTE_LAST_ID, "Narad paste last transcription")
+        .preferred_trigger(Some(paste_trigger.as_str()));
 
     let request = portal
-        .bind_shortcuts(&session, &[shortcut], None, BindShortcutsOptions::default())
+        .bind_shortcuts(
+            &session,
+            &[dictate, paste_last],
+            None,
+            BindShortcutsOptions::default(),
+        )
         .await
         .context("BindShortcuts")?;
     let bound = request.response().context("BindShortcuts response")?;
@@ -135,7 +156,7 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
         info!(
             id = s.id(),
             trigger = s.trigger_description(),
-            "bound dictate shortcut"
+            "bound shortcut"
         );
     }
     if bound.shortcuts().is_empty() {
@@ -146,6 +167,7 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
     let mut deactivated = portal.receive_deactivated().await?;
     // True between first Activated and matching Deactivated (suppresses key-repeat Activates).
     let mut key_down = false;
+    let mut paste_down = false;
     let mut press_at: Option<Instant> = None;
     // After a second-tap stop, ignore the following Deactivated so it does not re-interpret hold.
     let mut suppress_deactivate = false;
@@ -153,7 +175,8 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
     info!(
         trigger = %trigger,
         threshold_ms,
-        "hotkeys listening (press→Start, hold-release→Stop, tap→toggle; key-repeat ignored)"
+        paste_last = %paste_trigger,
+        "hotkeys listening (dictate hold/tap; paste-last on press; key-repeat ignored)"
     );
 
     loop {
@@ -161,7 +184,16 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
             event = activated.next() => {
                 match event {
                     Some(ev) => {
-                        if ev.shortcut_id() != SHORTCUT_ID {
+                        if ev.shortcut_id() == PASTE_LAST_ID {
+                            let fire = paste_last_should_fire(paste_down);
+                            paste_down = true;
+                            if fire {
+                                info!("paste-last hotkey → PasteLast");
+                                pipeline.request_paste_last();
+                            }
+                            continue;
+                        }
+                        if ev.shortcut_id() != DICTATE_ID {
                             continue;
                         }
                         // Keyboard repeat while held: portal re-fires Activated. Ignore.
@@ -204,7 +236,11 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
             event = deactivated.next() => {
                 match event {
                     Some(ev) => {
-                        if ev.shortcut_id() != SHORTCUT_ID {
+                        if ev.shortcut_id() == PASTE_LAST_ID {
+                            paste_down = false;
+                            continue;
+                        }
+                        if ev.shortcut_id() != DICTATE_ID {
                             continue;
                         }
                         if !key_down {
@@ -252,5 +288,22 @@ mod tests {
     fn portal_trigger_normalizes_default() {
         assert_eq!(to_portal_trigger("Ctrl+Alt+Space"), "CTRL+ALT+space");
         assert_eq!(to_portal_trigger("CTRL+SHIFT+D"), "CTRL+SHIFT+d");
+    }
+
+    #[test]
+    fn paste_last_fires_on_press_not_hold_or_repeat() {
+        assert!(paste_last_should_fire(false));
+        assert!(!paste_last_should_fire(true));
+        let cfg = crate::config::NaradConfig::default();
+        assert_eq!(cfg.activation.dictate_hotkey, "Ctrl+Alt+Space");
+        assert_eq!(cfg.activation.paste_last_hotkey, "Ctrl+Alt+V");
+        assert_eq!(
+            to_portal_trigger(&cfg.activation.paste_last_hotkey),
+            "CTRL+ALT+v"
+        );
+        assert_ne!(
+            to_portal_trigger(&cfg.activation.paste_last_hotkey),
+            to_portal_trigger(&cfg.activation.dictate_hotkey)
+        );
     }
 }

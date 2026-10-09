@@ -68,6 +68,7 @@ async fn main() -> Result<()> {
 
     info!(
         hotkey = %cfg.activation.dictate_hotkey,
+        paste_last_hotkey = %cfg.activation.paste_last_hotkey,
         hold_tap_threshold_ms = cfg.activation.hold_tap_threshold_ms,
         active_mode = %cfg.general.active_mode,
         sounds_enabled = cfg.audio.sounds_enabled,

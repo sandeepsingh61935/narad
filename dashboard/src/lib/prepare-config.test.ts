@@ -60,6 +60,21 @@ test("a negative threshold is rejected and the config is left unchanged", () => 
   assert.deepEqual(input, before);
 });
 
+test("a settings save keeps the paste-last hotkey", () => {
+  const input = defaultConfig();
+  assert.equal(input.activation.dictate_hotkey, "Ctrl+Alt+Space");
+  assert.equal(input.activation.paste_last_hotkey, "Ctrl+Alt+V");
+  input.activation.paste_last_hotkey = "  Ctrl+Alt+V  ";
+
+  const result = prepareConfigForSave(input);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.config.activation.dictate_hotkey, "Ctrl+Alt+Space");
+  assert.equal(result.config.activation.paste_last_hotkey, "Ctrl+Alt+V");
+  assert.equal(result.config.activation.hold_tap_threshold_ms, 250);
+});
+
 test("a settings save keeps the mic target", () => {
   const input = defaultConfig();
   assert.equal(input.audio.input_target, "");

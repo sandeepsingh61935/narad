@@ -217,6 +217,18 @@ impl PipelineHandle {
         self.spawn_listen(mode, ListenTrigger::Open);
     }
 
+    /// Paste-last shortcut. One press pastes; release is not a second action.
+    pub fn request_paste_last(&self) {
+        let handle = self.clone();
+        tokio::spawn(async move {
+            if let Err(err) = handle.paste_last().await {
+                warn!(error = %err, "paste last failed");
+                handle.set_state(SessionState::ERROR).await;
+                handle.schedule_idle_after(Duration::from_millis(800));
+            }
+        });
+    }
+
     /// Hotkey press. Silence stop stays off until the release is a tap (or this was a HUD/open start).
     pub fn request_hotkey_press(&self) {
         let epoch = self.inner.state.lock().map(|st| st.hold_epoch).unwrap_or(0);

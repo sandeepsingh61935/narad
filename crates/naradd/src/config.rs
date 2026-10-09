@@ -34,6 +34,8 @@ impl Default for NaradConfig {
 pub struct ActivationConfig {
     /// Global dictate hotkey (hold = push-to-talk, tap = toggle).
     pub dictate_hotkey: String,
+    /// Paste the newest final text (FR-INS-4). Press only; not hold/tap.
+    pub paste_last_hotkey: String,
     /// Press duration at or above this value is treated as hold; below is tap (FR-ACT-1).
     pub hold_tap_threshold_ms: u64,
 }
@@ -42,6 +44,7 @@ impl Default for ActivationConfig {
     fn default() -> Self {
         Self {
             dictate_hotkey: "Ctrl+Alt+Space".to_string(),
+            paste_last_hotkey: "Ctrl+Alt+V".to_string(),
             hold_tap_threshold_ms: 250,
         }
     }
@@ -181,6 +184,7 @@ mod tests {
     fn defaults_match_requirements() {
         let cfg = NaradConfig::default();
         assert_eq!(cfg.activation.dictate_hotkey, "Ctrl+Alt+Space");
+        assert_eq!(cfg.activation.paste_last_hotkey, "Ctrl+Alt+V");
         assert_eq!(cfg.activation.hold_tap_threshold_ms, 250);
         assert!(cfg.audio.sounds_enabled);
         assert_eq!(cfg.audio.auto_stop_silence_secs, 2);
@@ -235,6 +239,7 @@ asr_english = "whisper-small-en"
 
         let cfg = load(&path).expect("load");
         assert_eq!(cfg.activation.dictate_hotkey, "Ctrl+Shift+D");
+        assert_eq!(cfg.activation.paste_last_hotkey, "Ctrl+Alt+V");
         assert_eq!(cfg.activation.hold_tap_threshold_ms, 400);
         assert!(!cfg.audio.sounds_enabled);
         assert_eq!(cfg.audio.auto_stop_silence_secs, 5);
@@ -267,6 +272,7 @@ asr_english = "whisper-small-en"
         let cfg = load(&path).expect("load");
         assert_eq!(cfg.general.active_mode, "bullet");
         assert_eq!(cfg.activation.dictate_hotkey, "Ctrl+Alt+Space");
+        assert_eq!(cfg.activation.paste_last_hotkey, "Ctrl+Alt+V");
         assert_eq!(cfg.activation.hold_tap_threshold_ms, 250);
         assert_eq!(cfg.models.asr_english, "parakeet-ctc-110m-int8");
         assert!(!cfg.history.retain_audio);

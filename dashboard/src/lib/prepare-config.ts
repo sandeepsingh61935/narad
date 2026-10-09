@@ -47,6 +47,7 @@ export function prepareConfigForSave(config: ConfigDraft): PreparedConfig {
     config: {
       activation: {
         dictate_hotkey: config.activation.dictate_hotkey.trim(),
+        paste_last_hotkey: config.activation.paste_last_hotkey.trim(),
         hold_tap_threshold_ms,
       },
       audio: {

@@ -55,6 +55,24 @@ fn load_config() -> Result<DashboardConfig, String> {
     config::load_config()
 }
 
+/// `Paused` and `Mode` as already exposed on `dev.narad.Daemon`. No new method.
+#[derive(serde::Serialize)]
+struct SessionStatus {
+    paused: bool,
+    mode: String,
+}
+
+#[tauri::command]
+async fn session_status() -> Result<SessionStatus, String> {
+    let proxy = daemon_proxy().await?;
+    let paused = proxy
+        .paused()
+        .await
+        .map_err(|e| format!("Paused: {e}"))?;
+    let mode = proxy.mode().await.map_err(|e| format!("Mode: {e}"))?;
+    Ok(SessionStatus { paused, mode })
+}
+
 /// Write settings to `~/.config/narad/config.toml`. FR-HIS-9.
 #[tauri::command]
 fn save_config(config: DashboardConfig) -> Result<(), String> {
@@ -70,7 +88,8 @@ pub fn run() {
             reinsert_entry,
             delete_entries,
             load_config,
-            save_config
+            save_config,
+            session_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

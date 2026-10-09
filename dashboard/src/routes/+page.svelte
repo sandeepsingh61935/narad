@@ -1,22 +1,26 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import {
-    displayText,
-    formatDuration,
-    formatTime,
-    previewText,
-    type HistoryEntry,
-    type TextView,
-  } from "$lib/history";
+  import type { DashboardConfig } from "$lib/config";
+  import { formatTime, type HistoryEntry, type TextView } from "$lib/history";
+  import { historyScreen } from "$lib/screen-state";
 
   const PAGE_SIZE = 50;
+  const SEARCH_ID = "history-search";
+
+  type SessionStatus = {
+    paused: boolean;
+    mode: string;
+  };
 
   let query = $state("");
+  let appliedQuery = $state("");
   let entries = $state<HistoryEntry[]>([]);
   let loading = $state(true);
-  let error = $state<string | null>(null);
-  let searched = $state(false);
+  let reachable = $state(true);
+  let paused = $state(false);
+  let mode = $state("plain");
+  let modelId = $state("");
 
   let selectedId = $state<number | null>(null);
   let textView = $state<TextView>("final");
@@ -24,40 +28,74 @@
   let actionMessage = $state<string | null>(null);
   let actionError = $state<string | null>(null);
 
-  const selected = $derived(
-    selectedId == null
-      ? null
-      : (entries.find((e) => e.id === selectedId) ?? null),
+  const screen = $derived(
+    historyScreen({
+      loading,
+      reachable,
+      paused,
+      mode,
+      modelId,
+      query: appliedQuery,
+      rows: entries,
+      selectedId,
+      textView,
+    }),
   );
+
+  const detail = $derived(screen.kind === "results" ? screen.detail : null);
+
+  function entryById(id: number): HistoryEntry | undefined {
+    return entries.find((entry) => entry.id === id);
+  }
 
   async function loadHistory() {
     loading = true;
-    error = null;
     actionMessage = null;
     actionError = null;
+    const trimmed = query.trim();
+    const listed = invoke<HistoryEntry[]>("list_history", {
+      query: trimmed,
+      offset: 0,
+      limit: PAGE_SIZE,
+    });
+    const configured = invoke<DashboardConfig>("load_config").then(
+      (config) => config,
+      () => null,
+    );
     try {
-      entries = await invoke<HistoryEntry[]>("list_history", {
-        query: query.trim(),
-        offset: 0,
-        limit: PAGE_SIZE,
-      });
-      searched = query.trim().length > 0;
-      if (selectedId != null && !entries.some((e) => e.id === selectedId)) {
+      entries = await listed;
+      reachable = true;
+      appliedQuery = trimmed;
+      if (selectedId != null && !entries.some((entry) => entry.id === selectedId)) {
         selectedId = null;
         textView = "final";
       }
-    } catch (e) {
+      const config = await configured;
+      if (config) {
+        modelId = config.models.asr_english;
+        mode = config.general.active_mode;
+      }
+      try {
+        const status = await invoke<SessionStatus>("session_status");
+        paused = status.paused;
+        mode = status.mode;
+      } catch {
+        paused = false;
+      }
+    } catch {
       entries = [];
       selectedId = null;
-      error = e instanceof Error ? e.message : String(e);
+      textView = "final";
+      reachable = false;
+      await configured;
     } finally {
       loading = false;
     }
   }
 
-  function selectEntry(entry: HistoryEntry) {
-    if (selectedId === entry.id) return;
-    selectedId = entry.id;
+  function selectEntry(id: number) {
+    if (selectedId === id) return;
+    selectedId = id;
     textView = "final";
     actionMessage = null;
     actionError = null;
@@ -66,25 +104,29 @@
   function clearSelection() {
     selectedId = null;
     textView = "final";
-    actionMessage = null;
-    actionError = null;
   }
 
-  function toggleTextView() {
-    textView = textView === "final" ? "raw" : "final";
+  function focusSearch() {
+    const field = document.getElementById(SEARCH_ID);
+    if (field instanceof HTMLInputElement) field.focus();
+  }
+
+  function focusRow(id: number) {
+    const row = document.getElementById(`history-row-${id}`);
+    if (row instanceof HTMLElement) row.focus();
   }
 
   async function copySelected() {
-    if (!selected) return;
+    if (detail == null || actionBusy) return;
+    const text = detail.text;
     actionBusy = true;
     actionMessage = null;
     actionError = null;
-    const text = displayText(selected, textView);
     try {
       if (!navigator.clipboard?.writeText) {
         throw new Error("Clipboard API unavailable in this environment.");
       }
-      await navigator.clipboard.writeText(text === "(empty)" ? "" : text);
+      await navigator.clipboard.writeText(text);
       actionMessage = "Copied";
     } catch (e) {
       actionError = e instanceof Error ? e.message : String(e);
@@ -94,12 +136,13 @@
   }
 
   async function reinsertSelected() {
-    if (!selected) return;
+    if (detail == null || actionBusy) return;
+    const id = detail.id;
     actionBusy = true;
     actionMessage = null;
     actionError = null;
     try {
-      await invoke("reinsert_entry", { id: selected.id });
+      await invoke("reinsert_entry", { id });
       actionMessage = "Re-inserted";
     } catch (e) {
       actionError = e instanceof Error ? e.message : String(e);
@@ -109,15 +152,16 @@
   }
 
   async function deleteSelected() {
-    if (!selected) return;
-    const id = selected.id;
+    if (detail == null || actionBusy) return;
+    const id = detail.id;
     actionBusy = true;
     actionMessage = null;
     actionError = null;
     try {
       await invoke("delete_entries", { ids: [id] });
-      entries = entries.filter((e) => e.id !== id);
-      clearSelection();
+      entries = entries.filter((entry) => entry.id !== id);
+      selectedId = null;
+      textView = "final";
       actionMessage = "Deleted";
     } catch (e) {
       actionError = e instanceof Error ? e.message : String(e);
@@ -131,6 +175,11 @@
     void loadHistory();
   }
 
+  function clearSearch() {
+    query = "";
+    void loadHistory();
+  }
+
   function moveSelection(delta: number) {
     if (entries.length === 0) return;
     const idx =
@@ -138,20 +187,19 @@
         ? delta > 0
           ? -1
           : 0
-        : entries.findIndex((e) => e.id === selectedId);
+        : entries.findIndex((entry) => entry.id === selectedId);
     const next = Math.max(0, Math.min(entries.length - 1, idx + delta));
-    selectEntry(entries[next]);
+    const entry = entries[next];
+    selectEntry(entry.id);
+    focusRow(entry.id);
+  }
+
+  function typingInSearch(event: KeyboardEvent): boolean {
+    const target = event.target;
+    return target instanceof HTMLElement && target.id === SEARCH_ID;
   }
 
   function onKeyDown(event: KeyboardEvent) {
-    const target = event.target as HTMLElement | null;
-    const tag = target?.tagName;
-    const typing =
-      tag === "INPUT" ||
-      tag === "TEXTAREA" ||
-      tag === "SELECT" ||
-      target?.isContentEditable;
-
     if (event.key === "Escape") {
       if (selectedId != null) {
         event.preventDefault();
@@ -160,14 +208,32 @@
       return;
     }
 
-    if (typing || loading || error || entries.length === 0) return;
+    if (event.isComposing || typingInSearch(event)) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
 
-    if (event.key === "ArrowDown" || event.key === "j") {
+    if (event.key === "/") {
+      event.preventDefault();
+      focusSearch();
+      return;
+    }
+
+    if (loading || !reachable || entries.length === 0) return;
+
+    if (event.key === "ArrowDown" || event.key === "j" || event.key === "J") {
       event.preventDefault();
       moveSelection(1);
-    } else if (event.key === "ArrowUp" || event.key === "k") {
+    } else if (event.key === "ArrowUp" || event.key === "k" || event.key === "K") {
       event.preventDefault();
       moveSelection(-1);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      void reinsertSelected();
+    } else if (event.key === "c" || event.key === "C") {
+      event.preventDefault();
+      void copySelected();
+    } else if (event.key === "Delete") {
+      event.preventDefault();
+      void deleteSelected();
     }
   }
 
@@ -182,99 +248,88 @@
   <header class="header">
     <h1>History</h1>
     <form class="search" onsubmit={onSearchSubmit}>
-      <label class="sr-only" for="history-search">Search history</label>
+      <label class="sr-only" for={SEARCH_ID}>Search history</label>
       <input
-        id="history-search"
+        id={SEARCH_ID}
         type="search"
         placeholder="Search…"
         bind:value={query}
         autocomplete="off"
         spellcheck="false"
       />
-      <button type="submit">Search</button>
     </form>
   </header>
 
-  <main class="main" aria-live="polite">
-    {#if loading}
+  <main class="main">
+    {#if actionError}
+      <p class="action-feedback error" role="alert">{actionError}</p>
+    {:else if actionMessage}
+      <p class="action-feedback" role="status">{actionMessage}</p>
+    {/if}
+
+    {#if screen.kind === "loading"}
       <p class="status">Loading…</p>
-    {:else if error}
+    {:else if screen.kind === "daemon-unreachable"}
       <div class="empty">
-        <p class="empty-title">Could not load history</p>
-        <p class="empty-body">{error}</p>
-        <p class="empty-hint">Is <code>naradd</code> running on the session bus?</p>
-        <button type="button" onclick={() => loadHistory()}>Retry</button>
+        <p class="empty-title">{screen.title}</p>
+        <p class="empty-body">{screen.body}</p>
+        <button type="button" onclick={() => loadHistory()}>{screen.recovery}</button>
       </div>
-    {:else if entries.length === 0}
+    {:else if screen.kind === "empty"}
       <div class="empty">
-        {#if searched}
-          <p class="empty-title">No matching entries</p>
-          <p class="empty-body">Try a different search.</p>
-        {:else}
-          <p class="empty-title">No history yet</p>
-          <p class="empty-body">
-            Dictations appear here after you speak. Hold your hotkey and try a short phrase.
-          </p>
-        {/if}
+        <p class="empty-title">{screen.title}</p>
+        <p class="empty-body">{screen.body}</p>
       </div>
-    {:else}
-      <div class="workspace">
+    {:else if screen.kind === "no-matches"}
+      <div class="empty">
+        <p class="empty-title">{screen.title}</p>
+        <button type="button" onclick={clearSearch}>{screen.clear}</button>
+      </div>
+    {:else if screen.kind === "results"}
+      <p class="status">{screen.status}</p>
+      <div class="workspace" class:with-detail={detail != null}>
         <ul class="list" role="listbox" aria-label="History entries">
-          {#each entries as entry (entry.id)}
+          {#each screen.rows as row (row.id)}
+            {@const entry = entryById(row.id)}
             <li>
               <button
                 type="button"
+                id="history-row-{row.id}"
                 class="row"
-                class:selected={selectedId === entry.id}
+                class:selected={selectedId === row.id}
                 role="option"
-                aria-selected={selectedId === entry.id}
-                onclick={() => selectEntry(entry)}
+                aria-selected={selectedId === row.id}
+                onclick={() => selectEntry(row.id)}
               >
-                <p class="preview">{previewText(entry)}</p>
+                <p class="preview">{row.preview}</p>
                 <div class="meta">
-                  <time datetime={new Date(entry.created_at).toISOString()}>
-                    {formatTime(entry.created_at)}
-                  </time>
-                  {#if entry.app_id}
+                  {#if entry}
+                    <time datetime={new Date(entry.created_at).toISOString()}>
+                      {formatTime(entry.created_at)}
+                    </time>
+                    {#if entry.app_id}
+                      <span class="sep" aria-hidden="true">·</span>
+                      <span class="app">{entry.app_id}</span>
+                    {/if}
                     <span class="sep" aria-hidden="true">·</span>
-                    <span class="app">{entry.app_id}</span>
+                    <span class="mode">{entry.mode}</span>
+                    <span class="sep" aria-hidden="true">·</span>
                   {/if}
-                  <span class="sep" aria-hidden="true">·</span>
-                  <span class="mode">{entry.mode}</span>
+                  <span class="insert">{row.insert}</span>
                 </div>
               </button>
             </li>
           {/each}
         </ul>
 
-        <aside class="detail" aria-label="Entry detail">
-          {#if selected}
-            <div class="detail-toolbar">
-              <button
-                type="button"
-                class="ghost"
-                onclick={clearSelection}
-                aria-label="Close detail"
-              >
-                Close
-              </button>
-            </div>
-
-            <p class="detail-text">{displayText(selected, textView)}</p>
-
+        {#if detail}
+          <aside class="detail" aria-label="Entry detail">
+            <p class="detail-text">{detail.text}</p>
             <div class="actions">
-              <button
-                type="button"
-                disabled={actionBusy}
-                onclick={() => copySelected()}
-              >
+              <button type="button" disabled={actionBusy} onclick={() => copySelected()}>
                 Copy
               </button>
-              <button
-                type="button"
-                disabled={actionBusy}
-                onclick={() => reinsertSelected()}
-              >
+              <button type="button" disabled={actionBusy} onclick={() => reinsertSelected()}>
                 Re-insert
               </button>
               <button
@@ -286,88 +341,27 @@
                 Delete
               </button>
             </div>
-
-            <div class="toggle-row">
-              <span class="toggle-label">Show</span>
-              <div class="segment" role="group" aria-label="Raw or final text">
-                <button
-                  type="button"
-                  class:active={textView === "final"}
-                  aria-pressed={textView === "final"}
-                  onclick={() => (textView = "final")}
-                >
-                  Final
-                </button>
-                <button
-                  type="button"
-                  class:active={textView === "raw"}
-                  aria-pressed={textView === "raw"}
-                  onclick={() => (textView = "raw")}
-                >
-                  Raw
-                </button>
-              </div>
-              <button type="button" class="ghost" onclick={toggleTextView}>
-                Toggle
+            <div class="segment" role="group" aria-label="Final or raw text">
+              <button
+                type="button"
+                class:active={textView === "final"}
+                aria-pressed={textView === "final"}
+                onclick={() => (textView = "final")}
+              >
+                Final
+              </button>
+              <button
+                type="button"
+                class:active={textView === "raw"}
+                aria-pressed={textView === "raw"}
+                onclick={() => (textView = "raw")}
+              >
+                Raw
               </button>
             </div>
-
-            <dl class="meta-grid">
-              <div>
-                <dt>Time</dt>
-                <dd>
-                  <time datetime={new Date(selected.created_at).toISOString()}>
-                    {formatTime(selected.created_at)}
-                  </time>
-                </dd>
-              </div>
-              <div>
-                <dt>Duration</dt>
-                <dd>{formatDuration(selected.duration_ms)}</dd>
-              </div>
-              <div>
-                <dt>Mode</dt>
-                <dd class="mono">{selected.mode}</dd>
-              </div>
-              <div>
-                <dt>Status</dt>
-                <dd class="mono">{selected.insert_status}</dd>
-              </div>
-              {#if selected.app_id}
-                <div>
-                  <dt>App</dt>
-                  <dd>{selected.app_id}</dd>
-                </div>
-              {/if}
-              <div>
-                <dt>ASR</dt>
-                <dd class="mono">{selected.asr_model || "—"}</dd>
-              </div>
-              {#if selected.src_lang || selected.dst_lang}
-                <div>
-                  <dt>Languages</dt>
-                  <dd class="mono">
-                    {selected.src_lang || "—"}→{selected.dst_lang || "—"}
-                  </dd>
-                </div>
-              {/if}
-            </dl>
-          {:else}
-            <div class="detail-empty">
-              <p class="empty-title">Select an entry</p>
-              <p class="empty-body">
-                Choose a row to view text, copy, re-insert, or delete.
-              </p>
-            </div>
-          {/if}
-        </aside>
+          </aside>
+        {/if}
       </div>
-
-      {#if actionError}
-        <p class="action-feedback error" role="alert">{actionError}</p>
-      {:else if actionMessage}
-        <p class="action-feedback" role="status">{actionMessage}</p>
-      {/if}
     {/if}
   </main>
 </div>
@@ -399,7 +393,6 @@
 
   .search {
     display: flex;
-    gap: var(--space-sm);
     flex: 1;
     min-width: 12rem;
   }
@@ -413,11 +406,9 @@
     background: var(--bg);
   }
 
-  .search button,
   .empty button,
   .actions button,
-  .segment button,
-  .ghost {
+  .segment button {
     padding: 0.45rem 0.85rem;
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -425,11 +416,9 @@
     cursor: pointer;
   }
 
-  .search button:hover,
   .empty button:hover,
   .actions button:hover:not(:disabled),
-  .segment button:hover,
-  .ghost:hover {
+  .segment button:hover {
     border-color: var(--accent);
   }
 
@@ -442,13 +431,6 @@
     color: var(--destructive);
   }
 
-  .ghost {
-    background: transparent;
-    border-color: transparent;
-    color: var(--text-secondary);
-    padding-inline: 0.5rem;
-  }
-
   .main {
     flex: 1;
     padding: var(--space-md) var(--space-xl) var(--space-xl);
@@ -456,19 +438,14 @@
   }
 
   .status {
-    margin: var(--space-xl) 0;
+    margin: var(--space-md) 0 var(--space-lg);
     color: var(--text-secondary);
   }
 
-  .empty,
-  .detail-empty {
+  .empty {
     max-width: 28rem;
     margin: 3rem auto;
     text-align: center;
-  }
-
-  .detail-empty {
-    margin: 2rem auto;
   }
 
   .empty-title {
@@ -477,15 +454,9 @@
     font-weight: 600;
   }
 
-  .empty-body,
-  .empty-hint {
+  .empty-body {
     margin: 0 0 var(--space-md);
     color: var(--text-secondary);
-  }
-
-  .empty code {
-    font-family: var(--font-mono);
-    font-size: 12px;
   }
 
   .workspace {
@@ -496,7 +467,7 @@
   }
 
   @media (min-width: 800px) {
-    .workspace {
+    .workspace.with-detail {
       grid-template-columns: minmax(0, 1fr) minmax(18rem, 22rem);
     }
   }
@@ -542,11 +513,15 @@
 
   .preview {
     margin: 0 0 var(--space-xs);
-    font-size: 14px;
-    line-height: 20px;
-    white-space: nowrap;
+    font-size: 15px;
+    line-height: 22px;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
     overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
   .meta {
@@ -559,8 +534,7 @@
     line-height: 18px;
   }
 
-  .mode,
-  .mono {
+  .mode {
     font-family: var(--font-mono);
     font-size: 12px;
   }
@@ -577,12 +551,6 @@
     min-height: 12rem;
   }
 
-  .detail-toolbar {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: var(--space-sm);
-  }
-
   .detail-text {
     margin: 0 0 var(--space-lg);
     font-size: 15px;
@@ -596,19 +564,6 @@
     flex-wrap: wrap;
     gap: var(--space-sm);
     margin-bottom: var(--space-md);
-  }
-
-  .toggle-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-sm);
-    margin-bottom: var(--space-md);
-  }
-
-  .toggle-label {
-    color: var(--text-secondary);
-    font-size: 13px;
   }
 
   .segment {
@@ -636,40 +591,13 @@
   }
 
   .action-feedback {
-    margin: var(--space-md) 0 0;
+    margin: 0 0 var(--space-md);
     font-size: 13px;
     color: var(--success);
   }
 
   .action-feedback.error {
     color: var(--destructive);
-  }
-
-  .meta-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-sm) var(--space-md);
-    margin: 0;
-    padding-top: var(--space-md);
-    border-top: 1px solid var(--border);
-  }
-
-  .meta-grid div {
-    min-width: 0;
-  }
-
-  .meta-grid dt {
-    margin: 0;
-    font-size: 12px;
-    color: var(--text-secondary);
-  }
-
-  .meta-grid dd {
-    margin: 0.1rem 0 0;
-    font-size: 13px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .sr-only {

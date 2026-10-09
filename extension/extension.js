@@ -608,7 +608,9 @@ export default class NaradExtension extends Extension {
             this._elapsedSec = 0;
             this._pillSecondary.text = '0:00';
             this._pillDot.visible = true;
-            this._startWave();
+            // Static bars (and the anchor mic) stay; the tick is what bounces.
+            if (this._animationsEnabled())
+                this._startWave();
             this._startElapsed();
             break;
 
@@ -643,7 +645,7 @@ export default class NaradExtension extends Extension {
             this._pillSep1.visible = true;
             this._pillSecondary.visible = true;
             this._pillSecondary.style_class = 'narad-hud-text-muted';
-            this._pillSecondary.text = '— no focus';
+            this._pillSecondary.text = 'No text field focused';
             this._pillKeycap.visible = true;
             this._scheduleIdle(2200);
             break;
@@ -676,8 +678,12 @@ export default class NaradExtension extends Extension {
         }
     }
 
+    _animationsEnabled() {
+        return St.Settings.get().enable_animations;
+    }
+
     _onLevel(rms) {
-        if (this._state !== 'listening')
+        if (this._state !== 'listening' || !this._animationsEnabled())
             return;
         this._levelDriven = true;
         const level = Math.max(0, Math.min(1, Number(rms) || 0));
@@ -691,6 +697,8 @@ export default class NaradExtension extends Extension {
     }
 
     _startWave() {
+        if (!this._animationsEnabled())
+            return;
         this._waveTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 120, () => {
             if (this._state !== 'listening')
                 return GLib.SOURCE_REMOVE;

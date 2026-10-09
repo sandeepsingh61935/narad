@@ -1,0 +1,24 @@
+# Narad daemon settings (~/.config/narad/config.toml)
+# Copy to your XDG config directory or let naradd create defaults on first run.
+
+[activation]
+# Global dictate hotkey: hold = push-to-talk, tap = toggle (FR-ACT-1, FR-ACT-7).
+dictate_hotkey = "Ctrl+Alt+Space"
+# Press duration threshold: at or above = hold, below = tap (milliseconds).
+hold_tap_threshold_ms = 250
+
+[audio]
+# Start/stop/cancel/error sound cues (FR-AUD-6).
+sounds_enabled = true
+# Phase 2 FR-AUD-3 unused: tap-mode auto-stop after N seconds of silence.
+auto_stop_silence_secs = 2
+# Hard maximum recording length in seconds (FR-AUD-3; enforced as a listen timer).
+max_duration_secs = 300
+
+[general]
+# Active formatting/transcription mode name.
+active_mode = "plain"
+
+[models]
+# Default English ASR pack (REQUIREMENTS §8 decision #1 / spikes/asr-bench/RESULTS.md).
+asr_english = "parakeet-ctc-110m-int8"

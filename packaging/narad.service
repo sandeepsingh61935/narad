@@ -1,0 +1,16 @@
+[Unit]
+Description=Narad dictation daemon
+Documentation=file:%h/.config/narad/config.toml
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/naradd
+Restart=on-failure
+RestartSec=2
+# Optional: uncomment or use EnvironmentFile for log level
+# Environment=RUST_LOG=info
+EnvironmentFile=-%h/.config/narad/env
+
+[Install]
+WantedBy=default.target

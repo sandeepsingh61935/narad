@@ -80,7 +80,7 @@
         paused = status.paused;
         mode = status.mode;
       } catch {
-        paused = false;
+        // A failed status read is not evidence the session is unpaused.
       }
     } catch {
       entries = [];
@@ -277,8 +277,6 @@
   <main class="main">
     {#if actionError}
       <p class="action-feedback error" role="alert">{actionError}</p>
-    {:else if actionMessage}
-      <p class="action-feedback" role="status">{actionMessage}</p>
     {/if}
 
     {#if screen.kind === "loading"}
@@ -289,17 +287,7 @@
         <p class="empty-body">{screen.body}</p>
         <button type="button" onclick={() => loadHistory()}>{screen.recovery}</button>
       </div>
-    {:else if screen.kind === "empty"}
-      <div class="empty">
-        <p class="empty-title">{screen.title}</p>
-        <p class="empty-body">{screen.body}</p>
-      </div>
-    {:else if screen.kind === "no-matches"}
-      <div class="empty">
-        <p class="empty-title">{screen.title}</p>
-        <button type="button" onclick={clearSearch}>{screen.clear}</button>
-      </div>
-    {:else if screen.kind === "results"}
+    {:else}
       {@const marked = modelInStatus(screen.status)}
       <p class="status">
         {#if marked}
@@ -308,6 +296,17 @@
           {screen.status}
         {/if}
       </p>
+      {#if screen.kind === "empty"}
+        <div class="empty">
+          <p class="empty-title">{screen.title}</p>
+          <p class="empty-body">{screen.body}</p>
+        </div>
+      {:else if screen.kind === "no-matches"}
+        <div class="empty">
+          <p class="empty-title">{screen.title}</p>
+          <button type="button" onclick={clearSearch}>{screen.clear}</button>
+        </div>
+      {:else}
       <div class="workspace" class:with-detail={detail != null}>
         <ul class="list" role="listbox" aria-label="History entries">
           {#each screen.rows as row (row.id)}
@@ -349,9 +348,11 @@
             <div class="actions">
               <button type="button" disabled={actionBusy} onclick={() => copySelected()}>
                 Copy
+                <kbd>C</kbd>
               </button>
               <button type="button" disabled={actionBusy} onclick={() => reinsertSelected()}>
                 Re-insert
+                <kbd>Enter</kbd>
               </button>
               <button
                 type="button"
@@ -360,6 +361,7 @@
                 onclick={() => deleteSelected()}
               >
                 Delete
+                <kbd>Delete</kbd>
               </button>
             </div>
             <div class="segment" role="group" aria-label="Final or raw text">
@@ -383,9 +385,14 @@
           </aside>
         {/if}
       </div>
+      {/if}
     {/if}
   </main>
 </div>
+
+{#if actionMessage && !actionError}
+  <p class="toast" role="status">{actionMessage}</p>
+{/if}
 
 <style>
   .shell {
@@ -442,6 +449,23 @@
   .actions button:hover:not(:disabled),
   .segment button:hover {
     border-color: var(--accent);
+  }
+
+  .actions button {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-sm);
+  }
+
+  .actions kbd {
+    padding: 0.05rem 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 16px;
   }
 
   .actions button:disabled {
@@ -618,11 +642,25 @@
   .action-feedback {
     margin: 0 0 var(--space-md);
     font-size: 13px;
-    color: var(--success);
   }
 
   .action-feedback.error {
     color: var(--text);
+  }
+
+  .toast {
+    position: fixed;
+    z-index: 2;
+    left: 50%;
+    bottom: var(--space-xl);
+    margin: 0;
+    padding: 0.45rem 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface-elevated);
+    color: var(--success);
+    font-size: 13px;
+    transform: translateX(-50%);
   }
 
   .sr-only {

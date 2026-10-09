@@ -22,11 +22,13 @@ export type HistoryScreen =
     }
   | {
       kind: "empty";
+      status: string;
       title: "Nothing yet";
       body: "Hold the dictate hotkey and speak.";
     }
   | {
       kind: "no-matches";
+      status: string;
       title: "No matching transcriptions";
       clear: "Clear search";
     }
@@ -53,6 +55,10 @@ function detailView(input: HistoryScreenInput): DetailView | null {
   const selected = input.rows.find((row) => row.id === input.selectedId);
   if (selected == null) return null;
   return { id: selected.id, text: displayText(selected, input.textView) };
+}
+
+function sessionStatus(input: HistoryScreenInput): string {
+  return input.paused ? "History paused" : `Ready · ${input.modelId} · ${input.mode}`;
 }
 
 function insertLabel(status: string): string {
@@ -130,7 +136,7 @@ export function historyScreen(input: HistoryScreenInput): HistoryScreen {
   if (input.rows.length > 0) {
     return {
       kind: "results",
-      status: input.paused ? "History paused" : `Ready · ${input.modelId} · ${input.mode}`,
+      status: sessionStatus(input),
       rows: input.rows.map((row) => ({
         id: row.id,
         preview: rowPreview(row),
@@ -142,12 +148,14 @@ export function historyScreen(input: HistoryScreenInput): HistoryScreen {
   if (input.query.length > 0) {
     return {
       kind: "no-matches",
+      status: sessionStatus(input),
       title: "No matching transcriptions",
       clear: "Clear search",
     };
   }
   return {
     kind: "empty",
+    status: sessionStatus(input),
     title: "Nothing yet",
     body: "Hold the dictate hotkey and speak.",
   };

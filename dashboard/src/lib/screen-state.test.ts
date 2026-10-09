@@ -44,18 +44,43 @@ test("empty query and zero rows shows Nothing yet", () => {
   const screen = historyScreen(input());
   assert.deepEqual(screen, {
     kind: "empty",
+    status: "Ready · parakeet-ctc-110m-int8 · plain",
     title: "Nothing yet",
     body: "Hold the dictate hotkey and speak.",
   });
+});
+
+test("a reachable empty archive still names Ready and the model id", () => {
+  const screen = historyScreen(input({ mode: "command", modelId: "custom-pack" }));
+  assert.equal(screen.kind, "empty");
+  if (screen.kind !== "empty") return;
+  assert.equal(screen.status, "Ready · custom-pack · command");
+});
+
+test("paused empty archive says History paused", () => {
+  const screen = historyScreen(input({ paused: true }));
+  assert.equal(screen.kind, "empty");
+  if (screen.kind !== "empty") return;
+  assert.equal(screen.status, "History paused");
 });
 
 test("a search with no rows offers Clear search", () => {
   const screen = historyScreen(input({ query: "kubernetes" }));
   assert.deepEqual(screen, {
     kind: "no-matches",
+    status: "Ready · parakeet-ctc-110m-int8 · plain",
     title: "No matching transcriptions",
     clear: "Clear search",
   });
+});
+
+test("a search with no rows keeps History paused", () => {
+  const screen = historyScreen(
+    input({ query: "kubernetes", paused: true, mode: "command", modelId: "custom-pack" }),
+  );
+  assert.equal(screen.kind, "no-matches");
+  if (screen.kind !== "no-matches") return;
+  assert.equal(screen.status, "History paused");
 });
 
 test("history still loading stays on the loading screen", () => {

@@ -52,6 +52,7 @@ export function prepareConfigForSave(config: ConfigDraft): PreparedConfig {
       audio: {
         ...config.audio,
         input_target: config.audio.input_target.trim(),
+        noise_suppression: config.audio.noise_suppression === true,
       },
       general: {
         active_mode: config.general.active_mode.trim() || "plain",

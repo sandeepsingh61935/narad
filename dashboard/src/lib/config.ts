@@ -10,6 +10,8 @@ export type DashboardConfig = {
     max_duration_secs: number;
     /** PipeWire source id. Empty follows the system default (FR-AUD-4). */
     input_target: string;
+    /** RNNoise before VAD/ASR (FR-AUD-5). Off until the user turns it on. */
+    noise_suppression: boolean;
   };
   general: {
     active_mode: string;
@@ -42,6 +44,7 @@ export function defaultConfig(): DashboardConfig {
       auto_stop_silence_secs: 2,
       max_duration_secs: 300,
       input_target: "",
+      noise_suppression: false,
     },
     general: {
       active_mode: "plain",

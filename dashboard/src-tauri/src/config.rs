@@ -55,6 +55,8 @@ pub struct AudioConfig {
     /// PipeWire source id (FR-AUD-4). Empty follows the system default.
     /// Round-tripped so a settings save does not drop a daemon-set target.
     pub input_target: String,
+    /// RNNoise before VAD/ASR (FR-AUD-5). Round-tripped; no settings control yet.
+    pub noise_suppression: bool,
 }
 
 impl Default for AudioConfig {
@@ -64,6 +66,7 @@ impl Default for AudioConfig {
             auto_stop_silence_secs: 2,
             max_duration_secs: 300,
             input_target: String::new(),
+            noise_suppression: false,
         }
     }
 }
@@ -210,5 +213,35 @@ dictate_hotkey = "Ctrl+Alt+D"
         assert_eq!(again.audio.input_target, "alsa_input.usb");
         assert_eq!(again.audio.auto_stop_silence_secs, 2);
         assert_eq!(again.audio.max_duration_secs, 300);
+        assert!(!again.audio.noise_suppression);
+    }
+
+    #[test]
+    fn reserialize_keeps_noise_suppression() {
+        let raw = r#"
+[audio]
+sounds_enabled = false
+noise_suppression = true
+"#;
+        let cfg: DashboardConfig = toml::from_str(raw).expect("parse");
+        assert!(cfg.audio.noise_suppression);
+        assert!(!cfg.audio.sounds_enabled);
+        let text = toml::to_string_pretty(&cfg).expect("serialize");
+        assert!(text.contains("noise_suppression = true"));
+        let again: DashboardConfig = toml::from_str(&text).expect("reparse");
+        assert!(again.audio.noise_suppression);
+        assert_eq!(again.audio.auto_stop_silence_secs, 2);
+        assert_eq!(again.audio.max_duration_secs, 300);
+        assert_eq!(again.audio.input_target, "");
+    }
+
+    #[test]
+    fn default_noise_suppression_is_off() {
+        let cfg = DashboardConfig::default();
+        assert!(!cfg.audio.noise_suppression);
+        let text = toml::to_string_pretty(&cfg).expect("serialize");
+        assert!(text.contains("noise_suppression = false"));
+        let loaded: DashboardConfig = toml::from_str(&text).expect("parse");
+        assert!(!loaded.audio.noise_suppression);
     }
 }

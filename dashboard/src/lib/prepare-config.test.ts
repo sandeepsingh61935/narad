@@ -75,6 +75,33 @@ test("a settings save keeps the mic target", () => {
   assert.equal(result.config.audio.max_duration_secs, 300);
 });
 
+test("a settings save keeps noise suppression", () => {
+  const input = defaultConfig();
+  assert.equal(input.audio.noise_suppression, false);
+  input.audio.noise_suppression = true;
+
+  const result = prepareConfigForSave(input);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.config.audio.noise_suppression, true);
+  assert.equal(result.config.audio.sounds_enabled, true);
+  assert.equal(result.config.audio.input_target, "");
+  assert.equal(result.config.audio.auto_stop_silence_secs, 2);
+  assert.equal(result.config.audio.max_duration_secs, 300);
+});
+
+test("default noise suppression is off and stays off", () => {
+  const input = defaultConfig();
+  input.audio.noise_suppression = false;
+
+  const result = prepareConfigForSave(input);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.config.audio.noise_suppression, false);
+});
+
 test("a blank mic target stays empty", () => {
   const input = defaultConfig();
   input.audio.input_target = "   ";

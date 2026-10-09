@@ -1,7 +1,4 @@
 /*! tailwindcss v4.1.13 | MIT License | https://tailwindcss.com */
-@layer properties;
-@layer theme, utilities;
-@layer theme {
   :root, :host {
     --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
     monospace;
@@ -77,8 +74,6 @@
     --text-body-muted--font-weight: 400;
     --radius-full: 9999px;
   }
-}
-@layer utilities {
   .pointer-events-none {
     pointer-events: none;
   }
@@ -1137,7 +1132,6 @@
       grid-column: span 8 / span 8;
     }
   }
-}
 .material-symbols-outlined {
   font-family: "Material Symbols Outlined";
   font-weight: normal;
@@ -1305,7 +1299,6 @@
   initial-value: "";
   inherits: false;
 }
-@layer properties {
   @supports ((-webkit-hyphens: none) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color:rgb(from red r g b)))) {
     *, ::before, ::after, ::backdrop {
       --tw-translate-x: 0;
@@ -1344,4 +1337,3 @@
       --tw-content: "";
     }
   }
-}

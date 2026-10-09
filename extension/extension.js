@@ -41,7 +41,7 @@ const DaemonIfaceXml = `
       <arg type="d" name="rms"/>
     </signal>
     <property name="Mode" type="s" access="read"/>
-    <property name="Paused" type="b" access="read"/>
+    <property name="Paused" type="b" access="readwrite"/>
     <property name="HudVisible" type="b" access="readwrite"/>
   </interface>
 </node>`;
@@ -61,6 +61,7 @@ export default class NaradExtension extends Extension {
         this._press = null;
         this._state = 'idle';
         this._mode = DEFAULT_MODE;
+        this._paused = false;
         this._daemonConnected = false;
         this._proxy = null;
         this._nameWatch = 0;
@@ -384,6 +385,13 @@ export default class NaradExtension extends Extension {
             this._applyHudVisible(true);
         }
 
+        try {
+            this._applyPaused(proxy.Paused === true);
+        } catch (e) {
+            console.warn(`[narad] read Paused failed: ${e.message}`);
+            this._applyPaused(false);
+        }
+
         this._signalIds.push(
             proxy.connectSignal('StateChanged', (_p, _sender, params) => {
                 const state = params[0];
@@ -408,6 +416,11 @@ export default class NaradExtension extends Extension {
                 const mode = (raw instanceof GLib.Variant) ? raw.unpack() : raw;
                 if (mode)
                     this._mode = mode;
+            }
+            if (dict.Paused !== undefined) {
+                const raw = dict.Paused;
+                const paused = (raw instanceof GLib.Variant) ? raw.unpack() : raw;
+                this._applyPaused(!!paused);
             }
         });
 
@@ -487,6 +500,14 @@ export default class NaradExtension extends Extension {
         this._proxy = null;
         this._daemonConnected = false;
         this._unbindEsc();
+        const wasPaused = this._paused;
+        this._paused = false;
+        if (wasPaused && this._anchor) {
+            if (this._state === 'idle')
+                this._applyState('idle');
+            else
+                this._refreshPausedCue();
+        }
         console.log('[narad] daemon vanished; demo click-cycle active');
     }
 
@@ -753,6 +774,52 @@ export default class NaradExtension extends Extension {
             this._scheduleIdle(3200);
             break;
         }
+
+        this._refreshPausedCue();
+    }
+
+    _applyPaused(paused) {
+        this._paused = !!paused;
+        if (!this._anchor)
+            return;
+        if (this._state === 'idle')
+            this._applyState('idle');
+        else
+            this._refreshPausedCue();
+    }
+
+    /** Distinct pause icon + "History paused" while `Paused` is true (FR-HIS-7). */
+    _refreshPausedCue() {
+        if (!this._anchor || !this._pill)
+            return;
+        const pauseText = 'History paused';
+        this._anchor.remove_style_class_name('narad-hud-anchor-paused');
+        this._pill.remove_style_class_name('narad-hud-pill-paused');
+        if (this._pillTertiary.text === pauseText) {
+            this._pillSep2.visible = false;
+            this._pillTertiary.visible = false;
+            this._pillTertiary.text = '';
+        }
+        if (!this._paused)
+            return;
+
+        if (this._state === 'idle') {
+            this._anchor.add_style_class_name('narad-hud-anchor-paused');
+            this._anchorIcon.icon_name = 'media-playback-pause-symbolic';
+            this._setAnchorChild(this._anchorIcon);
+            this._pill.visible = true;
+            this._pill.add_style_class_name('narad-hud-pill-paused');
+            this._pillIcon.icon_name = 'media-playback-pause-symbolic';
+            this._pillIcon.visible = true;
+            this._pillPrimary.style_class = 'narad-hud-text-muted';
+            this._pillPrimary.text = pauseText;
+            return;
+        }
+
+        this._pillSep2.visible = true;
+        this._pillTertiary.visible = true;
+        this._pillTertiary.style_class = 'narad-hud-text-muted';
+        this._pillTertiary.text = pauseText;
     }
 
     _animationsEnabled() {

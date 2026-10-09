@@ -1,0 +1,29 @@
+[package]
+name = "naradd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Narad dictation daemon"
+
+[[bin]]
+name = "naradd"
+path = "src/main.rs"
+
+[dependencies]
+narad-core = { path = "../narad-core" }
+narad-dbus = { path = "../narad-dbus" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+zbus = { workspace = true, features = ["tokio"] }
+ashpd = { version = "0.13", default-features = false, features = ["global_shortcuts", "remote_desktop", "clipboard", "screencast", "tokio"] }
+enumflags2 = "0.7"
+futures-util = "0.3"
+reis = "0.7"
+sherpa-onnx = "1.13.8"
+
+[dev-dependencies]
+tempfile = "3"

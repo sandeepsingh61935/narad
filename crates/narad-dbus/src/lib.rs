@@ -1,0 +1,60 @@
+//! Shared D-Bus contract for `dev.narad.Daemon`.
+//!
+//! Interface sketch: `docs/ARCHITECTURE.md` §6.
+//!
+//! ## Phase 1 surface
+//!
+//! Methods: `Start`, `Stop`, `Cancel`, `Toggle`, `History`, `ReinsertEntry`, `DeleteEntries`.
+//! Signals: `StateChanged`, `Level`, `EntryAdded`.
+//! Properties: `Mode`, `Paused`, `HudVisible`.
+//!
+//! ## Deferred (Phase 2+)
+//!
+//! Not defined in this crate yet: `PasteLast`, `UndoLast`, `SelectionCommand`, `Transcribe`,
+//! `ListModels`, `SetActiveModel`, `Benchmark`.
+
+pub const SERVICE_NAME: &str = "dev.narad.Daemon";
+pub const OBJECT_PATH: &str = "/dev/narad/Daemon";
+/// D-Bus property name for floating HUD visibility (ARCHITECTURE §6).
+pub const PROP_HUD_VISIBLE: &str = "HudVisible";
+
+pub mod daemon_iface;
+pub mod types;
+
+/// Client proxy for Phase 1 methods, signals, and properties.
+///
+/// The `#[zbus::proxy]` definition in [`daemon_iface`] uses an internal trait name `Daemon`;
+/// zbus expands it into this type (the trait itself is not exported).
+pub use daemon_iface::DaemonProxy;
+pub use types::{HistoryEntry, SessionState};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_name_stable() {
+        assert_eq!(SERVICE_NAME, "dev.narad.Daemon");
+        assert_eq!(OBJECT_PATH, "/dev/narad/Daemon");
+    }
+
+    #[test]
+    fn session_state_values_match_architecture() {
+        assert_eq!(SessionState::IDLE, "idle");
+        assert_eq!(SessionState::LISTENING, "listening");
+        assert_eq!(SessionState::PROCESSING, "processing");
+        assert_eq!(SessionState::ERROR, "error");
+        assert_eq!(SessionState::COPIED, "copied");
+    }
+
+    #[test]
+    fn session_state_brief_outcomes_fr_dot_2() {
+        assert_eq!(SessionState::INSERTED, "inserted");
+        assert_eq!(SessionState::CANCELLED, "cancelled");
+    }
+
+    #[test]
+    fn hud_visible_property_name_matches_architecture() {
+        assert_eq!(PROP_HUD_VISIBLE, "HudVisible");
+    }
+}

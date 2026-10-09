@@ -1,0 +1,10 @@
+[package]
+name = "narad-dbus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared D-Bus types and thin client for Narad"
+
+[dependencies]
+serde = { workspace = true }
+zbus = { workspace = true, features = ["option-as-array"] }

@@ -600,7 +600,6 @@ export default class NaradExtension extends Extension {
             this._anchorIcon.icon_name = 'audio-input-microphone-symbolic';
             this._setAnchorChild(this._anchorIcon);
             this._pill.visible = true;
-            this._wave.visible = true;
             this._pillPrimary.text = this._mode || DEFAULT_MODE;
             this._pillSep1.visible = true;
             this._pillSecondary.visible = true;
@@ -608,9 +607,13 @@ export default class NaradExtension extends Extension {
             this._elapsedSec = 0;
             this._pillSecondary.text = '0:00';
             this._pillDot.visible = true;
-            // Static bars (and the anchor mic) stay; the tick is what bounces.
-            if (this._animationsEnabled())
+            if (this._animationsEnabled()) {
+                this._wave.visible = true;
                 this._startWave();
+            } else {
+                this._pillIcon.icon_name = 'audio-input-microphone-symbolic';
+                this._pillIcon.visible = true;
+            }
             this._startElapsed();
             break;
 

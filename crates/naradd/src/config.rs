@@ -53,9 +53,11 @@ impl Default for ActivationConfig {
 pub struct AudioConfig {
     /// Start/stop/cancel/error sound cues (FR-AUD-6).
     pub sounds_enabled: bool,
-    /// Phase 2 FR-AUD-3 unused: tap-mode auto-stop after N seconds of silence.
+    /// Tap-mode and HUD auto-stop after this many seconds without speech (FR-AUD-3).
+    /// `0` disables silence stop only. It does not restore the default.
     pub auto_stop_silence_secs: u32,
     /// Hard cap on a single recording in seconds (FR-AUD-3; enforced as a listen timer).
+    /// `0` disables the cap only. It does not restore the default.
     pub max_duration_secs: u32,
 }
 
@@ -231,6 +233,21 @@ asr_english = "whisper-small-en"
         assert_eq!(cfg.audio.max_duration_secs, 120);
         assert_eq!(cfg.general.active_mode, "email");
         assert_eq!(cfg.models.asr_english, "whisper-small-en");
+    }
+
+    #[test]
+    fn zero_audio_limits_stay_zero() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "[audio]\nauto_stop_silence_secs = 0\n").expect("write");
+        let cfg = load(&path).expect("load");
+        assert_eq!(cfg.audio.auto_stop_silence_secs, 0);
+        assert_eq!(cfg.audio.max_duration_secs, 300);
+
+        fs::write(&path, "[audio]\nmax_duration_secs = 0\n").expect("write");
+        let cfg = load(&path).expect("load");
+        assert_eq!(cfg.audio.auto_stop_silence_secs, 2);
+        assert_eq!(cfg.audio.max_duration_secs, 0);
     }
 
     #[test]

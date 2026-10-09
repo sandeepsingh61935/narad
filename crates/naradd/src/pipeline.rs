@@ -22,8 +22,12 @@ struct SessionRuntime {
     hud_visible: bool,
     capture: Option<CaptureHandle>,
     listen_started: Option<Instant>,
-    /// Bumped on each successful `begin_listen` so max-duration timers ignore stale sessions.
+    /// Bumped on each successful `begin_listen` so listen timers ignore stale sessions.
     listen_generation: u64,
+    /// True while a dictate-key press is still down (hold). Silence stop stays off.
+    awaiting_hold_release: bool,
+    /// Bumped when a press is classified as a tap, so a late `begin_listen` does not re-arm hold.
+    hold_epoch: u64,
     /// Cancel flag observed by the processing task.
     cancel: Arc<AtomicBool>,
     /// Latest app id from `ReportFocus`. Empty or never reported is `None`.
@@ -66,6 +70,8 @@ impl PipelineHandle {
                     capture: None,
                     listen_started: None,
                     listen_generation: 0,
+                    awaiting_hold_release: false,
+                    hold_epoch: 0,
                     cancel: Arc::new(AtomicBool::new(false)),
                     focused_app: None,
                     app_id_at_start: None,
@@ -207,9 +213,28 @@ impl PipelineHandle {
     }
 
     pub fn request_start(&self, mode: Option<String>) {
+        self.spawn_listen(mode, ListenTrigger::Open);
+    }
+
+    /// Hotkey press. Silence stop stays off until the release is a tap (or this was a HUD/open start).
+    pub fn request_hotkey_press(&self) {
+        let epoch = self.inner.state.lock().map(|st| st.hold_epoch).unwrap_or(0);
+        self.spawn_listen(None, ListenTrigger::Hotkey { epoch });
+    }
+
+    /// Dictate key released before the hold threshold. Listening continues; silence stop may run.
+    pub fn note_tap_release(&self) {
+        if let Ok(mut st) = self.inner.state.lock() {
+            st.awaiting_hold_release = false;
+            st.hold_epoch = st.hold_epoch.wrapping_add(1);
+        }
+    }
+
+    fn spawn_listen(&self, mode: Option<String>, trigger: ListenTrigger) {
         let handle = self.clone();
         tokio::spawn(async move {
-            if let Err(err) = handle.begin_listen(mode).await {
+            if let Err(err) = handle.begin_listen(mode, trigger).await {
+                handle.clear_hold_gate();
                 warn!(error = %err, "begin_listen failed");
                 handle.set_state(SessionState::ERROR).await;
                 handle.schedule_idle_after(Duration::from_millis(800));
@@ -243,7 +268,11 @@ impl PipelineHandle {
         }
     }
 
-    async fn begin_listen(&self, mode: Option<String>) -> Result<(), String> {
+    async fn begin_listen(
+        &self,
+        mode: Option<String>,
+        trigger: ListenTrigger,
+    ) -> Result<(), String> {
         {
             let mut st = self
                 .inner
@@ -277,6 +306,7 @@ impl PipelineHandle {
             st.capture = Some(capture);
             st.listen_started = Some(Instant::now());
             st.listen_generation = st.listen_generation.wrapping_add(1);
+            st.awaiting_hold_release = hold_flag_for_listen(&trigger, st.hold_epoch);
             st.dbus_state = SessionState::LISTENING.to_string();
             st.listen_generation
         };
@@ -284,19 +314,19 @@ impl PipelineHandle {
         self.emit_state(SessionState::LISTENING).await;
         self.spawn_level_pump(rms_bits);
         self.spawn_max_duration_timer(listen_gen);
+        self.spawn_silence_timer(listen_gen);
         info!("listening");
         Ok(())
     }
 
-    /// Hard max recording length (FR-AUD-3). `auto_stop_silence_secs` remains Phase 2 unused.
+    /// Hard max recording length (FR-AUD-3). `0` disables this cap only.
     fn spawn_max_duration_timer(&self, listen_gen: u64) {
-        let max_secs = self.inner.config.audio.max_duration_secs;
-        if max_secs == 0 {
+        let Some(limit) = configured_timeout(self.inner.config.audio.max_duration_secs) else {
             return;
-        }
+        };
         let handle = self.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(u64::from(max_secs))).await;
+            tokio::time::sleep(limit).await;
             let still_this_listen = handle
                 .inner
                 .state
@@ -306,10 +336,69 @@ impl PipelineHandle {
                 })
                 .unwrap_or(false);
             if still_this_listen {
-                info!(max_secs, "max_duration_secs reached; auto-stop");
+                info!(
+                    max_secs = limit.as_secs(),
+                    "max_duration_secs reached; auto-stop"
+                );
                 handle.request_stop();
             }
         });
+    }
+
+    /// Tap-mode and HUD silence auto-stop (FR-AUD-3). Hold does not stop.
+    /// `0` disables this timer only.
+    fn spawn_silence_timer(&self, listen_gen: u64) {
+        let Some(limit) = configured_timeout(self.inner.config.audio.auto_stop_silence_secs) else {
+            return;
+        };
+        let handle = self.clone();
+        tokio::spawn(async move {
+            let mut watch = SilenceWatch::new(Some(limit), Instant::now());
+            let mut tick = tokio::time::interval(Duration::from_millis(50));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                let Some(poll) = handle.silence_poll(listen_gen, watch.scanned) else {
+                    break;
+                };
+                watch.scanned = poll.end;
+                if watch.observe(
+                    Instant::now(),
+                    &poll.fresh,
+                    audio::TARGET_SAMPLE_RATE,
+                    poll.awaiting_hold,
+                ) {
+                    info!(
+                        silence_secs = limit.as_secs(),
+                        "auto_stop_silence_secs reached; auto-stop"
+                    );
+                    handle.request_stop();
+                    break;
+                }
+            }
+        });
+    }
+
+    fn silence_poll(&self, listen_gen: u64, scanned: usize) -> Option<SilencePoll> {
+        let st = self.inner.state.lock().ok()?;
+        if st.dbus_state != SessionState::LISTENING || st.listen_generation != listen_gen {
+            return None;
+        }
+        let (fresh, end) = match st.capture.as_ref() {
+            Some(capture) => capture.copy_from(scanned),
+            None => (Vec::new(), scanned),
+        };
+        Some(SilencePoll {
+            fresh,
+            end,
+            awaiting_hold: st.awaiting_hold_release,
+        })
+    }
+
+    fn clear_hold_gate(&self) {
+        if let Ok(mut st) = self.inner.state.lock() {
+            st.awaiting_hold_release = false;
+        }
     }
 
     fn spawn_level_pump(&self, rms_bits: Arc<std::sync::atomic::AtomicU32>) {
@@ -336,6 +425,7 @@ impl PipelineHandle {
             };
             st.cancel.store(true, Ordering::SeqCst);
             st.listen_started = None;
+            st.awaiting_hold_release = false;
             st.capture.take()
         };
         drop(capture);
@@ -367,6 +457,7 @@ impl PipelineHandle {
             }
             let capture = st.capture.take();
             let started = st.listen_started.take();
+            st.awaiting_hold_release = false;
             st.dbus_state = SessionState::PROCESSING.to_string();
             (capture, started, st.mode.clone(), st.cancel.clone())
         };
@@ -664,6 +755,77 @@ fn note_paste_focus(st: &mut SessionRuntime) {
     st.app_id_at_paste = st.focused_app.clone();
 }
 
+/// Why listening started. Hold suppresses silence stop until the key release is a tap.
+#[derive(Clone, Copy)]
+enum ListenTrigger {
+    /// HUD click or D-Bus Start/Toggle: not waiting for key release.
+    Open,
+    /// Dictate key went down. A tap release bumps `hold_epoch` so this does not stick.
+    Hotkey { epoch: u64 },
+}
+
+fn hold_flag_for_listen(trigger: &ListenTrigger, hold_epoch: u64) -> bool {
+    match *trigger {
+        ListenTrigger::Open => false,
+        ListenTrigger::Hotkey { epoch } => epoch == hold_epoch,
+    }
+}
+
+/// `0` disables that one timer. It does not restore the FR-AUD-3 default.
+fn configured_timeout(secs: u32) -> Option<Duration> {
+    if secs == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(u64::from(secs)))
+    }
+}
+
+struct SilencePoll {
+    fresh: Vec<f32>,
+    end: usize,
+    awaiting_hold: bool,
+}
+
+/// Time since the last energy-VAD speech frame. Fires only when not awaiting hold release.
+struct SilenceWatch {
+    limit: Option<Duration>,
+    last_speech: Instant,
+    pending: Vec<f32>,
+    scanned: usize,
+}
+
+impl SilenceWatch {
+    fn new(limit: Option<Duration>, now: Instant) -> Self {
+        Self {
+            limit,
+            last_speech: now,
+            pending: Vec::new(),
+            scanned: 0,
+        }
+    }
+
+    /// `fresh` is audio appended since the previous poll. Speech on the shared energy gate resets the clock.
+    fn observe(&mut self, now: Instant, fresh: &[f32], rate: i32, awaiting_hold: bool) -> bool {
+        self.pending.extend_from_slice(fresh);
+        let frame = audio::speech_frame_len(rate);
+        if frame > 0 && self.pending.len() >= frame {
+            let usable = self.pending.len() - (self.pending.len() % frame);
+            if audio::contains_speech(&self.pending[..usable], rate) {
+                self.last_speech = now;
+            }
+            self.pending.drain(..usable);
+        }
+        match self.limit {
+            Some(limit) if !awaiting_hold && elapsed_since(now, self.last_speech) >= limit => true,
+            _ => false,
+        }
+    }
+}
+
+fn elapsed_since(now: Instant, then: Instant) -> Duration {
+    now.checked_duration_since(then).unwrap_or(Duration::ZERO)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,5 +972,65 @@ mod tests {
             })
             .expect("row");
         assert_eq!(final_text, "hello");
+    }
+
+    #[test]
+    fn zero_disables_one_timer_without_restoring_defaults() {
+        assert_eq!(configured_timeout(0), None);
+        assert_eq!(configured_timeout(2), Some(Duration::from_secs(2)));
+        assert_eq!(configured_timeout(300), Some(Duration::from_secs(300)));
+        assert_ne!(configured_timeout(0), Some(Duration::from_secs(2)));
+        assert_ne!(configured_timeout(0), Some(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn hud_listen_is_not_a_hold_and_a_late_tap_clears_it() {
+        assert!(!hold_flag_for_listen(&ListenTrigger::Open, 0));
+        assert!(hold_flag_for_listen(&ListenTrigger::Hotkey { epoch: 3 }, 3));
+        // Tap release bumps `hold_epoch` before begin_listen commits the flag.
+        assert!(!hold_flag_for_listen(
+            &ListenTrigger::Hotkey { epoch: 3 },
+            4
+        ));
+    }
+
+    fn quiet_frame() -> Vec<f32> {
+        vec![0.0; audio::speech_frame_len(audio::TARGET_SAMPLE_RATE)]
+    }
+
+    fn speech_frame() -> Vec<f32> {
+        vec![0.2; audio::speech_frame_len(audio::TARGET_SAMPLE_RATE)]
+    }
+
+    #[test]
+    fn tap_and_hud_stop_after_silence_but_hold_does_not() {
+        let t0 = Instant::now();
+        let limit = configured_timeout(2);
+        let mut watch = SilenceWatch::new(limit, t0);
+        let rate = audio::TARGET_SAMPLE_RATE;
+        let quiet = quiet_frame();
+
+        assert!(!watch.observe(t0, &quiet, rate, false));
+        assert!(!watch.observe(t0 + Duration::from_millis(1_999), &quiet, rate, false));
+        assert!(watch.observe(t0 + Duration::from_secs(2), &quiet, rate, false));
+
+        let mut held = SilenceWatch::new(limit, t0);
+        assert!(!held.observe(t0 + Duration::from_secs(10), &quiet, rate, true));
+        // Key released as a tap: silence already exceeded, so stop on the next poll.
+        assert!(held.observe(t0 + Duration::from_secs(10), &quiet, rate, false));
+    }
+
+    #[test]
+    fn speech_resets_silence_stop_and_zero_never_stops() {
+        let t0 = Instant::now();
+        let mut watch = SilenceWatch::new(configured_timeout(2), t0);
+        let rate = audio::TARGET_SAMPLE_RATE;
+
+        assert!(!watch.observe(t0 + Duration::from_secs(1), &speech_frame(), rate, false));
+        assert!(!watch.observe(t0 + Duration::from_secs(2), &quiet_frame(), rate, false));
+        assert!(watch.observe(t0 + Duration::from_secs(3), &quiet_frame(), rate, false));
+
+        let mut off = SilenceWatch::new(configured_timeout(0), t0);
+        assert!(!off.observe(t0 + Duration::from_secs(30), &quiet_frame(), rate, false));
     }
 }

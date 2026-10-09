@@ -180,7 +180,7 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
                             info!("hotkey press → Start");
                             let t0 = Instant::now();
                             let pipe = pipeline.clone();
-                            pipeline.request_start(None);
+                            pipeline.request_hotkey_press();
                             // NFR-P-1: Activated → listening (mic open + state). Poll; do not block portal loop.
                             tokio::spawn(async move {
                                 for _ in 0..500 {
@@ -230,6 +230,7 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
                             }
                         } else {
                             info!(held_ms, "hotkey tap release — stay listening until second tap");
+                            pipeline.note_tap_release();
                         }
                     }
                     None => {

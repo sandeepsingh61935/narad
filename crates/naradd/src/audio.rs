@@ -82,6 +82,17 @@ impl CaptureHandle {
         f32::from_bits(self.rms_bits.load(Ordering::Relaxed)) as f64
     }
 
+    /// Samples appended since `from`, plus the new buffer length.
+    pub fn copy_from(&self, from: usize) -> (Vec<f32>, usize) {
+        let guard = match self.samples.lock() {
+            Ok(guard) => guard,
+            Err(_) => return (Vec::new(), from),
+        };
+        let end = guard.len();
+        let start = from.min(end);
+        (guard[start..end].to_vec(), end)
+    }
+
     /// Stop capture and return mono samples at the capture rate.
     pub fn stop(mut self) -> Result<(Vec<f32>, i32)> {
         self.stop.store(true, Ordering::Relaxed);
@@ -178,23 +189,48 @@ pub fn resample_to_16k(samples: &[f32], from_rate: i32) -> Vec<f32> {
     out
 }
 
+/// 10 ms energy frame, at least 80 samples (FR-AUD-2 gate).
+pub fn speech_frame_len(sample_rate: i32) -> usize {
+    (sample_rate as usize / 100).max(80)
+}
+
+fn energy_threshold(samples: &[f32], frame: usize) -> f32 {
+    let mut peak = 0.0f32;
+    for chunk in samples.chunks(frame) {
+        let e = rms_of(chunk);
+        if e > peak {
+            peak = e;
+        }
+    }
+    (peak * 0.08).max(0.01)
+}
+
+/// True when any full frame passes the same energy gate [`trim_silence`] uses.
+///
+/// This is the live speech detector (a short burst resets auto-stop). It does not
+/// apply the trimmer's minimum-length / whole-clip RMS checks.
+pub fn contains_speech(samples: &[f32], sample_rate: i32) -> bool {
+    if samples.is_empty() {
+        return false;
+    }
+    let frame = speech_frame_len(sample_rate);
+    if samples.len() < frame {
+        return false;
+    }
+    let threshold = energy_threshold(samples, frame);
+    samples
+        .chunks(frame)
+        .any(|chunk| chunk.len() == frame && rms_of(chunk) >= threshold)
+}
+
 /// Energy-gate VAD: trim leading/trailing low-energy frames (FR-AUD-2).
 /// Returns `None` when the clip looks like silence/noise only.
 pub fn trim_silence(samples: &[f32], sample_rate: i32) -> Option<Vec<f32>> {
     if samples.is_empty() {
         return None;
     }
-    let frame = (sample_rate as usize / 100).max(80); // 10 ms
-    let threshold = {
-        let mut peak = 0.0f32;
-        for chunk in samples.chunks(frame) {
-            let e = rms_of(chunk);
-            if e > peak {
-                peak = e;
-            }
-        }
-        (peak * 0.08).max(0.01)
-    };
+    let frame = speech_frame_len(sample_rate);
+    let threshold = energy_threshold(samples, frame);
 
     let mut start = 0usize;
     while start + frame <= samples.len() {
@@ -358,6 +394,24 @@ fn cue_search_paths(kind: &str) -> Vec<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contains_speech_matches_energy_gate() {
+        let silence = vec![0.0f32; TARGET_SAMPLE_RATE as usize];
+        assert!(!contains_speech(&silence, TARGET_SAMPLE_RATE));
+
+        let quiet = vec![0.001f32; speech_frame_len(TARGET_SAMPLE_RATE)];
+        assert!(!contains_speech(&quiet, TARGET_SAMPLE_RATE));
+
+        let mut one_frame = vec![0.0f32; speech_frame_len(TARGET_SAMPLE_RATE) * 3];
+        let frame = speech_frame_len(TARGET_SAMPLE_RATE);
+        for s in &mut one_frame[frame..frame * 2] {
+            *s = 0.2;
+        }
+        assert!(contains_speech(&one_frame, TARGET_SAMPLE_RATE));
+        // Shorter than the trimmer's minimum keep length, but still speech for auto-stop.
+        assert!(trim_silence(&one_frame, TARGET_SAMPLE_RATE).is_none());
+    }
 
     #[test]
     fn trim_rejects_silence() {

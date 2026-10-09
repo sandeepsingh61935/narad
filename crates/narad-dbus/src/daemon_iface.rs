@@ -1,7 +1,8 @@
 //! Client proxy and method signatures for `dev.narad.Daemon` (Phase 1).
 //!
-//! Phase 2+ D-Bus methods still omitted: `PasteLast`, `UndoLast`,
+//! Phase 2+ D-Bus methods still omitted: `UndoLast`,
 //! `SelectionCommand`, `Transcribe`, `ListModels`, `SetActiveModel`, `Benchmark`.
+//! `PasteLast` is included (FR-INS-4).
 //! `ReportFocus` is included (FR-CTX-1).
 
 use crate::types::HistoryEntry;
@@ -33,6 +34,9 @@ pub trait Daemon {
     ) -> zbus::Result<Vec<HistoryEntry>>;
 
     async fn reinsert_entry(&self, id: i64) -> zbus::Result<()>;
+
+    /// Re-insert the newest history row's final text (FR-INS-4). No arguments.
+    async fn paste_last(&self) -> zbus::Result<()>;
 
     /// Clients may pass a slice; the daemon interface deserializes as `Vec<i64>`.
     async fn delete_entries(&self, ids: &[i64]) -> zbus::Result<()>;

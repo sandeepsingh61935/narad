@@ -9,7 +9,7 @@ Stats, Models, Settings, and model downloads are out of scope here.
 ## Prerequisites
 
 - Rust toolchain (`cargo`)
-- Node.js 20+ with **pnpm** (or npm)
+- [Bun](https://bun.sh) 1.4+
 - Linux Tauri deps: webkit2gtk, rsvg2 — see [Tauri Linux prerequisites](https://tauri.app/start/prerequisites/)
 - `naradd` running on the session bus for live history data
 
@@ -17,29 +17,27 @@ Stats, Models, Settings, and model downloads are out of scope here.
 
 ```bash
 cd dashboard
-pnpm install
-# or: npm install
+bun install
 ```
 
 ## Develop
 
 ```bash
 cd dashboard
-pnpm tauri dev
-# or: npm run tauri dev
-# or: cargo tauri dev   # after `pnpm install` so @tauri-apps/cli is available
+bun run tauri dev
+# or: cargo tauri dev   # after `bun install` so @tauri-apps/cli is available
 ```
 
 Frontend alone (no native shell / no D-Bus invoke):
 
 ```bash
-pnpm dev
+bun run dev
 ```
 
 ## Build
 
 ```bash
-pnpm tauri build
+bun run tauri build
 ```
 
 ## Architecture note

@@ -2,15 +2,30 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import type { DashboardConfig } from "$lib/config";
-  import { formatTime, type HistoryEntry, type TextView } from "$lib/history";
-  import { historyScreen } from "$lib/screen-state";
+  import { formatDuration, formatTime, type HistoryEntry, type TextView } from "$lib/history";
+  import { historyScreen, type RowView } from "$lib/screen-state";
 
   const PAGE_SIZE = 50;
   const SEARCH_ID = "history-search";
+  const RECOVERY_COMMAND = "systemctl --user restart narad.service";
+
+  const segmentOn =
+    "px-3 py-1 rounded font-body-default font-medium bg-surface-container-high text-on-surface shadow-xs transition-all";
+  const segmentOff =
+    "px-3 py-1 rounded font-body-default text-on-surface-variant hover:text-on-surface transition-all";
+  const rowOn =
+    "group relative rounded-xl p-3 bg-surface-container border border-primary-container/60 shadow-sm transition-all cursor-pointer ring-1 ring-primary-container/40 text-left w-full";
+  const rowOff =
+    "group relative rounded-xl p-3 bg-surface-container/60 hover:bg-surface-container border border-outline-variant/30 hover:border-outline-variant/70 transition-all cursor-pointer text-left w-full";
 
   type SessionStatus = {
     paused: boolean;
     mode: string;
+  };
+
+  type Group = {
+    label: string;
+    rows: RowView[];
   };
 
   let query = $state("");
@@ -27,6 +42,7 @@
   let actionBusy = $state(false);
   let actionMessage = $state<string | null>(null);
   let actionError = $state<string | null>(null);
+  let daemonBannerOpen = $state(true);
 
   const screen = $derived(
     historyScreen({
@@ -43,9 +59,62 @@
   );
 
   const detail = $derived(screen.kind === "results" ? screen.detail : null);
+  const selectedRow = $derived(
+    screen.kind === "results" ? screen.rows.find((row) => row.id === selectedId) : undefined,
+  );
+  const pinnedCount = $derived(entries.filter((entry) => entry.pinned).length);
+  const selectedEntry = $derived(detail == null ? undefined : entryById(detail.id));
+  const groups = $derived.by(() => groupRows(screen.kind === "results" ? screen.rows : []));
+  const statusLabel = $derived(
+    screen.kind === "loading" || screen.kind === "daemon-unreachable" ? null : screen.status,
+  );
 
   function entryById(id: number): HistoryEntry | undefined {
     return entries.find((entry) => entry.id === id);
+  }
+
+  function wordsIn(text: string): number {
+    const trimmed = text.trim();
+    if (trimmed.length === 0 || trimmed === "(empty)") return 0;
+    return trimmed.split(/\s+/).length;
+  }
+
+  function appLabel(appId: string | null | undefined): string {
+    if (appId == null || appId.trim() === "") return "Unknown";
+    return appId;
+  }
+
+  function groupLabel(createdAtMs: number): string {
+    const stamp = new Date(createdAtMs);
+    if (Number.isNaN(stamp.getTime())) return "Unknown date";
+    const startOf = (day: Date) => new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime();
+    const days = Math.round((startOf(new Date()) - startOf(stamp)) / 86_400_000);
+    if (days <= 0) return "Today";
+    if (days === 1) return "Yesterday";
+    if (days < 7) return "Earlier this week";
+    return stamp.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+
+  function groupRows(rows: RowView[]): Group[] {
+    const order: Group[] = [];
+    for (const row of rows) {
+      const entry = entryById(row.id);
+      const label = entry ? groupLabel(entry.created_at) : "Unknown date";
+      const existing = order.find((group) => group.label === label);
+      if (existing) existing.rows.push(row);
+      else order.push({ label, rows: [row] });
+    }
+    return order;
+  }
+
+  function captureLabel(count: number): string {
+    return count === 1 ? "1 capture" : `${count} captures`;
+  }
+
+  function speakingWpm(entry: HistoryEntry, text: string): string | null {
+    const words = wordsIn(text);
+    if (words === 0 || entry.duration_ms < 1000) return null;
+    return `${Math.round(words / (entry.duration_ms / 60_000))} WPM`;
   }
 
   async function loadHistory() {
@@ -87,6 +156,7 @@
       selectedId = null;
       textView = "final";
       reachable = false;
+      daemonBannerOpen = true;
       await configured;
     } finally {
       loading = false;
@@ -170,6 +240,20 @@
     }
   }
 
+  async function copyRecoveryCommand() {
+    actionMessage = null;
+    actionError = null;
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable in this environment.");
+      }
+      await navigator.clipboard.writeText(RECOVERY_COMMAND);
+      actionMessage = "Copied";
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   function onSearchSubmit(event: Event) {
     event.preventDefault();
     void loadHistory();
@@ -177,6 +261,11 @@
 
   function clearSearch() {
     query = "";
+    void loadHistory();
+  }
+
+  function searchFor(text: string) {
+    query = text;
     void loadHistory();
   }
 
@@ -258,420 +347,507 @@
 
 <svelte:window onkeydown={onKeyDown} />
 
-<div class="shell">
-  <header class="header">
-    <h1>History</h1>
-    <form class="search" onsubmit={onSearchSubmit}>
-      <label class="sr-only" for={SEARCH_ID}>Search history</label>
-      <input
-        id={SEARCH_ID}
-        type="search"
-        placeholder="Search…"
-        bind:value={query}
-        autocomplete="off"
-        spellcheck="false"
-      />
-    </form>
-  </header>
+{#snippet searchField()}
+  <form
+    class="relative flex-1 flex items-center bg-surface-container rounded-lg px-space-sm py-1.5 border border-outline-variant/40 focus-within:border-primary-container transition-colors"
+    onsubmit={onSearchSubmit}
+  >
+    <label class="sr-only" for={SEARCH_ID}>Search history</label>
+    <span class="material-symbols-outlined text-on-surface-variant text-[18px] mr-space-xs">search</span>
+    <input
+      id={SEARCH_ID}
+      class="w-full bg-transparent border-none outline-none font-body-default text-body-default text-on-surface placeholder:text-on-surface-variant/60"
+      type="search"
+      placeholder="Search transcripts, apps, or tags... (Press / )"
+      bind:value={query}
+      autocomplete="off"
+      spellcheck="false"
+    />
+    <div class="flex items-center gap-1 shrink-0 ml-1">
+      <kbd class="px-1.5 py-0.5 rounded bg-surface-container-high border border-outline-variant/40 font-keycap text-keycap text-on-surface-variant">/</kbd>
+    </div>
+  </form>
+{/snippet}
 
-  <main class="main">
-    {#if actionError}
-      <p class="action-feedback error" role="alert">{actionError}</p>
-    {/if}
+{#snippet filterBar()}
+  <div class="p-space-md flex flex-col gap-space-sm border-b border-outline-variant/20 bg-surface-container-low/80 backdrop-blur-sm z-10">
+    <div class="flex items-center justify-between gap-space-sm">
+      {@render searchField()}
+      <button
+        class="p-2 rounded-lg bg-surface-container hover:bg-surface-container-high text-on-surface-variant hover:text-on-surface border border-outline-variant/30 transition-colors flex items-center justify-center"
+        title="Refresh"
+        type="button"
+        onclick={() => loadHistory()}
+      >
+        <span class="material-symbols-outlined text-[18px]">tune</span>
+      </button>
+    </div>
+    <div class="flex items-center gap-space-xs overflow-x-auto pb-0.5 text-on-surface-variant font-body-muted text-body-muted">
+      <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-surface-container-high text-on-surface border border-outline-variant/40 shrink-0">
+        <span>All Dates</span>
+        <span class="material-symbols-outlined text-[14px]">expand_more</span>
+      </span>
+      <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-surface-container text-on-surface-variant border border-outline-variant/30 shrink-0">
+        <span>Mode: All</span>
+        <span class="material-symbols-outlined text-[14px]">expand_more</span>
+      </span>
+      <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-surface-container text-on-surface-variant border border-outline-variant/30 shrink-0">
+        <span>App: All</span>
+        <span class="material-symbols-outlined text-[14px]">expand_more</span>
+      </span>
+      <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-surface-container text-on-surface-variant border border-outline-variant/30 shrink-0">
+        <span>Lang: All</span>
+        <span class="material-symbols-outlined text-[14px]">expand_more</span>
+      </span>
+      <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-surface-container text-on-surface-variant border border-outline-variant/30 shrink-0">
+        <span class="material-symbols-outlined text-[14px]">star</span>
+        <span>Pinned ({pinnedCount})</span>
+      </span>
+    </div>
+  </div>
+{/snippet}
 
-    {#if screen.kind === "loading"}
-      <p class="status">Loading…</p>
-    {:else if screen.kind === "daemon-unreachable"}
-      <div class="empty">
-        <p class="empty-title">{screen.title}</p>
-        <p class="empty-body">{screen.body}</p>
-        <button type="button" onclick={() => loadHistory()}>{screen.recovery}</button>
-      </div>
-    {:else}
-      {@const marked = modelInStatus(screen.status)}
-      <p class="status">
-        {#if marked}
-          {marked.before}<span class="model-id">{marked.model}</span>{marked.after}
-        {:else}
-          {screen.status}
-        {/if}
-      </p>
-      {#if screen.kind === "empty"}
-        <div class="empty">
-          <p class="empty-title">{screen.title}</p>
-          <p class="empty-body">{screen.body}</p>
-        </div>
-      {:else if screen.kind === "no-matches"}
-        <div class="empty">
-          <p class="empty-title">{screen.title}</p>
-          <button type="button" onclick={clearSearch}>{screen.clear}</button>
-        </div>
-      {:else}
-      <div class="workspace" class:with-detail={detail != null}>
-        <ul class="list" role="listbox" aria-label="History entries">
-          {#each screen.rows as row (row.id)}
-            {@const entry = entryById(row.id)}
-            <li>
-              <button
-                type="button"
-                id="history-row-{row.id}"
-                class="row"
-                class:selected={selectedId === row.id}
-                role="option"
-                aria-selected={selectedId === row.id}
-                onclick={() => selectEntry(row.id)}
+<div class="flex flex-col w-full h-[calc(100vh-3.5rem)] min-h-0 overflow-hidden bg-surface text-on-surface font-body-default text-body-default antialiased">
+  {#if actionError}
+    <p class="px-space-md py-2 bg-error-container/40 border-b border-error/20 text-error font-body-muted text-body-muted" role="alert">
+      {actionError}
+    </p>
+  {/if}
+
+  {#if screen.kind === "empty" || screen.kind === "no-matches" || screen.kind === "daemon-unreachable"}
+    <div class="flex-1 min-h-0 overflow-y-auto">
+      {#if screen.kind !== "no-matches"}
+        {@render filterBar()}
+      {/if}
+      <div class="w-full max-w-7xl mx-auto p-space-md lg:p-space-xl flex flex-col gap-space-xl">
+        {#if screen.kind === "empty"}
+          <section class="flex flex-col rounded-xl bg-surface-container-low border border-outline-variant overflow-hidden">
+            <div class="py-16 px-space-md flex flex-col items-center justify-center text-center max-w-xl mx-auto w-full">
+              <div class="relative w-24 h-24 rounded-full bg-surface-container flex items-center justify-center border border-outline-variant mb-space-lg">
+                <div class="absolute inset-1 rounded-full border border-dashed border-outline-variant opacity-40"></div>
+                <span class="material-symbols-outlined text-[44px] text-outline">mic_off</span>
+              </div>
+              <h2 class="font-headline-lg text-headline-lg text-on-surface tracking-tight mb-space-xs">{screen.title}</h2>
+              <p class="font-body-default text-body-default text-on-surface-variant max-w-md leading-relaxed mb-space-sm">{screen.body}</p>
+              <p class="font-body-default text-body-default text-on-surface-variant max-w-md leading-relaxed mb-space-lg">
+                Press
+                <kbd class="inline-flex items-center px-1.5 py-0.5 bg-surface-container-high border border-outline rounded font-keycap text-keycap text-on-surface shadow-sm">Ctrl</kbd>
+                +
+                <kbd class="inline-flex items-center px-1.5 py-0.5 bg-surface-container-high border border-outline rounded font-keycap text-keycap text-on-surface shadow-sm">Alt</kbd>
+                +
+                <kbd class="inline-flex items-center px-1.5 py-0.5 bg-surface-container-high border border-outline rounded font-keycap text-keycap text-on-surface shadow-sm">Space</kbd>
+                and start talking anywhere in GNOME. Your transcribed text will be saved here privately.
+              </p>
+              <div class="flex flex-wrap items-center justify-center gap-space-sm mb-space-xl">
+                <a
+                  class="flex items-center gap-space-xs bg-surface-container hover:bg-surface-container-high text-on-surface px-space-md py-2 rounded-lg font-headline-md text-headline-md border border-outline-variant transition-colors"
+                  href="/settings"
+                >
+                  <span class="material-symbols-outlined text-[18px]">tune</span>
+                  <span>Configure Shortcut</span>
+                </a>
+              </div>
+              <div class="flex items-center gap-space-xs px-space-md py-1.5 rounded-full bg-surface-container border border-outline-variant text-on-surface-variant font-label-code text-label-code">
+                <span class="material-symbols-outlined text-[14px] text-emerald-400">lock</span>
+                <span>100% On-device · Zero network egress guaranteed</span>
+              </div>
+            </div>
+          </section>
+        {:else if screen.kind === "no-matches"}
+          <section class="flex flex-col rounded-xl bg-surface-container-low border border-outline-variant overflow-hidden">
+            <div class="p-space-md bg-surface-container/60 border-b border-outline-variant flex flex-col md:flex-row items-center gap-space-md">
+              <form
+                class="flex items-center bg-surface-container px-3 py-1.5 rounded-lg border border-primary-container gap-2 w-full md:w-80"
+                onsubmit={onSearchSubmit}
               >
-                <p class="preview">{row.preview}</p>
-                <div class="meta">
-                  {#if entry}
-                    <time datetime={new Date(entry.created_at).toISOString()}>
-                      {formatTime(entry.created_at)}
-                    </time>
-                    {#if entry.app_id}
-                      <span class="sep" aria-hidden="true">·</span>
-                      <span class="app">{entry.app_id}</span>
-                    {/if}
-                    <span class="sep" aria-hidden="true">·</span>
-                    <span class="mode">{entry.mode}</span>
-                    <span class="sep" aria-hidden="true">·</span>
-                  {/if}
-                  <span class="insert">{row.insert}</span>
+                <span class="material-symbols-outlined text-primary-container text-[18px]">search</span>
+                <label class="sr-only" for={SEARCH_ID}>Search history</label>
+                <input
+                  id={SEARCH_ID}
+                  class="font-body-default text-body-default text-on-surface truncate flex-1 bg-transparent border-none outline-none placeholder:text-on-surface-variant/60 min-w-0"
+                  type="search"
+                  placeholder="Search transcripts..."
+                  bind:value={query}
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+                <button
+                  aria-label="Clear search"
+                  class="w-4 h-4 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant hover:text-on-surface"
+                  type="button"
+                  onclick={clearSearch}
+                >
+                  <span class="material-symbols-outlined text-[12px]">close</span>
+                </button>
+              </form>
+              <div class="flex items-center gap-1.5 flex-wrap w-full md:w-auto">
+                <span class="px-2.5 py-1 rounded bg-surface-container border border-outline-variant font-label-code text-label-code text-on-surface flex items-center gap-1">
+                  <span>Mode: All</span>
+                  <span class="material-symbols-outlined text-[14px] text-outline">expand_more</span>
+                </span>
+                <span class="font-body-muted text-body-muted text-on-surface-variant ml-auto md:ml-2">0 matches</span>
+              </div>
+            </div>
+            <div class="py-14 px-space-md flex flex-col items-center justify-center text-center max-w-lg mx-auto w-full">
+              <div class="w-20 h-20 rounded-full bg-surface-container flex items-center justify-center border border-outline-variant mb-space-md">
+                <span class="material-symbols-outlined text-[36px] text-outline">search_off</span>
+              </div>
+              <h3 class="font-headline-lg text-headline-lg text-on-surface tracking-tight mb-space-xs">{screen.title}</h3>
+              <p class="font-body-default text-body-default text-on-surface-variant max-w-md leading-relaxed mb-space-lg">
+                No recordings or transcriptions matched
+                <span class="font-label-code text-label-code text-primary bg-surface-container px-1 py-0.5 rounded border border-outline-variant">"{appliedQuery}"</span>.
+                Try checking for typos or resetting filter boundaries.
+              </p>
+              <button
+                class="flex items-center gap-space-xs bg-surface-container hover:bg-surface-container-high text-on-surface px-space-md py-1.5 rounded-lg font-headline-md text-headline-md border border-outline-variant transition-colors mb-space-lg"
+                type="button"
+                onclick={clearSearch}
+              >
+                <span class="material-symbols-outlined text-[18px]">filter_alt_off</span>
+                <span>{screen.clear}</span>
+              </button>
+              <div class="flex flex-col items-center gap-space-xs">
+                <span class="font-body-muted text-body-muted text-on-surface-variant">Try searching for recent topics:</span>
+                <div class="flex flex-wrap gap-1.5 justify-center">
+                  {#each ["email draft", "code comment", "Hindi", "git commit"] as topic (topic)}
+                    <button
+                      class="px-2.5 py-1 rounded-full bg-surface-container border border-outline-variant text-on-surface font-label-code text-label-code hover:bg-surface-container-high transition-colors"
+                      type="button"
+                      onclick={() => searchFor(topic)}
+                    >
+                      "{topic}"
+                    </button>
+                  {/each}
                 </div>
-              </button>
-            </li>
-          {/each}
-        </ul>
+              </div>
+            </div>
+          </section>
+        {:else}
+          <section class="flex flex-col rounded-xl bg-surface-container-low border border-outline-variant overflow-hidden">
+            {#if daemonBannerOpen}
+              <div class="px-space-md py-2.5 bg-error-container/40 border-b border-error/20 flex items-center justify-between gap-space-sm">
+                <div class="flex items-center gap-space-sm">
+                  <span class="material-symbols-outlined text-[18px] text-error shrink-0">error</span>
+                  <span class="font-body-muted text-body-muted text-on-error-container">
+                    {screen.body}
+                    (<code class="font-label-code text-[11px] bg-black/30 px-1 py-0.5 rounded">narad.service</code>)
+                  </span>
+                </div>
+                <button
+                  aria-label="Dismiss banner"
+                  class="text-on-error-container hover:text-white transition-colors"
+                  type="button"
+                  onclick={() => (daemonBannerOpen = false)}
+                >
+                  <span class="material-symbols-outlined text-[16px]">close</span>
+                </button>
+              </div>
+            {/if}
+            <div class="py-12 px-space-md flex flex-col items-center justify-center text-center max-w-xl mx-auto w-full">
+              <div class="relative w-20 h-20 rounded-2xl bg-surface-container border border-error/30 flex items-center justify-center mb-space-md">
+                <span class="material-symbols-outlined text-[40px] text-error">settings_suggest</span>
+                <div class="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-error-container border border-error flex items-center justify-center">
+                  <span class="material-symbols-outlined text-[14px] text-on-error">priority_high</span>
+                </div>
+              </div>
+              <h3 class="font-headline-lg text-headline-lg text-on-surface tracking-tight mb-space-xs">{screen.title}</h3>
+              <p class="font-body-default text-body-default text-on-surface-variant max-w-md leading-relaxed mb-space-lg">{screen.body}</p>
+              <div class="w-full bg-surface-container-lowest p-space-sm rounded-lg border border-outline-variant mb-space-lg text-left">
+                <div class="flex items-center justify-between text-on-surface-variant font-label-code text-[11px] mb-1.5">
+                  <span>Terminal Recovery:</span>
+                  <button class="text-primary font-body-muted hover:underline" type="button" onclick={() => copyRecoveryCommand()}>Copy</button>
+                </div>
+                <div class="flex items-center gap-2 font-label-code text-label-code text-on-surface overflow-x-auto">
+                  <span class="text-outline select-none">$</span>
+                  <code>{RECOVERY_COMMAND}</code>
+                </div>
+              </div>
+              <div class="flex flex-wrap items-center justify-center gap-space-sm mb-space-lg">
+                <button
+                  class="flex items-center gap-space-xs bg-primary-container hover:bg-primary text-on-primary-container px-space-md py-2 rounded-lg font-headline-md text-headline-md transition-all shadow-sm"
+                  type="button"
+                  onclick={() => loadHistory()}
+                >
+                  <span class="material-symbols-outlined text-[18px]">play_circle</span>
+                  <span>{screen.recovery}</span>
+                </button>
+              </div>
+              <div class="w-full bg-surface-container rounded-lg p-2.5 border border-outline-variant flex flex-wrap items-center justify-between text-left gap-2 text-on-surface-variant font-label-code text-label-code">
+                <div class="flex items-center gap-1.5">
+                  <span class="w-2 h-2 rounded-full bg-error"></span>
+                  <span>Bus: dev.narad.Daemon [Unreachable]</span>
+                </div>
+                <div class="flex items-center gap-3">
+                  <span>PID: —</span>
+                </div>
+              </div>
+            </div>
+          </section>
+        {/if}
+      </div>
+    </div>
+  {:else}
+    <div class="flex flex-1 h-full min-h-0 w-full">
+      <section class="flex flex-col w-full lg:w-[480px] xl:w-[520px] shrink-0 bg-surface-container-low border-r border-outline-variant/30 select-none">
+        {@render filterBar()}
+        <div
+          class="flex-1 overflow-y-auto px-space-md py-space-sm flex flex-col gap-space-sm select-text"
+          role="listbox"
+          aria-label="History entries"
+        >
+          {#if screen.kind === "loading"}
+            <p class="px-2 py-6 font-body-muted text-body-muted text-on-surface-variant">Loading…</p>
+          {:else}
+            {#each groups as group (group.label)}
+              <div class="flex flex-col gap-1.5 pt-1">
+                <div class="px-2 py-1 flex items-center justify-between text-on-surface-variant/70 select-none">
+                  <span class="font-label-code text-label-code uppercase tracking-wider text-[11px] font-semibold text-outline">{group.label}</span>
+                  <span class="font-label-code text-label-code text-[11px]">{captureLabel(group.rows.length)}</span>
+                </div>
+                {#each group.rows as row (row.id)}
+                  {@const entry = entryById(row.id)}
+                  {#if entry}
+                    <button
+                      type="button"
+                      id="history-row-{row.id}"
+                      class={selectedId === row.id ? rowOn : rowOff}
+                      role="option"
+                      aria-selected={selectedId === row.id}
+                      onclick={() => selectEntry(row.id)}
+                    >
+                      <div class="flex items-start justify-between gap-2 mb-1.5">
+                        <div class="flex items-center gap-2 min-w-0">
+                          <div class="w-6 h-6 rounded flex items-center justify-center bg-surface-container-high text-primary shrink-0 border border-outline-variant/40">
+                            <span class="material-symbols-outlined text-[14px]">mic</span>
+                          </div>
+                          <div class="flex items-center gap-1.5 min-w-0">
+                            <span class="font-headline-md text-[13px] text-on-surface font-semibold truncate">{appLabel(entry.app_id)}</span>
+                            {#if entry.src_lang}
+                              <span class="text-on-surface-variant text-[12px] truncate">{entry.src_lang}</span>
+                            {/if}
+                          </div>
+                        </div>
+                        <div class="flex items-center gap-1.5 shrink-0">
+                          <span class="px-1.5 py-0.5 rounded bg-surface-container-high border border-outline-variant/40 font-keycap text-keycap text-on-surface-variant">{entry.mode}</span>
+                          <time class="font-label-code text-label-code text-on-surface-variant text-[11px]" datetime={new Date(entry.created_at).toISOString()}>
+                            {formatTime(entry.created_at)}
+                          </time>
+                          <span
+                            class={entry.pinned ? "text-primary" : "text-on-surface-variant/40"}
+                            title={entry.pinned ? "Pinned" : "Not pinned"}
+                          >
+                            <span
+                              class="material-symbols-outlined text-[16px]"
+                              style={entry.pinned ? "font-variation-settings: 'FILL' 1;" : undefined}
+                            >star</span>
+                          </span>
+                        </div>
+                      </div>
+                      <p class="font-body-default text-[13px] leading-relaxed text-on-surface line-clamp-2 select-text">{row.preview}</p>
+                      <div class="mt-2.5 flex items-center justify-between text-on-surface-variant font-label-code text-[11px]">
+                        <div class="flex items-center gap-2">
+                          <span class="inline-flex items-center gap-1 {selectedId === row.id ? 'text-primary' : ''}">
+                            <span class="material-symbols-outlined text-[14px]">graphic_eq</span>
+                            {formatDuration(entry.duration_ms)}
+                          </span>
+                          <span>·</span>
+                          <span>{wordsIn(row.preview)} words</span>
+                        </div>
+                        <span class="text-[10px] text-on-surface-variant/80">{row.insert}</span>
+                      </div>
+                    </button>
+                  {/if}
+                {/each}
+              </div>
+            {/each}
+          {/if}
+        </div>
+      </section>
 
-        {#if detail}
-          <aside class="detail" aria-label="Entry detail">
-            <p class="detail-text">{detail.text}</p>
-            <div class="actions">
-              <button type="button" disabled={actionBusy} onclick={() => copySelected()}>
-                Copy
-                <kbd>C</kbd>
-              </button>
-              <button type="button" disabled={actionBusy} onclick={() => reinsertSelected()}>
-                Re-insert
-                <kbd>Enter</kbd>
+      <main class="flex-1 min-w-0 flex flex-col h-full bg-surface overflow-y-auto">
+        {#if detail && selectedEntry}
+          <header class="p-space-md border-b border-outline-variant/30 bg-surface flex flex-wrap items-center justify-between gap-space-md sticky top-0 z-20">
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-surface-container-high text-primary border border-outline-variant/40">
+                <span class="material-symbols-outlined text-[20px]">mic</span>
+              </div>
+              <div class="flex flex-col min-w-0">
+                <span class="font-headline-md text-[13px] text-on-surface font-semibold truncate">{appLabel(selectedEntry.app_id)}</span>
+                <div class="flex items-center gap-1.5 flex-wrap font-label-code text-label-code text-[11px] text-on-surface-variant">
+                  <span class="material-symbols-outlined text-[13px] text-primary">schedule</span>
+                  <span>{formatTime(selectedEntry.created_at)}</span>
+                  <span class="text-outline">·</span>
+                  <span>{selectedEntry.mode}</span>
+                  <span class="text-outline">·</span>
+                  <span>{formatDuration(selectedEntry.duration_ms)}</span>
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center gap-space-xs shrink-0">
+              <button
+                class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-surface-container hover:bg-surface-container-high text-on-surface border border-outline-variant/40 font-headline-md text-[13px] transition-colors disabled:opacity-50"
+                id="copy-btn"
+                title="Copy transcript to clipboard"
+                type="button"
+                disabled={actionBusy}
+                onclick={() => copySelected()}
+              >
+                <span class="material-symbols-outlined text-[16px] text-primary">content_copy</span>
+                <span>Copy</span>
+                <kbd class="ml-1 px-1 py-0.2 bg-surface-container-highest rounded text-[10px] font-keycap text-on-surface-variant">C</kbd>
               </button>
               <button
+                class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary-container text-on-primary-container hover:bg-primary font-headline-md text-[13px] font-semibold transition-colors shadow-xs disabled:opacity-50"
+                id="reinsert-btn"
+                title="Re-insert text at cursor in target window"
                 type="button"
-                class="danger"
+                disabled={actionBusy}
+                onclick={() => reinsertSelected()}
+              >
+                <span class="material-symbols-outlined text-[16px]">input</span>
+                <span>Re-insert</span>
+                <kbd class="ml-1 px-1 py-0.2 bg-primary/20 text-on-primary-container rounded text-[10px] font-keycap font-semibold">Enter</kbd>
+              </button>
+              <div class="h-4 w-px bg-outline-variant/40 mx-0.5"></div>
+              <button
+                class="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-surface-container hover:bg-error-container/30 text-on-surface-variant hover:text-error border border-outline-variant/40 transition-colors text-[13px] disabled:opacity-50"
+                id="delete-transcript-btn"
+                title="Delete record"
+                type="button"
                 disabled={actionBusy}
                 onclick={() => deleteSelected()}
               >
-                Delete
-                <kbd>Delete</kbd>
+                <span class="material-symbols-outlined text-[16px]">delete</span>
+                <kbd class="px-1 py-0.2 bg-surface-container-highest rounded text-[10px] font-keycap">Del</kbd>
               </button>
             </div>
-            <div class="segment" role="group" aria-label="Final or raw text">
-              <button
-                type="button"
-                class:active={textView === "final"}
-                aria-pressed={textView === "final"}
-                onclick={() => (textView = "final")}
-              >
-                Final
-              </button>
-              <button
-                type="button"
-                class:active={textView === "raw"}
-                aria-pressed={textView === "raw"}
-                onclick={() => (textView = "raw")}
-              >
-                Raw
-              </button>
+          </header>
+          <div class="p-space-xl flex flex-col gap-space-lg max-w-4xl mx-auto w-full">
+            {#if actionMessage}
+              <div class="flex items-center justify-between px-3.5 py-2 rounded-lg bg-surface-container-high border border-outline-variant/40 text-on-surface text-[12px] font-label-code">
+                <div class="flex items-center gap-2">
+                  <span class="material-symbols-outlined text-[16px] text-primary">history</span>
+                  <span>Last action: {actionMessage}</span>
+                </div>
+              </div>
+            {/if}
+            <div class="flex flex-col rounded-xl bg-surface-container border border-outline-variant/40 overflow-hidden">
+              <div class="px-space-md py-2 bg-surface-container-high/60 border-b border-outline-variant/30 flex items-center justify-between">
+                <div class="inline-flex p-0.5 rounded-lg bg-surface-container-lowest border border-outline-variant/30 text-xs" role="group" aria-label="Final or raw text">
+                  <button
+                    class={textView === "final" ? segmentOn : segmentOff}
+                    type="button"
+                    aria-pressed={textView === "final"}
+                    onclick={() => (textView = "final")}
+                  >Final (Cleaned)</button>
+                  <button
+                    class={textView === "raw" ? segmentOn : segmentOff}
+                    type="button"
+                    aria-pressed={textView === "raw"}
+                    onclick={() => (textView = "raw")}
+                  >Raw ASR Frames</button>
+                </div>
+                <div class="flex items-center gap-2 font-label-code text-label-code text-on-surface-variant text-[11px]">
+                  <span>{selectedEntry.mode}</span>
+                  <span>·</span>
+                  <span>{selectedEntry.src_lang}</span>
+                </div>
+              </div>
+              <div class="p-space-lg bg-surface-container-low min-h-[140px] flex items-center">
+                <p class="font-body-default text-[17px] leading-relaxed text-on-surface font-normal select-text tracking-tight whitespace-pre-wrap break-words" id="transcript-display">
+                  {detail.text}
+                </p>
+              </div>
+              <div class="px-space-md py-2 bg-surface-container-high/30 border-t border-outline-variant/20 flex items-center justify-between text-on-surface-variant font-label-code text-[11px]">
+                <span>{detail.text.length} characters · {wordsIn(detail.text)} words</span>
+              </div>
             </div>
-          </aside>
+            <div class="flex flex-col rounded-xl bg-surface-container border border-outline-variant/30 overflow-hidden divide-y divide-outline-variant/20">
+              <div class="px-space-md py-2.5 flex items-center justify-between text-on-surface gap-space-md">
+                <div class="flex items-center gap-2">
+                  <span class="material-symbols-outlined text-[16px] text-on-surface-variant">memory</span>
+                  <span class="font-body-default text-[13px]">Acoustic Model</span>
+                </div>
+                <span class="font-label-code text-label-code text-primary bg-primary-container/15 px-2 py-0.5 rounded border border-primary-container/30">{selectedEntry.asr_model}</span>
+              </div>
+              <div class="px-space-md py-2.5 flex items-center justify-between text-on-surface gap-space-md">
+                <div class="flex items-center gap-2">
+                  <span class="material-symbols-outlined text-[16px] text-on-surface-variant">translate</span>
+                  <span class="font-body-default text-[13px]">Language</span>
+                </div>
+                <div class="flex items-center gap-1.5 font-label-code text-label-code text-on-surface">
+                  <span class="px-1.5 py-0.2 rounded bg-surface-container-high border border-outline-variant/30 text-[11px]">{selectedEntry.src_lang}</span>
+                  {#if selectedEntry.dst_lang && selectedEntry.dst_lang !== selectedEntry.src_lang}
+                    <span class="text-outline">•</span>
+                    <span class="px-1.5 py-0.2 rounded bg-surface-container-high border border-outline-variant/30 text-[11px]">{selectedEntry.dst_lang}</span>
+                  {/if}
+                </div>
+              </div>
+              <div class="px-space-md py-2.5 flex items-center justify-between text-on-surface gap-space-md">
+                <div class="flex items-center gap-2">
+                  <span class="material-symbols-outlined text-[16px] text-on-surface-variant">speed</span>
+                  <span class="font-body-default text-[13px]">Speaking Velocity &amp; Timing</span>
+                </div>
+                <div class="flex items-center gap-2 font-label-code text-label-code text-on-surface">
+                  <span>{wordsIn(detail.text)} words</span>
+                  <span class="text-outline">·</span>
+                  <span>{formatDuration(selectedEntry.duration_ms)}</span>
+                  {#if speakingWpm(selectedEntry, detail.text)}
+                    <span class="text-outline">·</span>
+                    <span class="text-primary font-semibold">{speakingWpm(selectedEntry, detail.text)}</span>
+                  {/if}
+                </div>
+              </div>
+              <div class="px-space-md py-2.5 flex items-center justify-between text-on-surface gap-space-md">
+                <div class="flex items-center gap-2">
+                  <span class="material-symbols-outlined text-[16px] text-on-surface-variant">near_me</span>
+                  <span class="font-body-default text-[13px]">Insertion</span>
+                </div>
+                <span class="font-label-code text-label-code text-on-surface">{selectedRow?.insert ?? selectedEntry.insert_status}</span>
+              </div>
+            </div>
+          </div>
+        {:else}
+          <div class="flex-1 flex flex-col items-center justify-center text-center p-space-xl">
+            <div class="w-16 h-16 rounded-full bg-surface-container flex items-center justify-center border border-outline-variant mb-space-md">
+              <span class="material-symbols-outlined text-[32px] text-outline">history</span>
+            </div>
+            <p class="font-headline-md text-headline-md text-on-surface">Select a transcription</p>
+            <p class="font-body-muted text-body-muted text-on-surface-variant mt-space-xs">j / k to move. Enter re-inserts the open entry.</p>
+          </div>
         {/if}
-      </div>
+      </main>
+    </div>
+  {/if}
+
+  <footer class="h-8 bg-surface-container-low border-t border-outline-variant/30 px-space-md flex items-center justify-between text-on-surface-variant font-label-code text-[11px] shrink-0 select-none">
+    <div class="flex items-center gap-3 overflow-x-auto">
+      <span class="font-semibold text-outline uppercase tracking-wider text-[10px]">Shortcuts</span>
+      <span class="flex items-center gap-1"><kbd class="px-1 rounded bg-surface-container-high border border-outline-variant/40 font-keycap text-[10px]">j/k</kbd> Navigate</span>
+      <span class="flex items-center gap-1"><kbd class="px-1 rounded bg-surface-container-high border border-outline-variant/40 font-keycap text-[10px]">Enter</kbd> Re-insert</span>
+      <span class="flex items-center gap-1"><kbd class="px-1 rounded bg-surface-container-high border border-outline-variant/40 font-keycap text-[10px]">C</kbd> Copy</span>
+      <span class="flex items-center gap-1"><kbd class="px-1 rounded bg-surface-container-high border border-outline-variant/40 font-keycap text-[10px]">Del</kbd> Delete</span>
+      <span class="flex items-center gap-1"><kbd class="px-1 rounded bg-surface-container-high border border-outline-variant/40 font-keycap text-[10px]">/</kbd> Search</span>
+      <span class="flex items-center gap-1"><kbd class="px-1 rounded bg-surface-container-high border border-outline-variant/40 font-keycap text-[10px]">Esc</kbd> Close</span>
+    </div>
+    <div class="hidden md:flex items-center gap-2 min-w-0">
+      {#if statusLabel}
+        {@const marked = modelInStatus(statusLabel)}
+        <span class="truncate">
+          {#if marked}
+            {marked.before}<span class="font-label-code">{marked.model}</span>{marked.after}
+          {:else}
+            {statusLabel}
+          {/if}
+        </span>
       {/if}
-    {/if}
-  </main>
+    </div>
+  </footer>
 </div>
 
 {#if actionMessage && !actionError}
-  <p class="toast" role="status">{actionMessage}</p>
+  <p
+    class="fixed z-50 left-1/2 bottom-10 -translate-x-1/2 m-0 px-3 py-1.5 rounded-lg border border-outline-variant bg-surface-container-high text-emerald-400 font-body-muted text-body-muted"
+    role="status"
+  >{actionMessage}</p>
 {/if}
-
-<style>
-  .shell {
-    display: flex;
-    flex-direction: column;
-    min-height: 100%;
-    min-width: 0;
-  }
-
-  .header {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-md);
-    padding: var(--space-lg) var(--space-xl);
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
-  }
-
-  h1 {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 600;
-    line-height: 22px;
-    letter-spacing: -0.01em;
-  }
-
-  .search {
-    display: flex;
-    flex: 1;
-    min-width: 12rem;
-  }
-
-  .search input {
-    flex: 1;
-    min-width: 0;
-    padding: 0.45rem 0.7rem;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--bg);
-  }
-
-  .empty button,
-  .actions button,
-  .segment button {
-    padding: 0.45rem 0.85rem;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface-elevated);
-    cursor: pointer;
-  }
-
-  .empty button:hover,
-  .actions button:hover:not(:disabled),
-  .segment button:hover {
-    border-color: var(--accent);
-  }
-
-  .actions button {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-sm);
-  }
-
-  .actions kbd {
-    padding: 0.05rem 0.35rem;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--bg);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    font-weight: 600;
-    line-height: 16px;
-  }
-
-  .actions button:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .actions button.danger {
-    color: var(--destructive);
-  }
-
-  .main {
-    flex: 1 0 auto;
-    padding: var(--space-md) var(--space-xl) var(--space-xl);
-    min-width: 0;
-  }
-
-  .status {
-    margin: var(--space-md) 0 var(--space-lg);
-    color: var(--text-secondary);
-  }
-
-  .empty {
-    max-width: 28rem;
-    margin: 3rem auto;
-    text-align: center;
-  }
-
-  .empty-title {
-    margin: 0 0 var(--space-sm);
-    font-size: 16px;
-    font-weight: 600;
-  }
-
-  .empty-body {
-    margin: 0 0 var(--space-md);
-    color: var(--text-secondary);
-  }
-
-  .workspace {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: var(--space-lg);
-    align-items: start;
-    min-width: 0;
-  }
-
-  @media (min-width: 800px) {
-    .workspace.with-detail {
-      grid-template-columns: minmax(0, 1fr) minmax(18rem, 22rem);
-    }
-  }
-
-  .list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    background: var(--surface);
-    min-width: 0;
-    overflow: hidden;
-  }
-
-  .list li {
-    margin: 0;
-  }
-
-  .row {
-    display: block;
-    width: 100%;
-    text-align: left;
-    padding: var(--space-md) var(--space-lg);
-    border: none;
-    border-bottom: 1px solid var(--border);
-    border-radius: 0;
-    background: transparent;
-    cursor: pointer;
-  }
-
-  .list li:last-child .row {
-    border-bottom: none;
-  }
-
-  .row:hover {
-    background: var(--surface-elevated);
-  }
-
-  .row.selected {
-    background: var(--surface-elevated);
-    box-shadow: inset 3px 0 0 var(--accent);
-  }
-
-  .preview {
-    margin: 0 0 var(--space-xs);
-    font-size: 15px;
-    line-height: 22px;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    overflow: hidden;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
-
-  .meta {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-xs);
-    color: var(--text-secondary);
-    font-size: 13px;
-    line-height: 18px;
-  }
-
-  .model-id {
-    font-family: var(--font-mono);
-  }
-
-  .sep {
-    color: var(--text-disabled);
-  }
-
-  .detail {
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    background: var(--surface);
-    padding: var(--space-lg);
-    min-height: 12rem;
-    min-width: 0;
-    max-width: 100%;
-  }
-
-  .detail-text {
-    margin: 0 0 var(--space-lg);
-    font-size: 15px;
-    line-height: 22px;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  .actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-sm);
-    margin-bottom: var(--space-md);
-  }
-
-  .segment {
-    display: inline-flex;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow: hidden;
-  }
-
-  .segment button {
-    border: none;
-    border-radius: 0;
-    background: var(--bg);
-    padding: 0.35rem 0.7rem;
-  }
-
-  .segment button + button {
-    border-left: 1px solid var(--border);
-  }
-
-  .segment button.active {
-    background: var(--surface-elevated);
-    color: var(--text);
-    font-weight: 600;
-  }
-
-  .action-feedback {
-    margin: 0 0 var(--space-md);
-    font-size: 13px;
-  }
-
-  .action-feedback.error {
-    color: var(--text);
-  }
-
-  .toast {
-    position: fixed;
-    z-index: 2;
-    left: 50%;
-    bottom: var(--space-xl);
-    margin: 0;
-    padding: 0.45rem 0.85rem;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface-elevated);
-    color: var(--success);
-    font-size: 13px;
-    transform: translateX(-50%);
-  }
-
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
-</style>

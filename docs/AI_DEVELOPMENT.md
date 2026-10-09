@@ -166,6 +166,20 @@ git worktree add ../narad-wt-<slug> -b feat/<slug>
 
 Record non-overlapping file claims **before** two writers run. One writer per worktree. Agent commits per closed task; no `--no-verify` unless ordered. Stop and ask before push, merge, release, or destructive git.
 
+### Commit strategy (enforced)
+
+Prose already said one slice ≈ one commit. **Nothing in git enforced that**, so `574f3cb` landed 112 files (daemon + HUD + ASR + dashboard + extension + spikes + docs) as one `feat: Phase 0/1 MVP`. That was not the slice close-loop; it was an unscoped dump. Do not rewrite `main` unless the human asks.
+
+Going forward:
+
+| Rule | Enforcement |
+|---|---|
+| Conventional `type(scope)?: subject` | `scripts/githooks/commit-msg` |
+| One product area per commit (crate / dashboard / extension / packaging / one spike). docs+meta free. | same hook, counts staged paths |
+| Exception for a real dump | body trailer `Bulk-commit: approved` (or `NARAD_ALLOW_BULK_COMMIT=1`) |
+
+Install once per clone: `sh scripts/githooks/install.sh` (refuses to clobber non-Narad hooks; leaves graphify `post-commit` / `post-checkout` alone).
+
 ## 13. Subagent-driven development (multi-task)
 
 Use when the human says “plan” **or** the work has >1 independent tasks.

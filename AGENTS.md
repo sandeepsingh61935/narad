@@ -47,7 +47,7 @@ Ledger/files over chat paste. Graph-first locate. Smallest sufficient context pe
 - **No silent scope creep.** New deps, new crates, architecture changes, or phase jumps need an explicit ask.
 - **Spec binding.** Behaviour changes map to an FR in `docs/REQUIREMENTS.md` or a stated spike goal. Respect phase boundaries in `docs/ROADMAP.md` unless the user overrides.
 - **Deep modules.** Small interfaces; daemon owns state; clients are thin. See architecture §3.
-- **Git.** Never start implementation on `main`/`master` without explicit consent. Feature branch for slices. No `git commit --no-verify` unless ordered. Stop and ask before push, merge, release, or destructive git.
+- **Git.** Never start implementation on `main`/`master` without explicit consent. Feature branch for slices. **One closed slice per commit** (one crate | dashboard | extension | packaging | one spike, plus docs/meta). Conventional `type(scope): subject`. Wider dumps need body trailer `Bulk-commit: approved`. Hook: `scripts/githooks/install.sh` (does not touch graphify). No `--no-verify` unless ordered. Stop and ask before push, merge, release, or destructive git.
 
 ## graphify
 

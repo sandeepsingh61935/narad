@@ -1,0 +1,4 @@
+#!/bin/sh
+# narad-commit-check — installed by scripts/githooks/install.sh
+ROOT=$(git rev-parse --show-toplevel)
+exec "$ROOT/scripts/githooks/check-commit.sh" --msg-file "$1"

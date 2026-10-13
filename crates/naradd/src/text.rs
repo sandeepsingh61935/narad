@@ -1,4 +1,4 @@
-//! Spoken commands, then replacements (FR-TXT-1, FR-TXT-3).
+//! Spoken commands, then replacements, then vocabulary (FR-TXT-1..4).
 //!
 //! Run after the hallucination filter. Commands are taken from the raw words
 //! first, so a replacement cannot override "new line". Written text is not
@@ -51,6 +51,8 @@ enum Event {
     Comma,
     Question,
     Scratch,
+    /// A case phrase ended the previous segment. A bare phrase adds nothing.
+    Boundary,
 }
 
 fn parse_literals(text: &str) -> Vec<Event> {
@@ -64,6 +66,21 @@ fn parse_events(raw: &str) -> Vec<Event> {
     let mut events = Vec::new();
     let mut i = 0;
     while i < tokens.len() {
+        if let Some(style) = case_style_at(&tokens, i) {
+            i += 2;
+            let start = i;
+            while i < tokens.len()
+                && command_at(&tokens, i).is_none()
+                && case_style_at(&tokens, i).is_none()
+            {
+                i += 1;
+            }
+            events.push(Event::Boundary);
+            if i > start {
+                events.push(Event::Word(restyle(&tokens[start..i], style)));
+            }
+            continue;
+        }
         if let Some((command, width)) = command_at(&tokens, i) {
             events.push(match command {
                 Command::NewLine => Event::NewLine,
@@ -80,6 +97,62 @@ fn parse_events(raw: &str) -> Vec<Event> {
         }
     }
     events
+}
+
+enum CaseStyle {
+    Camel,
+    Snake,
+    Kebab,
+    Pascal,
+    Constant,
+}
+
+fn case_style_at(tokens: &[&str], index: usize) -> Option<CaseStyle> {
+    let word = tokens[index].to_ascii_lowercase();
+    let next = tokens.get(index + 1)?.to_ascii_lowercase();
+    if next != "case" {
+        return None;
+    }
+    match word.as_str() {
+        "camel" => Some(CaseStyle::Camel),
+        "snake" => Some(CaseStyle::Snake),
+        "kebab" => Some(CaseStyle::Kebab),
+        "pascal" => Some(CaseStyle::Pascal),
+        "constant" => Some(CaseStyle::Constant),
+        _ => None,
+    }
+}
+
+fn restyle(words: &[&str], style: CaseStyle) -> String {
+    let words: Vec<String> = words.iter().map(|word| word.to_lowercase()).collect();
+    match style {
+        CaseStyle::Camel => join_hump(&words, false),
+        CaseStyle::Pascal => join_hump(&words, true),
+        CaseStyle::Snake => words.join("_"),
+        CaseStyle::Kebab => words.join("-"),
+        CaseStyle::Constant => words
+            .iter()
+            .map(|word| word.to_uppercase())
+            .collect::<Vec<_>>()
+            .join("_"),
+    }
+}
+
+fn join_hump(words: &[String], capitalize_first: bool) -> String {
+    let mut text = String::new();
+    for (index, word) in words.iter().enumerate() {
+        let capitalize = index > 0 || capitalize_first;
+        if !capitalize {
+            text.push_str(word);
+            continue;
+        }
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            text.extend(first.to_uppercase());
+            text.push_str(chars.as_str());
+        }
+    }
+    text
 }
 
 fn replace_words(mut events: Vec<Event>, pairs: &[Replacement]) -> Vec<Event> {
@@ -174,6 +247,7 @@ fn render(events: &[Event]) -> String {
             Event::Comma => out.apply(Command::Comma),
             Event::Question => out.apply(Command::Question),
             Event::Scratch => out.apply(Command::Scratch),
+            Event::Boundary => out.close(""),
         }
     }
     out.render()
@@ -347,6 +421,30 @@ mod tests {
             apply_commands("alpha period beta scratch that scratch that gamma"),
             "gamma"
         );
+    }
+
+    #[test]
+    fn case_phrases_restyle_until_the_next_command() {
+        assert_eq!(apply_commands("camel case user name period"), "userName.");
+        assert_eq!(apply_commands("snake case user name"), "user_name");
+        assert_eq!(apply_commands("kebab case user name"), "user-name");
+        assert_eq!(apply_commands("pascal case user name"), "UserName");
+        assert_eq!(apply_commands("constant case user name"), "USER_NAME");
+        assert_eq!(apply_commands("camel case user 2"), "user2");
+        assert_eq!(apply_commands("snake case user 2"), "user_2");
+        assert_eq!(apply_commands("hello camel case"), "hello");
+        assert_eq!(apply_commands("camel case period"), "");
+        assert_eq!(
+            apply_commands("camel case user name scratch that"),
+            ""
+        );
+        assert_eq!(
+            apply_commands("hello camel case user name scratch that"),
+            "hello"
+        );
+        assert_eq!(apply_commands("hello world"), "hello world");
+        assert_eq!(apply_commands("hello period"), "hello.");
+        assert_eq!(apply_commands("CAMEL CASE User Name"), "userName");
     }
 
     fn pair(spoken: &str, written: &str) -> Replacement {

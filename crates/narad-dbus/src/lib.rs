@@ -88,6 +88,7 @@ mod tests {
     fn undo_last_is_on_the_daemon_proxy() {
         async fn assert_sig(proxy: &DaemonProxy<'_>) {
             let _ = proxy.undo_last().await;
+            let _ = proxy.outcome_detail().await;
         }
         let _ = assert_sig;
     }

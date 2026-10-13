@@ -42,6 +42,10 @@ pub trait Daemon {
     /// Remove the last insertion when focus is unchanged (FR-INS-5). No arguments.
     async fn undo_last(&self) -> zbus::Result<()>;
 
+    /// Deleted text after undo, or the reason undo was refused. Empty otherwise.
+    #[zbus(property)]
+    fn outcome_detail(&self) -> zbus::Result<String>;
+
     /// Clients may pass a slice; the daemon interface deserializes as `Vec<i64>`.
     async fn delete_entries(&self, ids: &[i64]) -> zbus::Result<()>;
 

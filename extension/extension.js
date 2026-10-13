@@ -745,6 +745,7 @@ export default class NaradExtension extends Extension {
             this._pillSecondary.visible = true;
             this._pillSecondary.style_class = 'narad-hud-text-muted';
             this._pillSecondary.text = 'No text field focused';
+            this._pillKeycap.text = this._outcomeDetail() || 'Ctrl+V';
             this._pillKeycap.visible = true;
             this._scheduleIdle(2200);
             break;

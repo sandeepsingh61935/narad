@@ -10,6 +10,7 @@ mod insert;
 mod ipc;
 mod paths;
 mod pipeline;
+mod retained;
 mod text;
 
 use anyhow::{Context, Result};
@@ -91,7 +92,11 @@ async fn main() -> Result<()> {
 
     asr::ensure_default_pack_installed(&cfg.models.asr_english);
     let asr_engine = asr::try_load(&cfg.models.asr_english);
-    let pipeline = PipelineHandle::new(cfg.clone(), store, asr_engine);
+    let audio_dir = data_dir.join("audio");
+    if let Err(err) = retained::clear_partial_audio(&audio_dir) {
+        warn!(%err, "clear partial audio");
+    }
+    let pipeline = PipelineHandle::new(cfg.clone(), store, asr_engine, audio_dir);
     pipeline.start_retention_purge();
     let daemon = DaemonIpc::new(pipeline.clone());
 

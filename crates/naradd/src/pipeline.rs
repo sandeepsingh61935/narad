@@ -1,5 +1,6 @@
 //! Dictation session: idle → listening → processing → inserted|copied|cancelled|error|undone → idle.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -92,6 +93,8 @@ struct PipelineInner {
     conn: OnceLock<Connection>,
     /// Prevent overlapping stop/process tasks.
     processing: AtomicBool,
+    /// `$XDG_DATA_HOME/narad/audio`. Created on the first retained write.
+    audio_dir: PathBuf,
 }
 
 /// How often uptime retention runs after the startup pass (FR-HIS-7).
@@ -104,7 +107,12 @@ pub struct PipelineHandle {
 }
 
 impl PipelineHandle {
-    pub fn new(config: NaradConfig, store: HistoryStore, asr: Option<AsrEngine>) -> Self {
+    pub fn new(
+        config: NaradConfig,
+        store: HistoryStore,
+        asr: Option<AsrEngine>,
+        audio_dir: PathBuf,
+    ) -> Self {
         Self {
             inner: Arc::new(PipelineInner {
                 config: config.clone(),
@@ -131,6 +139,7 @@ impl PipelineHandle {
                 asr: Mutex::new(asr),
                 conn: OnceLock::new(),
                 processing: AtomicBool::new(false),
+                audio_dir,
             }),
         }
     }
@@ -578,6 +587,12 @@ impl PipelineHandle {
         };
 
         let model_id = self.inner.config.models.asr_english.clone();
+        let retained_samples = self
+            .inner
+            .config
+            .history
+            .retain_audio
+            .then(|| trimmed.clone());
         // Run decode on a blocking pool; lock only inside the worker (Standards #5).
         let asr_slot = Arc::clone(&self.inner);
         let transcribed = tokio::task::spawn_blocking(move || {
@@ -626,8 +641,15 @@ impl PipelineHandle {
         if matches!(outcome, InsertOutcome::Copied) {
             self.set_outcome_detail(insert::paste_hint(terminal));
         }
-        let history_id =
-            self.record_dictation(duration_ms, mode, model_id, text, final_text, outcome)?;
+        let history_id = self.record_dictation(
+            duration_ms,
+            mode,
+            model_id,
+            text,
+            final_text,
+            outcome,
+            retained_samples.as_deref().unwrap_or(&[]),
+        )?;
         if let Some(id) = history_id {
             self.emit_entry_added(id).await;
         }
@@ -899,6 +921,7 @@ impl PipelineHandle {
         raw_text: String,
         final_text: String,
         outcome: InsertOutcome,
+        samples: &[f32],
     ) -> Result<Option<i64>, String> {
         let insert_status = match outcome {
             InsertOutcome::Inserted => InsertStatus::Success,
@@ -918,15 +941,27 @@ impl PipelineHandle {
         if paused {
             return Ok(None);
         }
-        self.commit_dictation(
+        let id = self.commit_dictation(
             duration_ms,
             mode,
             asr_model,
             raw_text,
             final_text,
             insert_status,
-        )
-        .map(Some)
+        )?;
+        let mut store = self
+            .inner
+            .store
+            .lock()
+            .map_err(|e| format!("store lock: {e}"))?;
+        crate::retained::attach_retained_audio(
+            &mut store,
+            self.inner.config.history.retain_audio,
+            &self.inner.audio_dir,
+            id,
+            samples,
+        )?;
+        Ok(Some(id))
     }
 
     /// Persist one utterance. Not paused-gated.
@@ -1105,7 +1140,7 @@ mod tests {
         });
         let dir = TempDir::new().expect("tempdir");
         let store = HistoryStore::open(dir.path().join("t.db")).expect("open");
-        let pipe = PipelineHandle::new(cfg, store, None);
+        let pipe = PipelineHandle::new(cfg, store, None, dir.path().join("audio"));
 
         assert!(pipe.accepted_transcript("thanks for watching").is_none());
         assert_eq!(
@@ -1129,8 +1164,43 @@ mod tests {
     fn test_pipe() -> (TempDir, PipelineHandle) {
         let dir = TempDir::new().expect("tempdir");
         let store = HistoryStore::open(dir.path().join("t.db")).expect("open");
-        let pipe = PipelineHandle::new(NaradConfig::default(), store, None);
+        let pipe = PipelineHandle::new(
+            NaradConfig::default(),
+            store,
+            None,
+            dir.path().join("audio"),
+        );
         (dir, pipe)
+    }
+
+    #[test]
+    fn retained_dictation_stores_the_recognizer_samples() {
+        let dir = TempDir::new().expect("tempdir");
+        let mut cfg = NaradConfig::default();
+        cfg.history.retain_audio = true;
+        let store = HistoryStore::open(dir.path().join("t.db")).expect("open");
+        let audio = dir.path().join("audio");
+        let pipe = PipelineHandle::new(cfg, store, None, audio.clone());
+        let id = pipe
+            .record_dictation(
+                12,
+                "plain".into(),
+                "test".into(),
+                "hello".into(),
+                "hello".into(),
+                InsertOutcome::Inserted,
+                &[0.5],
+            )
+            .expect("record")
+            .expect("id");
+        let stored = pipe
+            .with_store(|store| store.get(id).map_err(|err| err.to_string()))
+            .expect("store")
+            .expect("row");
+        let wav = audio.join(format!("{id}.wav"));
+        assert_eq!(stored.audio_path.as_deref(), Some(wav.to_str().unwrap()));
+        let bytes = std::fs::read(wav).expect("wav");
+        assert_eq!(&bytes[44..], &[0x00, 0x40]);
     }
 
     fn mark_started(pipe: &PipelineHandle) {
@@ -1218,6 +1288,7 @@ mod tests {
             text.into(),
             text.into(),
             outcome,
+            &[],
         )
     }
 
@@ -1477,6 +1548,7 @@ mod tests {
                 "hello".into(),
                 "hello".into(),
                 InsertOutcome::Copied,
+                &[],
             )
             .expect("paused copy succeeds");
         assert!(copied.is_none());

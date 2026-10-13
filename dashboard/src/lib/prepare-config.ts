@@ -1,4 +1,4 @@
-import type { DashboardConfig } from "./config";
+import type { DashboardConfig, Replacement } from "./config";
 
 export type PreparedConfig =
   | { ok: true; config: DashboardConfig }
@@ -36,6 +36,16 @@ function roundedThreshold(value: unknown): number | null {
   return Math.round(value);
 }
 
+function cleanReplacements(pairs: Replacement[] | undefined): Replacement[] {
+  if (!Array.isArray(pairs)) return [];
+  return pairs
+    .map((pair) => ({
+      spoken: pair.spoken.trim(),
+      written: pair.written.trim(),
+    }))
+    .filter((pair) => pair.spoken.length > 0);
+}
+
 /** Config that should be passed to `save_config`, or a rejection. */
 export function prepareConfigForSave(config: ConfigDraft): PreparedConfig {
   const hold_tap_threshold_ms = roundedThreshold(config.activation.hold_tap_threshold_ms);
@@ -67,6 +77,7 @@ export function prepareConfigForSave(config: ConfigDraft): PreparedConfig {
         text_retention_days: optionalDays(config.history.text_retention_days),
         audio_retention_days: optionalDays(config.history.audio_retention_days),
       },
+      replacements: cleanReplacements(config.replacements),
     },
   };
 }

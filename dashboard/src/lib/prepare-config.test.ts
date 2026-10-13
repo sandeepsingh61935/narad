@@ -168,6 +168,25 @@ test("blank retention durations stay blank", () => {
   assert.equal(result.config.history.audio_retention_days, null);
 });
 
+test("a settings save keeps replacements and drops a blank spoken phrase", () => {
+  const input = defaultConfig();
+  input.replacements = [
+    { spoken: "  hi there  ", written: "  hello  " },
+    { spoken: "   ", written: "gone" },
+    { spoken: "cat", written: "fat cat" },
+  ];
+
+  const result = prepareConfigForSave(input);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(result.config.replacements, [
+    { spoken: "hi there", written: "hello" },
+    { spoken: "cat", written: "fat cat" },
+  ]);
+  assert.equal(result.config.activation.undo_last_hotkey, "Ctrl+Alt+Z");
+});
+
 test("a non-numeric threshold is rejected", () => {
   for (const hold_tap_threshold_ms of ["nope", "", "  ", Number.NaN, Number.POSITIVE_INFINITY, null]) {
     const input = defaultConfig();

@@ -1,4 +1,9 @@
 /** Mirrors dashboard src-tauri `DashboardConfig` (snake_case JSON). */
+export type Replacement = {
+  spoken: string;
+  written: string;
+};
+
 export type DashboardConfig = {
   activation: {
     dictate_hotkey: string;
@@ -29,6 +34,8 @@ export type DashboardConfig = {
     /** Days before audio files are removed. Null means keep audio forever. */
     audio_retention_days: number | null;
   };
+  /** Spoken → written phrases (FR-TXT-3). Empty until the user adds one. */
+  replacements: Replacement[];
 };
 
 export const ACTIVE_MODES = ["plain", "email", "bullet", "code"] as const;
@@ -61,5 +68,6 @@ export function defaultConfig(): DashboardConfig {
       text_retention_days: null,
       audio_retention_days: null,
     },
+    replacements: [],
   };
 }

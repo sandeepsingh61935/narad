@@ -14,6 +14,8 @@ pub struct DashboardConfig {
     pub general: GeneralConfig,
     pub models: ModelsConfig,
     pub history: HistoryConfig,
+    /// Spoken → written phrases (FR-TXT-3). Round-tripped so a save does not drop them.
+    pub replacements: Vec<Replacement>,
 }
 
 impl Default for DashboardConfig {
@@ -24,8 +26,16 @@ impl Default for DashboardConfig {
             general: GeneralConfig::default(),
             models: ModelsConfig::default(),
             history: HistoryConfig::default(),
+            replacements: Vec::new(),
         }
     }
+}
+
+/// One user replacement. Matching is case-insensitive and whole-phrase.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Replacement {
+    pub spoken: String,
+    pub written: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -262,6 +272,29 @@ noise_suppression = true
         assert_eq!(again.audio.auto_stop_silence_secs, 2);
         assert_eq!(again.audio.max_duration_secs, 300);
         assert_eq!(again.audio.input_target, "");
+    }
+
+    #[test]
+    fn reserialize_keeps_replacements() {
+        let raw = r#"
+[[replacements]]
+spoken = "hi there"
+written = "hello"
+
+[activation]
+dictate_hotkey = "Ctrl+Alt+D"
+"#;
+        let cfg: DashboardConfig = toml::from_str(raw).expect("parse");
+        assert_eq!(cfg.replacements.len(), 1);
+        assert_eq!(cfg.replacements[0].spoken, "hi there");
+        assert_eq!(cfg.replacements[0].written, "hello");
+        let text = toml::to_string_pretty(&cfg).expect("serialize");
+        assert!(text.contains("spoken = \"hi there\""));
+        assert!(text.contains("written = \"hello\""));
+        let again: DashboardConfig = toml::from_str(&text).expect("reparse");
+        assert_eq!(again.replacements, cfg.replacements);
+        assert_eq!(again.activation.paste_last_hotkey, "Ctrl+Alt+V");
+        assert_eq!(again.activation.undo_last_hotkey, "Ctrl+Alt+Z");
     }
 
     #[test]

@@ -13,6 +13,13 @@ use thiserror::Error;
 
 pub use entry::{HistoryEntry, InsertStatus, NewHistoryEntry};
 
+fn ms_value(ms: Option<i64>) -> rusqlite::types::Value {
+    match ms {
+        Some(ms) => rusqlite::types::Value::Integer(ms),
+        None => rusqlite::types::Value::Null,
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("database: {0}")]
@@ -30,6 +37,18 @@ pub struct PurgeStats {
     pub text_deleted: u32,
     /// Rows whose audio file was unlinked and `audio_path` cleared.
     pub audio_cleared: u32,
+}
+
+/// Optional filters for [`HistoryStore::find`]. An empty string is omitted.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HistoryFilter {
+    pub mode: String,
+    pub app_id: String,
+    pub src_lang: String,
+    /// Inclusive lower bound on `created_at`, Unix milliseconds. `None` omits it.
+    pub from_ms: Option<i64>,
+    /// Exclusive upper bound on `created_at`, Unix milliseconds. `None` omits it.
+    pub to_ms: Option<i64>,
 }
 
 /// History database: `entries` table plus FTS5 virtual table `entries_fts`.
@@ -146,6 +165,78 @@ impl HistoryStore {
             ",
         )?;
         let rows = stmt.query_map(params![query, limit, offset], row_to_entry)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    /// List or full-text search, narrowed by `filter` (FR-HIS-3).
+    ///
+    /// An empty `query` lists rows. Filters combine with AND. An empty filter field is omitted.
+    pub fn find(
+        &self,
+        query: &str,
+        filter: &HistoryFilter,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Vec<HistoryEntry>, StoreError> {
+        let columns = "
+            e.id, e.created_at, e.duration_ms, e.mode, e.src_lang, e.dst_lang,
+            e.asr_model, e.mt_model, e.llm_model, e.app_id,
+            e.raw_text, e.final_text, e.insert_status, e.cleanup_flagged,
+            e.audio_path, e.pinned
+        ";
+        let (sql, params_owned): (String, Vec<rusqlite::types::Value>) = if query.is_empty() {
+            (
+                format!(
+                    "SELECT {columns}
+                     FROM entries e
+                     WHERE (?1 = '' OR e.mode = ?1)
+                       AND (?2 = '' OR e.app_id = ?2)
+                       AND (?3 = '' OR e.src_lang = ?3)
+                       AND (?4 IS NULL OR e.created_at >= ?4)
+                       AND (?5 IS NULL OR e.created_at < ?5)
+                     ORDER BY e.created_at DESC, e.id DESC
+                     LIMIT ?6 OFFSET ?7"
+                ),
+                vec![
+                    filter.mode.clone().into(),
+                    filter.app_id.clone().into(),
+                    filter.src_lang.clone().into(),
+                    ms_value(filter.from_ms),
+                    ms_value(filter.to_ms),
+                    limit.into(),
+                    offset.into(),
+                ],
+            )
+        } else {
+            (
+                format!(
+                    "SELECT {columns}
+                     FROM entries e
+                     INNER JOIN entries_fts ON entries_fts.rowid = e.id
+                     WHERE entries_fts MATCH ?1
+                       AND (?2 = '' OR e.mode = ?2)
+                       AND (?3 = '' OR e.app_id = ?3)
+                       AND (?4 = '' OR e.src_lang = ?4)
+                       AND (?5 IS NULL OR e.created_at >= ?5)
+                       AND (?6 IS NULL OR e.created_at < ?6)
+                     ORDER BY e.created_at DESC, e.id DESC
+                     LIMIT ?7 OFFSET ?8"
+                ),
+                vec![
+                    query.to_owned().into(),
+                    filter.mode.clone().into(),
+                    filter.app_id.clone().into(),
+                    filter.src_lang.clone().into(),
+                    ms_value(filter.from_ms),
+                    ms_value(filter.to_ms),
+                    limit.into(),
+                    offset.into(),
+                ],
+            )
+        };
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params_owned), row_to_entry)?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(StoreError::from)
     }
@@ -517,5 +608,192 @@ mod tests {
             .audio_path
             .is_some());
         assert_eq!(store.list(0, 10).expect("list").len(), 2);
+    }
+
+    #[test]
+    fn empty_query_with_a_mode_returns_only_that_mode() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        let mut email = sample_new("hello mail", "hello mail");
+        email.mode = "email".into();
+        let mut plain = sample_new("hello note", "hello note");
+        plain.mode = "plain".into();
+        let email_id = store.insert(&email).expect("email");
+        store.insert(&plain).expect("plain");
+
+        let hits = store
+            .find(
+                "",
+                &HistoryFilter {
+                    mode: "email".into(),
+                    ..HistoryFilter::default()
+                },
+                0,
+                10,
+            )
+            .expect("find");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, email_id);
+        assert_eq!(hits[0].final_text, "hello mail");
+    }
+
+    #[test]
+    fn text_query_and_mode_both_apply() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        let mut email = sample_new("alpha mail", "alpha mail");
+        email.mode = "email".into();
+        let mut plain = sample_new("alpha note", "alpha note");
+        plain.mode = "plain".into();
+        let email_id = store.insert(&email).expect("email");
+        store.insert(&plain).expect("plain");
+
+        let hits = store
+            .find(
+                "alpha",
+                &HistoryFilter {
+                    mode: "email".into(),
+                    ..HistoryFilter::default()
+                },
+                0,
+                10,
+            )
+            .expect("find");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, email_id);
+    }
+
+    #[test]
+    fn app_filter_matches_the_stored_id_and_skips_a_missing_app() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        let mut terminal = sample_new("one", "one");
+        terminal.app_id = Some("org.gnome.Terminal".into());
+        let mut missing = sample_new("two", "two");
+        missing.app_id = None;
+        let mut editor = sample_new("three", "three");
+        editor.app_id = Some("org.gnome.gedit".into());
+        let terminal_id = store.insert(&terminal).expect("terminal");
+        store.insert(&missing).expect("missing");
+        store.insert(&editor).expect("editor");
+
+        let hits = store
+            .find(
+                "",
+                &HistoryFilter {
+                    app_id: "org.gnome.Terminal".into(),
+                    ..HistoryFilter::default()
+                },
+                0,
+                10,
+            )
+            .expect("find");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, terminal_id);
+        assert_eq!(hits[0].final_text, "one");
+    }
+
+    #[test]
+    fn language_filter_matches_source_language_only() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        let mut english = sample_new("hello", "hello");
+        english.src_lang = "en".into();
+        english.dst_lang = "hi".into();
+        let mut hindi = sample_new("namaste", "namaste");
+        hindi.src_lang = "hi".into();
+        hindi.dst_lang = "en".into();
+        let english_id = store.insert(&english).expect("english");
+        store.insert(&hindi).expect("hindi");
+
+        let hits = store
+            .find(
+                "",
+                &HistoryFilter {
+                    src_lang: "en".into(),
+                    ..HistoryFilter::default()
+                },
+                0,
+                10,
+            )
+            .expect("find");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, english_id);
+        assert_eq!(hits[0].final_text, "hello");
+    }
+
+    #[test]
+    fn created_at_window_includes_the_start_and_excludes_the_end() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        let before = store.insert(&sample_new("before", "before")).expect("before");
+        let start = store.insert(&sample_new("start", "start")).expect("start");
+        let middle = store.insert(&sample_new("middle", "middle")).expect("middle");
+        let end = store.insert(&sample_new("end", "end")).expect("end");
+        set_created_at(&store, before, 999);
+        set_created_at(&store, start, 1_000);
+        set_created_at(&store, middle, 1_500);
+        set_created_at(&store, end, 2_000);
+
+        let hits = store
+            .find(
+                "",
+                &HistoryFilter {
+                    from_ms: Some(1_000),
+                    to_ms: Some(2_000),
+                    ..HistoryFilter::default()
+                },
+                0,
+                10,
+            )
+            .expect("find");
+        let texts: Vec<_> = hits.iter().map(|row| row.final_text.as_str()).collect();
+        assert_eq!(texts, ["middle", "start"]);
+    }
+
+    #[test]
+    fn an_omitted_end_keeps_later_rows() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        let early = store.insert(&sample_new("early", "early")).expect("early");
+        let later = store.insert(&sample_new("later", "later")).expect("later");
+        set_created_at(&store, early, 1_000);
+        set_created_at(&store, later, 5_000);
+
+        let hits = store
+            .find(
+                "",
+                &HistoryFilter {
+                    from_ms: Some(1_000),
+                    ..HistoryFilter::default()
+                },
+                0,
+                10,
+            )
+            .expect("find");
+        let texts: Vec<_> = hits.iter().map(|row| row.final_text.as_str()).collect();
+        assert_eq!(texts, ["later", "early"]);
+    }
+
+    #[test]
+    fn mode_match_is_case_sensitive() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        let mut email = sample_new("hello mail", "hello mail");
+        email.mode = "email".into();
+        store.insert(&email).expect("email");
+
+        let hits = store
+            .find(
+                "",
+                &HistoryFilter {
+                    mode: "Email".into(),
+                    ..HistoryFilter::default()
+                },
+                0,
+                10,
+            )
+            .expect("find");
+        assert!(hits.is_empty());
     }
 }

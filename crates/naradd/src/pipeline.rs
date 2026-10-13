@@ -68,6 +68,8 @@ struct SessionRuntime {
     hold_epoch: u64,
     /// Cancel flag observed by the processing task.
     cancel: Arc<AtomicBool>,
+    /// Mode captured when this recording started. Menu changes apply next time.
+    utterance_mode: String,
     /// Latest app id from `ReportFocus`. Empty or never reported is `None`.
     focused_app: Option<String>,
     /// Focused app when this recording started. Written to history `app_id` (FR-CTX-1).
@@ -109,6 +111,7 @@ impl PipelineHandle {
                 state: Mutex::new(SessionRuntime {
                     dbus_state: SessionState::IDLE.to_string(),
                     mode: config.general.active_mode.clone(),
+                    utterance_mode: config.general.active_mode.clone(),
                     paused: false,
                     hud_visible: true,
                     capture: None,
@@ -360,6 +363,7 @@ impl PipelineHandle {
                     st.mode = m;
                 }
             }
+            st.utterance_mode = st.mode.clone();
             st.cancel.store(false, Ordering::SeqCst);
             snapshot_focus_at_start(&mut st);
         }
@@ -532,7 +536,7 @@ impl PipelineHandle {
             let started = st.listen_started.take();
             st.awaiting_hold_release = false;
             st.dbus_state = SessionState::PROCESSING.to_string();
-            (capture, started, st.mode.clone(), st.cancel.clone())
+            (capture, started, st.utterance_mode.clone(), st.cancel.clone())
         };
 
         audio::play_cue("stop", self.inner.config.audio.sounds_enabled);
@@ -611,14 +615,12 @@ impl PipelineHandle {
             return Ok(());
         }
 
-        if asr::is_hallucination(&text) {
+        let Some(final_text) = self.accepted_transcript(&text) else {
             info!(raw = %text, "hallucination filter dropped output");
             self.inner.processing.store(false, Ordering::SeqCst);
             self.set_state(SessionState::IDLE).await;
             return Ok(());
-        }
-
-        let final_text = text.clone();
+        };
         let terminal = self.focused_is_terminal();
         let outcome = insert::insert_text(&final_text, terminal).await;
         if matches!(outcome, InsertOutcome::Copied) {
@@ -644,6 +646,24 @@ impl PipelineHandle {
             }
         }
         Ok(())
+    }
+
+    /// Hallucination filter, then commands, replacements, and vocabulary (FR-TXT-1..4).
+    ///
+    /// Email, bullet, and code share this path. Code does not invent punctuation.
+    /// `raw` is kept separately for history. No translation and no cleanup.
+    /// DRIFT: `docs/ARCHITECTURE.md` shows the hallucination filter after commands.
+    fn accepted_transcript(&self, raw: &str) -> Option<String> {
+        if asr::is_hallucination(raw) {
+            return None;
+        }
+        let replacements = phrase_table(&self.inner.config.replacements);
+        let vocabulary = phrase_table(&self.inner.config.vocabulary);
+        Some(crate::text::apply_commands_replacements_then_vocabulary(
+            raw,
+            &replacements,
+            &vocabulary,
+        ))
     }
 
     /// Paste the newest history row's `final_text` (FR-INS-4).
@@ -958,6 +978,16 @@ impl PipelineHandle {
     }
 }
 
+fn phrase_table(pairs: &[crate::config::Replacement]) -> Vec<crate::text::Replacement> {
+    pairs
+        .iter()
+        .map(|pair| crate::text::Replacement {
+            spoken: pair.spoken.clone(),
+            written: pair.written.clone(),
+        })
+        .collect()
+}
+
 fn normalize_app_id(app_id: &str) -> Option<String> {
     if app_id.is_empty() {
         None
@@ -1061,6 +1091,40 @@ mod tests {
     use super::*;
     use narad_core::store::HistoryStore;
     use tempfile::TempDir;
+
+    #[test]
+    fn transcript_filters_hallucinations_then_formats() {
+        let mut cfg = NaradConfig::default();
+        cfg.replacements.push(crate::config::Replacement {
+            spoken: "hi".into(),
+            written: "hello".into(),
+        });
+        cfg.vocabulary.push(crate::config::Replacement {
+            spoken: "nar ad".into(),
+            written: "Narad".into(),
+        });
+        let dir = TempDir::new().expect("tempdir");
+        let store = HistoryStore::open(dir.path().join("t.db")).expect("open");
+        let pipe = PipelineHandle::new(cfg, store, None);
+
+        assert!(pipe.accepted_transcript("thanks for watching").is_none());
+        assert_eq!(
+            pipe.accepted_transcript("hi period").as_deref(),
+            Some("hello.")
+        );
+        assert_eq!(
+            pipe.accepted_transcript("nar ad").as_deref(),
+            Some("Narad")
+        );
+        assert_eq!(
+            pipe.accepted_transcript("camel case user name").as_deref(),
+            Some("userName")
+        );
+        assert_eq!(
+            pipe.accepted_transcript("hello world").as_deref(),
+            Some("hello world")
+        );
+    }
 
     fn test_pipe() -> (TempDir, PipelineHandle) {
         let dir = TempDir::new().expect("tempdir");

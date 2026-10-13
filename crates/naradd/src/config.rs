@@ -14,6 +14,8 @@ pub struct NaradConfig {
     pub general: GeneralConfig,
     pub models: ModelsConfig,
     pub history: HistoryConfig,
+    /// Spoken → written phrases (FR-TXT-3). Empty until the user adds one.
+    pub replacements: Vec<Replacement>,
 }
 
 impl Default for NaradConfig {
@@ -24,8 +26,16 @@ impl Default for NaradConfig {
             general: GeneralConfig::default(),
             models: ModelsConfig::default(),
             history: HistoryConfig::default(),
+            replacements: Vec::new(),
         }
     }
+}
+
+/// One user replacement. Matching is case-insensitive and whole-phrase.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Replacement {
+    pub spoken: String,
+    pub written: String,
 }
 
 /// Hotkeys and hold/tap discrimination (FR-ACT-1, FR-ACT-7).
@@ -204,6 +214,7 @@ mod tests {
         assert!(!cfg.history.retain_audio);
         assert_eq!(cfg.history.text_retention_days, None);
         assert_eq!(cfg.history.audio_retention_days, None);
+        assert!(cfg.replacements.is_empty());
     }
 
     #[test]
@@ -288,6 +299,33 @@ asr_english = "whisper-small-en"
         assert_eq!(cfg.history.audio_retention_days, None);
         assert_eq!(cfg.audio.input_target, "");
         assert!(!cfg.audio.noise_suppression);
+        assert!(cfg.replacements.is_empty());
+    }
+
+    #[test]
+    fn replacements_round_trip_and_missing_key_stays_empty() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"
+[[replacements]]
+spoken = "hi there"
+written = "hello"
+"#,
+        )
+        .expect("write");
+        let cfg = load(&path).expect("load");
+        assert_eq!(
+            cfg.replacements,
+            vec![Replacement {
+                spoken: "hi there".into(),
+                written: "hello".into(),
+            }]
+        );
+        let text = toml::to_string_pretty(&cfg).expect("serialize");
+        let again: NaradConfig = toml::from_str(&text).expect("parse");
+        assert_eq!(again.replacements, cfg.replacements);
     }
 
     #[test]

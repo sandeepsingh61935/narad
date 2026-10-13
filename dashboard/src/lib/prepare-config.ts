@@ -36,7 +36,7 @@ function roundedThreshold(value: unknown): number | null {
   return Math.round(value);
 }
 
-function cleanReplacements(pairs: Replacement[] | undefined): Replacement[] {
+function cleanPhrases(pairs: Replacement[] | undefined): Replacement[] {
   if (!Array.isArray(pairs)) return [];
   return pairs
     .map((pair) => ({
@@ -77,7 +77,8 @@ export function prepareConfigForSave(config: ConfigDraft): PreparedConfig {
         text_retention_days: optionalDays(config.history.text_retention_days),
         audio_retention_days: optionalDays(config.history.audio_retention_days),
       },
-      replacements: cleanReplacements(config.replacements),
+      replacements: cleanPhrases(config.replacements),
+      vocabulary: cleanPhrases(config.vocabulary),
     },
   };
 }

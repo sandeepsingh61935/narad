@@ -16,6 +16,8 @@ pub struct DashboardConfig {
     pub history: HistoryConfig,
     /// Spoken → written phrases (FR-TXT-3). Round-tripped so a save does not drop them.
     pub replacements: Vec<Replacement>,
+    /// Names and jargon applied after replacements (FR-TXT-2).
+    pub vocabulary: Vec<Replacement>,
 }
 
 impl Default for DashboardConfig {
@@ -27,6 +29,7 @@ impl Default for DashboardConfig {
             models: ModelsConfig::default(),
             history: HistoryConfig::default(),
             replacements: Vec::new(),
+            vocabulary: Vec::new(),
         }
     }
 }
@@ -295,6 +298,23 @@ dictate_hotkey = "Ctrl+Alt+D"
         assert_eq!(again.replacements, cfg.replacements);
         assert_eq!(again.activation.paste_last_hotkey, "Ctrl+Alt+V");
         assert_eq!(again.activation.undo_last_hotkey, "Ctrl+Alt+Z");
+        assert!(again.vocabulary.is_empty());
+    }
+
+    #[test]
+    fn reserialize_keeps_vocabulary() {
+        let raw = r#"
+[[vocabulary]]
+spoken = "nar ad"
+written = "Narad"
+"#;
+        let cfg: DashboardConfig = toml::from_str(raw).expect("parse");
+        assert_eq!(cfg.vocabulary[0].written, "Narad");
+        let text = toml::to_string_pretty(&cfg).expect("serialize");
+        assert!(text.contains("[[vocabulary]]"));
+        let again: DashboardConfig = toml::from_str(&text).expect("reparse");
+        assert_eq!(again.vocabulary, cfg.vocabulary);
+        assert!(again.replacements.is_empty());
     }
 
     #[test]

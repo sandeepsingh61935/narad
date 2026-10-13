@@ -185,6 +185,23 @@ test("a settings save keeps replacements and drops a blank spoken phrase", () =>
     { spoken: "cat", written: "fat cat" },
   ]);
   assert.equal(result.config.activation.undo_last_hotkey, "Ctrl+Alt+Z");
+  assert.deepEqual(result.config.vocabulary, []);
+});
+
+test("a settings save keeps vocabulary phrases", () => {
+  const input = defaultConfig();
+  input.vocabulary = [
+    { spoken: "  nar ad ", written: " Narad " },
+    { spoken: " ", written: "nope" },
+  ];
+  input.replacements = [{ spoken: "hi", written: "hello" }];
+
+  const result = prepareConfigForSave(input);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(result.config.vocabulary, [{ spoken: "nar ad", written: "Narad" }]);
+  assert.deepEqual(result.config.replacements, [{ spoken: "hi", written: "hello" }]);
 });
 
 test("a non-numeric threshold is rejected", () => {

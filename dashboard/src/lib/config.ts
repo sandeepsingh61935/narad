@@ -36,6 +36,8 @@ export type DashboardConfig = {
   };
   /** Spoken → written phrases (FR-TXT-3). Empty until the user adds one. */
   replacements: Replacement[];
+  /** Names and jargon applied after replacements (FR-TXT-2). */
+  vocabulary: Replacement[];
 };
 
 export const ACTIVE_MODES = ["plain", "email", "bullet", "code"] as const;
@@ -69,5 +71,6 @@ export function defaultConfig(): DashboardConfig {
       audio_retention_days: null,
     },
     replacements: [],
+    vocabulary: [],
   };
 }

@@ -43,6 +43,7 @@ const DaemonIfaceXml = `
     <property name="Mode" type="s" access="read"/>
     <property name="Paused" type="b" access="readwrite"/>
     <property name="HudVisible" type="b" access="readwrite"/>
+    <property name="OutcomeDetail" type="s" access="read"/>
   </interface>
 </node>`;
 
@@ -657,7 +658,7 @@ export default class NaradExtension extends Extension {
 
     _applyState(state) {
         const known = [
-            'idle', 'listening', 'processing', 'inserted', 'copied', 'cancelled', 'error',
+            'idle', 'listening', 'processing', 'inserted', 'copied', 'cancelled', 'error', 'undone',
         ];
         if (!known.includes(state)) {
             console.warn(`[narad] unknown state "${state}", treating as idle`);
@@ -759,23 +760,58 @@ export default class NaradExtension extends Extension {
             this._scheduleIdle(OUTCOME_IDLE_MS);
             break;
 
-        case 'error':
+        case 'undone': {
+            const deleted = this._outcomeDetail();
+            this._anchor.add_style_class_name('narad-hud-anchor-copied');
+            this._anchorGlyph.text = '↶';
+            this._setAnchorChild(this._anchorGlyph);
+            this._pill.visible = true;
+            this._pill.add_style_class_name('narad-hud-pill-copied');
+            this._pillPrimary.style_class = 'narad-hud-text-success';
+            this._pillPrimary.text = 'Undone';
+            if (deleted) {
+                this._pillSep1.visible = true;
+                this._pillSecondary.visible = true;
+                this._pillSecondary.style_class = 'narad-hud-text-muted';
+                this._pillSecondary.text = deleted;
+            }
+            this._scheduleIdle(OUTCOME_IDLE_MS);
+            break;
+        }
+
+        case 'error': {
+            const why = this._outcomeDetail();
             this._anchor.add_style_class_name('narad-hud-anchor-error');
             this._anchorIcon.icon_name = 'dialog-warning-symbolic';
             this._setAnchorChild(this._anchorIcon);
             this._pill.visible = true;
             this._pill.add_style_class_name('narad-hud-pill-error');
             this._pillPrimary.style_class = 'narad-hud-text-error';
-            this._pillPrimary.text = 'Microphone unavailable';
-            this._pillSep1.visible = true;
-            this._pillSecondary.visible = true;
-            this._pillSecondary.style_class = 'narad-hud-text-muted';
-            this._pillSecondary.text = 'Check audio settings';
+            this._pillPrimary.text = why || 'Microphone unavailable';
+            if (!why) {
+                this._pillSep1.visible = true;
+                this._pillSecondary.visible = true;
+                this._pillSecondary.style_class = 'narad-hud-text-muted';
+                this._pillSecondary.text = 'Check audio settings';
+            }
             this._scheduleIdle(3200);
             break;
         }
+        }
 
         this._refreshPausedCue();
+    }
+
+    _outcomeDetail() {
+        if (!this._proxy)
+            return '';
+        try {
+            const detail = this._proxy.OutcomeDetail;
+            return typeof detail === 'string' ? detail : '';
+        } catch (e) {
+            console.warn(`[narad] read OutcomeDetail failed: ${e.message}`);
+            return '';
+        }
     }
 
     _applyPaused(paused) {

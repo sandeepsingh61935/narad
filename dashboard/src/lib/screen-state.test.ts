@@ -33,6 +33,7 @@ function input(overrides: Partial<HistoryScreenInput> = {}): HistoryScreenInput 
     mode: "plain",
     modelId: "parakeet-ctc-110m-int8",
     query: "",
+    narrowed: false,
     rows: [],
     selectedId: null,
     textView: "final",
@@ -62,6 +63,11 @@ test("paused empty archive says History paused", () => {
   assert.equal(screen.kind, "empty");
   if (screen.kind !== "empty") return;
   assert.equal(screen.status, "History paused");
+});
+
+test("a mode filter with no rows is not an empty archive", () => {
+  const screen = historyScreen(input({ narrowed: true }));
+  assert.equal(screen.kind, "no-matches");
 });
 
 test("a search with no rows offers Clear search", () => {

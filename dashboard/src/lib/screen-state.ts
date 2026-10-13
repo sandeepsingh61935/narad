@@ -7,6 +7,8 @@ export type HistoryScreenInput = {
   mode: string;
   modelId: string;
   query: string;
+  /** True when a date, mode, app, or language filter is set. */
+  narrowed: boolean;
   rows: HistoryEntry[];
   selectedId: number | null;
   textView: TextView;
@@ -154,7 +156,7 @@ export function historyScreen(input: HistoryScreenInput): HistoryScreen {
       detail: detailView(input),
     };
   }
-  if (input.query.length > 0) {
+  if (input.query.length > 0 || input.narrowed) {
     return {
       kind: "no-matches",
       status: sessionStatus(input),

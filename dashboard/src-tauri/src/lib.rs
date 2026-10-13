@@ -21,10 +21,29 @@ async fn list_history(
     query: String,
     offset: u32,
     limit: u32,
+    from_day: Option<String>,
+    to_day: Option<String>,
+    mode: Option<String>,
+    app_id: Option<String>,
+    src_lang: Option<String>,
 ) -> Result<Vec<HistoryEntry>, String> {
+    let from_day = from_day.unwrap_or_default();
+    let to_day = to_day.unwrap_or_default();
+    let mode = mode.unwrap_or_default();
+    let app_id = app_id.unwrap_or_default();
+    let src_lang = src_lang.unwrap_or_default();
     daemon_proxy()
         .await?
-        .history(&query, offset, limit)
+        .history(
+            &query,
+            offset,
+            limit,
+            &from_day,
+            &to_day,
+            &mode,
+            &app_id,
+            &src_lang,
+        )
         .await
         .map_err(|e| format!("History: {e}"))
 }

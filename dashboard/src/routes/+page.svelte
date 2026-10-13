@@ -30,6 +30,12 @@
 
   let query = $state("");
   let appliedQuery = $state("");
+  let fromDay = $state("");
+  let toDay = $state("");
+  let modeFilter = $state("");
+  let appFilter = $state("");
+  let langFilter = $state("");
+  let appliedNarrowed = $state(false);
   let entries = $state<HistoryEntry[]>([]);
   let loading = $state(true);
   let reachable = $state(true);
@@ -52,6 +58,7 @@
       mode,
       modelId,
       query: appliedQuery,
+      narrowed: appliedNarrowed,
       rows: entries,
       selectedId,
       textView,
@@ -62,7 +69,6 @@
   const selectedRow = $derived(
     screen.kind === "results" ? screen.rows.find((row) => row.id === selectedId) : undefined,
   );
-  const pinnedCount = $derived(entries.filter((entry) => entry.pinned).length);
   const selectedEntry = $derived(detail == null ? undefined : entryById(detail.id));
   const groups = $derived.by(() => groupRows(screen.kind === "results" ? screen.rows : []));
   const statusLabel = $derived(
@@ -117,15 +123,28 @@
     return `${Math.round(words / (entry.duration_ms / 60_000))} WPM`;
   }
 
+  function filterArgs() {
+    return {
+      from_day: fromDay.trim(),
+      to_day: toDay.trim(),
+      mode: modeFilter.trim(),
+      app_id: appFilter.trim(),
+      src_lang: langFilter.trim(),
+    };
+  }
+
   async function loadHistory() {
     loading = true;
     actionMessage = null;
     actionError = null;
     const trimmed = query.trim();
+    const filters = filterArgs();
+    const narrowed = Object.values(filters).some((value) => value.length > 0);
     const listed = invoke<HistoryEntry[]>("list_history", {
       query: trimmed,
       offset: 0,
       limit: PAGE_SIZE,
+      ...filters,
     });
     const configured = invoke<DashboardConfig>("load_config").then(
       (config) => config,
@@ -135,6 +154,7 @@
       entries = await listed;
       reachable = true;
       appliedQuery = trimmed;
+      appliedNarrowed = narrowed;
       if (selectedId != null && !entries.some((entry) => entry.id === selectedId)) {
         selectedId = null;
         textView = "final";
@@ -151,12 +171,18 @@
       } catch {
         // A failed status read is not evidence the session is unpaused.
       }
-    } catch {
-      entries = [];
-      selectedId = null;
-      textView = "final";
-      reachable = false;
-      daemonBannerOpen = true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("invalid date")) {
+        actionError = message;
+        reachable = true;
+      } else {
+        entries = [];
+        selectedId = null;
+        textView = "final";
+        reachable = false;
+        daemonBannerOpen = true;
+      }
       await configured;
     } finally {
       loading = false;
@@ -261,6 +287,15 @@
 
   function clearSearch() {
     query = "";
+    fromDay = "";
+    toDay = "";
+    modeFilter = "";
+    appFilter = "";
+    langFilter = "";
+    void loadHistory();
+  }
+
+  function onFilterCommit() {
     void loadHistory();
   }
 
@@ -358,7 +393,7 @@
       id={SEARCH_ID}
       class="w-full bg-transparent border-none outline-none font-body-default text-body-default text-on-surface placeholder:text-on-surface-variant/60"
       type="search"
-      placeholder="Search transcripts, apps, or tags... (Press / )"
+      placeholder="Search transcripts"
       bind:value={query}
       autocomplete="off"
       spellcheck="false"
@@ -383,26 +418,44 @@
       </button>
     </div>
     <div class="flex items-center gap-space-xs overflow-x-auto pb-0.5 text-on-surface-variant font-body-muted text-body-muted">
-      <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-surface-container-high text-on-surface border border-outline-variant/40 shrink-0">
-        <span>All Dates</span>
-        <span class="material-symbols-outlined text-[14px]">expand_more</span>
-      </span>
-      <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-surface-container text-on-surface-variant border border-outline-variant/30 shrink-0">
-        <span>Mode: All</span>
-        <span class="material-symbols-outlined text-[14px]">expand_more</span>
-      </span>
-      <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-surface-container text-on-surface-variant border border-outline-variant/30 shrink-0">
-        <span>App: All</span>
-        <span class="material-symbols-outlined text-[14px]">expand_more</span>
-      </span>
-      <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-surface-container text-on-surface-variant border border-outline-variant/30 shrink-0">
-        <span>Lang: All</span>
-        <span class="material-symbols-outlined text-[14px]">expand_more</span>
-      </span>
-      <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-surface-container text-on-surface-variant border border-outline-variant/30 shrink-0">
-        <span class="material-symbols-outlined text-[14px]">star</span>
-        <span>Pinned ({pinnedCount})</span>
-      </span>
+      <input
+        class="px-2.5 py-1 rounded bg-surface-container-high text-on-surface border border-outline-variant/40 shrink-0"
+        type="date"
+        aria-label="From day"
+        bind:value={fromDay}
+        onchange={onFilterCommit}
+      />
+      <input
+        class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0"
+        type="date"
+        aria-label="To day"
+        bind:value={toDay}
+        onchange={onFilterCommit}
+      />
+      <input
+        class="w-24 px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0"
+        type="text"
+        aria-label="Mode"
+        placeholder="Mode"
+        bind:value={modeFilter}
+        onchange={onFilterCommit}
+      />
+      <input
+        class="w-40 px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0"
+        type="text"
+        aria-label="App id"
+        placeholder="App id"
+        bind:value={appFilter}
+        onchange={onFilterCommit}
+      />
+      <input
+        class="w-24 px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0"
+        type="text"
+        aria-label="Source language"
+        placeholder="Language"
+        bind:value={langFilter}
+        onchange={onFilterCommit}
+      />
     </div>
   </div>
 {/snippet}

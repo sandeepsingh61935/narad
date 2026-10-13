@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
             limit,
         } => {
             let rows = proxy
-                .history(&query, offset, limit)
+                .history(&query, offset, limit, "", "", "", "", "")
                 .await
                 .context("History")?;
             print_history(&rows);

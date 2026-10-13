@@ -4,6 +4,7 @@ use narad_core::store::HistoryEntry as CoreHistoryEntry;
 use narad_dbus::HistoryEntry;
 use zbus::{interface, object_server::SignalEmitter};
 
+use crate::history_days::history_filter;
 use crate::pipeline::PipelineHandle;
 
 pub struct DaemonIpc {
@@ -82,18 +83,25 @@ impl DaemonIpc {
         query: &str,
         offset: u32,
         limit: u32,
+        from_day: &str,
+        to_day: &str,
+        mode: &str,
+        app_id: &str,
+        src_lang: &str,
     ) -> zbus::fdo::Result<Vec<HistoryEntry>> {
+        let prepared = history_filter(from_day, to_day, mode, app_id, src_lang)
+            .map_err(zbus::fdo::Error::Failed)?;
+        if prepared.match_none {
+            return Ok(Vec::new());
+        }
         self.pipeline
             .with_store(|store| {
-                let rows = if query.is_empty() {
-                    store.list(offset, limit)
-                } else {
-                    store.search(query, offset, limit)
-                }
-                .map_err(|e| e.to_string())?;
+                let rows = store
+                    .find(query, &prepared.filter, offset, limit)
+                    .map_err(|e| e.to_string())?;
                 Ok(rows.iter().map(core_history_to_dbus).collect())
             })
-            .map_err(|e| zbus::fdo::Error::Failed(e))
+            .map_err(zbus::fdo::Error::Failed)
     }
 
     async fn reinsert_entry(&self, id: i64) -> zbus::fdo::Result<()> {

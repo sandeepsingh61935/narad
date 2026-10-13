@@ -4,6 +4,7 @@ mod asr;
 mod audio;
 mod config;
 mod denoise;
+mod history_days;
 mod hotkeys;
 mod insert;
 mod ipc;

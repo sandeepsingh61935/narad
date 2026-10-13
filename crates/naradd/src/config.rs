@@ -16,6 +16,8 @@ pub struct NaradConfig {
     pub history: HistoryConfig,
     /// Spoken → written phrases (FR-TXT-3). Empty until the user adds one.
     pub replacements: Vec<Replacement>,
+    /// Post-correction names and jargon (FR-TXT-2). Applied after replacements.
+    pub vocabulary: Vec<Replacement>,
 }
 
 impl Default for NaradConfig {
@@ -27,6 +29,7 @@ impl Default for NaradConfig {
             models: ModelsConfig::default(),
             history: HistoryConfig::default(),
             replacements: Vec::new(),
+            vocabulary: Vec::new(),
         }
     }
 }
@@ -215,6 +218,7 @@ mod tests {
         assert_eq!(cfg.history.text_retention_days, None);
         assert_eq!(cfg.history.audio_retention_days, None);
         assert!(cfg.replacements.is_empty());
+        assert!(cfg.vocabulary.is_empty());
     }
 
     #[test]
@@ -300,6 +304,7 @@ asr_english = "whisper-small-en"
         assert_eq!(cfg.audio.input_target, "");
         assert!(!cfg.audio.noise_suppression);
         assert!(cfg.replacements.is_empty());
+        assert!(cfg.vocabulary.is_empty());
     }
 
     #[test]
@@ -326,6 +331,25 @@ written = "hello"
         let text = toml::to_string_pretty(&cfg).expect("serialize");
         let again: NaradConfig = toml::from_str(&text).expect("parse");
         assert_eq!(again.replacements, cfg.replacements);
+
+        fs::write(
+            &path,
+            r#"
+[[vocabulary]]
+spoken = "nar ad"
+written = "Narad"
+"#,
+        )
+        .expect("write");
+        let cfg = load(&path).expect("load");
+        assert_eq!(
+            cfg.vocabulary,
+            vec![Replacement {
+                spoken: "nar ad".into(),
+                written: "Narad".into(),
+            }]
+        );
+        assert!(cfg.replacements.is_empty());
     }
 
     #[test]

@@ -29,8 +29,22 @@ pub fn apply_commands_then_replacements(raw: &str, pairs: &[Replacement]) -> Str
     render(&replace_words(parse_events(raw), pairs))
 }
 
+/// Commands, then replacements, then vocabulary. Neither table scans written text.
+pub fn apply_commands_replacements_then_vocabulary(
+    raw: &str,
+    replacements: &[Replacement],
+    vocabulary: &[Replacement],
+) -> String {
+    let after_commands = parse_events(raw);
+    let after_replacements = replace_words(after_commands, replacements);
+    render(&replace_words(after_replacements, vocabulary))
+}
+
 enum Event {
+    /// A spoken word that later phrase tables may still match.
     Word(String),
+    /// Replacement or vocabulary output. Later tables must not scan it.
+    Literal(String),
     NewLine,
     NewParagraph,
     Period,
@@ -103,12 +117,12 @@ fn replace_words(mut events: Vec<Event>, pairs: &[Replacement]) -> Vec<Event> {
         };
         events.splice(
             index..index + width,
-            std::iter::once(Event::Word(written)),
+            std::iter::once(Event::Literal(written)),
         );
         index += 1;
     }
     events.retain(|event| match event {
-        Event::Word(text) => !text.is_empty(),
+        Event::Word(text) | Event::Literal(text) => !text.is_empty(),
         _ => true,
     });
     events
@@ -153,7 +167,7 @@ fn render(events: &[Event]) -> String {
     let mut out = Output::default();
     for event in events {
         match event {
-            Event::Word(word) => out.push_word(word),
+            Event::Word(word) | Event::Literal(word) => out.push_word(word),
             Event::NewLine => out.apply(Command::NewLine),
             Event::NewParagraph => out.apply(Command::NewParagraph),
             Event::Period => out.apply(Command::Period),
@@ -384,6 +398,32 @@ mod tests {
         assert_eq!(
             apply_commands_then_replacements("new york new line city", &city),
             "NY\ncity"
+        );
+    }
+
+    #[test]
+    fn vocabulary_runs_after_replacements_and_does_not_rewrite_them() {
+        let replacements = [pair("big apple", "New York"), pair("ny", "new york")];
+        let vocabulary = [pair("new york", "NYC"), pair("york", "York")];
+        assert_eq!(
+            apply_commands_replacements_then_vocabulary(
+                "visit the big apple period",
+                &replacements,
+                &vocabulary
+            ),
+            "visit the New York."
+        );
+        assert_eq!(
+            apply_commands_replacements_then_vocabulary("ny", &replacements, &vocabulary),
+            "new york"
+        );
+        assert_eq!(
+            apply_commands_replacements_then_vocabulary(
+                "new york city",
+                &[],
+                &[pair("new york city", "NYC"), pair("new york", "NY")]
+            ),
+            "NYC"
         );
     }
 }

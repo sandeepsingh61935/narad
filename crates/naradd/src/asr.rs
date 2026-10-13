@@ -11,6 +11,11 @@ use tracing::{debug, info, warn};
 /// Default pack id (REQUIREMENTS §8 decision #1).
 pub const DEFAULT_ASR_ID: &str = "parakeet-ctc-110m-int8";
 
+/// No pack in this phase has a hotword path. Parakeet CTC stays post-correction only (FR-TXT-2).
+pub fn supports_vocabulary_bias(_model_id: &str) -> bool {
+    false
+}
+
 /// Warm-loaded English CTC recogniser.
 pub struct AsrEngine {
     recognizer: OfflineRecognizer,
@@ -313,6 +318,12 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parakeet_ctc_has_no_vocabulary_bias() {
+        assert!(!supports_vocabulary_bias(DEFAULT_ASR_ID));
+        assert!(!supports_vocabulary_bias("parakeet-ctc-110m-int8"));
+    }
 
     #[test]
     fn hallucination_filter_catches_phantoms() {

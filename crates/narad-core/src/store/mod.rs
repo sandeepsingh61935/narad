@@ -28,6 +28,8 @@ pub enum StoreError {
     InvalidInsertStatus,
     #[error("system time before Unix epoch")]
     InvalidTimestamp,
+    #[error("no history row {0}")]
+    Missing(i64),
 }
 
 /// How many rows a retention pass changed (FR-HIS-7).
@@ -241,10 +243,27 @@ impl HistoryStore {
             .map_err(StoreError::from)
     }
 
+    /// Record the retained WAV path for an existing row.
+    pub fn set_audio_path(&mut self, id: i64, path: &str) -> Result<(), StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE entries SET audio_path = ?1 WHERE id = ?2",
+            params![path, id],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::Missing(id));
+        }
+        Ok(())
+    }
+
     /// Delete entries by id. Returns the number of rows removed.
     pub fn delete(&mut self, ids: &[i64]) -> Result<u32, StoreError> {
         if ids.is_empty() {
             return Ok(0);
+        }
+        for id in ids {
+            if let Some(path) = self.get(*id)?.and_then(|entry| entry.audio_path) {
+                let _ = unlink_audio(&path);
+            }
         }
         let mut deleted = 0u32;
         let tx = self.conn.transaction()?;
@@ -726,9 +745,13 @@ mod tests {
     fn created_at_window_includes_the_start_and_excludes_the_end() {
         let file = NamedTempFile::new().expect("temp db");
         let mut store = HistoryStore::open(file.path()).expect("open");
-        let before = store.insert(&sample_new("before", "before")).expect("before");
+        let before = store
+            .insert(&sample_new("before", "before"))
+            .expect("before");
         let start = store.insert(&sample_new("start", "start")).expect("start");
-        let middle = store.insert(&sample_new("middle", "middle")).expect("middle");
+        let middle = store
+            .insert(&sample_new("middle", "middle"))
+            .expect("middle");
         let end = store.insert(&sample_new("end", "end")).expect("end");
         set_created_at(&store, before, 999);
         set_created_at(&store, start, 1_000);
@@ -795,5 +818,76 @@ mod tests {
             )
             .expect("find");
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn deleting_a_row_removes_its_wav() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wav = dir.path().join("7.wav");
+        std::fs::write(&wav, b"speech").expect("wav");
+        let mut store = HistoryStore::open(dir.path().join("t.db")).expect("open");
+        let mut entry = sample_new("hello", "hello");
+        entry.audio_path = Some(wav.display().to_string());
+        let id = store.insert(&entry).expect("insert");
+
+        let removed = store.delete(&[id]).expect("delete");
+        assert_eq!(removed, 1);
+        assert!(store.get(id).expect("get").is_none());
+        assert!(!wav.exists());
+    }
+
+    #[test]
+    fn deleting_a_row_with_a_missing_wav_still_removes_the_row() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wav = dir.path().join("missing.wav");
+        let mut store = HistoryStore::open(dir.path().join("t.db")).expect("open");
+        let mut entry = sample_new("hello", "hello");
+        entry.audio_path = Some(wav.display().to_string());
+        let id = store.insert(&entry).expect("insert");
+
+        let removed = store.delete(&[id]).expect("delete");
+        assert_eq!(removed, 1);
+        assert!(store.get(id).expect("get").is_none());
+    }
+
+    #[test]
+    fn deleting_a_row_removes_it_when_the_wav_cannot_be_unlinked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blocked = dir.path().join("not-a-file");
+        std::fs::create_dir(&blocked).expect("dir");
+        let mut store = HistoryStore::open(dir.path().join("t.db")).expect("open");
+        let mut entry = sample_new("hello", "hello");
+        entry.audio_path = Some(blocked.display().to_string());
+        let id = store.insert(&entry).expect("insert");
+
+        let removed = store.delete(&[id]).expect("delete");
+        assert_eq!(removed, 1);
+        assert!(store.get(id).expect("get").is_none());
+        assert!(blocked.is_dir());
+    }
+
+    #[test]
+    fn set_audio_path_is_what_get_returns() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = HistoryStore::open(dir.path().join("t.db")).expect("open");
+        let id = store.insert(&sample_new("hello", "hello")).expect("insert");
+        let path = dir.path().join("1.wav");
+
+        store
+            .set_audio_path(id, path.to_str().unwrap())
+            .expect("set");
+
+        let row = store.get(id).expect("get").expect("row");
+        assert_eq!(row.audio_path.as_deref(), Some(path.to_str().unwrap()));
+    }
+
+    #[test]
+    fn set_audio_path_on_a_missing_row_is_an_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = HistoryStore::open(dir.path().join("t.db")).expect("open");
+        let err = store
+            .set_audio_path(9, dir.path().join("9.wav").to_str().unwrap())
+            .expect_err("missing");
+        assert!(err.to_string().contains("9"));
     }
 }

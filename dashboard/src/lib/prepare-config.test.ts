@@ -72,6 +72,7 @@ test("a settings save keeps the paste-last hotkey", () => {
   if (!result.ok) return;
   assert.equal(result.config.activation.dictate_hotkey, "Ctrl+Alt+Space");
   assert.equal(result.config.activation.paste_last_hotkey, "Ctrl+Alt+V");
+  assert.equal(result.config.activation.undo_last_hotkey, "Ctrl+Alt+Z");
   assert.equal(result.config.activation.hold_tap_threshold_ms, 250);
 });
 

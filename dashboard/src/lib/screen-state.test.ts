@@ -154,6 +154,32 @@ test("insert status maps to Inserted, Copied, and Not inserted", () => {
   );
 });
 
+test("an undone HUD line includes the deleted text", () => {
+  assert.deepEqual(hudLine({ state: "undone", deleted: "café" }), {
+    state: "undone",
+    primary: "Undone",
+    deleted: "café",
+  });
+  assert.deepEqual(hudLine({ state: "inserted" }), {
+    state: "inserted",
+    primary: "Inserted",
+  });
+  assert.deepEqual(hudLine({ state: "copied" }), {
+    state: "copied",
+    primary: "Copied to clipboard",
+    reason: "No text field focused",
+  });
+  assert.deepEqual(hudLine({ state: "cancelled" }), {
+    state: "cancelled",
+    primary: "Cancelled",
+  });
+  assert.deepEqual(hudLine({ state: "error" }), {
+    state: "error",
+    primary: "Microphone unavailable",
+    recovery: "Check audio settings",
+  });
+});
+
 test("a supplied error primary replaces the microphone sentence", () => {
   assert.deepEqual(hudLine({ state: "error", errorPrimary: "Portal denied" }), {
     state: "error",

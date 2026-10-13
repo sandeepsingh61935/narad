@@ -84,13 +84,16 @@ export type HudLine =
   | { state: "inserted"; primary: "Inserted" }
   | { state: "copied"; primary: "Copied to clipboard"; reason: "No text field focused" }
   | { state: "cancelled"; primary: "Cancelled" }
-  | { state: "error"; primary: string; recovery: string };
+  | { state: "error"; primary: string; recovery: string }
+  | { state: "undone"; primary: "Undone"; deleted: string };
 
 export type HudInput = {
   state: HudLine["state"];
   mode?: string;
   elapsed?: string;
   errorPrimary?: string | null;
+  /** Text removed by undo. Only the undone line reads this. */
+  deleted?: string | null;
 };
 
 export function hudLine(input: HudInput): HudLine {
@@ -119,6 +122,12 @@ export function hudLine(input: HudInput): HudLine {
             ? input.errorPrimary
             : "Microphone unavailable",
         recovery: "Check audio settings",
+      };
+    case "undone":
+      return {
+        state: "undone",
+        primary: "Undone",
+        deleted: input.deleted ?? "",
       };
   }
 }

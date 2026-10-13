@@ -3,6 +3,7 @@ export type DashboardConfig = {
   activation: {
     dictate_hotkey: string;
     paste_last_hotkey: string;
+    undo_last_hotkey: string;
     hold_tap_threshold_ms: number;
   };
   audio: {
@@ -39,6 +40,7 @@ export function defaultConfig(): DashboardConfig {
     activation: {
       dictate_hotkey: "Ctrl+Alt+Space",
       paste_last_hotkey: "Ctrl+Alt+V",
+      undo_last_hotkey: "Ctrl+Alt+Z",
       hold_tap_threshold_ms: 250,
     },
     audio: {

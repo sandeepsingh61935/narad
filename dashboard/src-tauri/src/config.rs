@@ -34,7 +34,14 @@ pub struct ActivationConfig {
     pub dictate_hotkey: String,
     /// Press-only paste of the newest final text (FR-INS-4). Round-tripped so a save does not drop it.
     pub paste_last_hotkey: String,
+    /// Press-only undo of the last insertion (FR-INS-5). Round-tripped so a save does not drop it.
+    #[serde(default = "default_undo_last_hotkey")]
+    pub undo_last_hotkey: String,
     pub hold_tap_threshold_ms: u64,
+}
+
+fn default_undo_last_hotkey() -> String {
+    "Ctrl+Alt+Z".to_string()
 }
 
 impl Default for ActivationConfig {
@@ -42,6 +49,7 @@ impl Default for ActivationConfig {
         Self {
             dictate_hotkey: "Ctrl+Alt+Space".to_string(),
             paste_last_hotkey: "Ctrl+Alt+V".to_string(),
+            undo_last_hotkey: "Ctrl+Alt+Z".to_string(),
             hold_tap_threshold_ms: 250,
         }
     }

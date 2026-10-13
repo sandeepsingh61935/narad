@@ -619,7 +619,11 @@ impl PipelineHandle {
         }
 
         let final_text = text.clone();
-        let outcome = insert::insert_text(&final_text, false).await;
+        let terminal = self.focused_is_terminal();
+        let outcome = insert::insert_text(&final_text, terminal).await;
+        if matches!(outcome, InsertOutcome::Copied) {
+            self.set_outcome_detail(insert::paste_hint(terminal));
+        }
         let history_id =
             self.record_dictation(duration_ms, mode, model_id, text, final_text, outcome)?;
         if let Some(id) = history_id {
@@ -652,7 +656,11 @@ impl PipelineHandle {
             self.schedule_idle_after(Duration::from_millis(800));
             return Ok(());
         };
-        let outcome = insert::insert_text(&text, false).await;
+        let terminal = self.focused_is_terminal();
+        let outcome = insert::insert_text(&text, terminal).await;
+        if matches!(outcome, InsertOutcome::Copied) {
+            self.set_outcome_detail(insert::paste_hint(terminal));
+        }
         if matches!(outcome, InsertOutcome::Inserted) {
             if let Ok(mut st) = self.inner.state.lock() {
                 note_paste_focus(&mut st, &text);
@@ -768,7 +776,11 @@ impl PipelineHandle {
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("entry {id} not found"))?
         };
-        let outcome = insert::insert_text(&entry.final_text, false).await;
+        let terminal = self.focused_is_terminal();
+        let outcome = insert::insert_text(&entry.final_text, terminal).await;
+        if matches!(outcome, InsertOutcome::Copied) {
+            self.set_outcome_detail(insert::paste_hint(terminal));
+        }
         if matches!(outcome, InsertOutcome::Inserted) {
             if let Ok(mut st) = self.inner.state.lock() {
                 note_paste_focus(&mut st, &entry.final_text);
@@ -956,6 +968,16 @@ fn normalize_app_id(app_id: &str) -> Option<String> {
 
 fn snapshot_focus_at_start(st: &mut SessionRuntime) {
     st.app_id_at_start = st.focused_app.clone();
+}
+
+impl PipelineHandle {
+    fn focused_is_terminal(&self) -> bool {
+        self.inner
+            .state
+            .lock()
+            .map(|st| insert::uses_terminal_paste(st.focused_app.as_deref()))
+            .unwrap_or(false)
+    }
 }
 
 fn note_paste_focus(st: &mut SessionRuntime, text: &str) {
@@ -1324,6 +1346,53 @@ mod tests {
         assert_ne!("néw".chars().count(), "néw".len());
         assert_eq!(pasted.lock().expect("pasted").as_slice(), ["néw"]);
         assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::UNDONE);
+    }
+
+    #[tokio::test]
+    async fn copied_paste_hint_follows_the_focused_app() {
+        use std::sync::{Arc, Mutex};
+
+        let (_dir, pipe) = test_pipe();
+        commit_text(&pipe, "hello", InsertStatus::Skipped);
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let chords = Arc::new(Mutex::new(Vec::new()));
+
+        pipe.report_focus("org.gnome.Terminal").expect("terminal");
+        insert::with_test_copied_inserts(
+            Arc::clone(&log),
+            Arc::clone(&chords),
+            pipe.paste_last(),
+        )
+        .await
+        .expect("terminal copy");
+        assert_eq!(log.lock().expect("log").as_slice(), ["hello"]);
+        assert_eq!(chords.lock().expect("chords").as_slice(), [true]);
+        assert_eq!(pipe.outcome_detail().expect("detail"), "Ctrl+Shift+V");
+        assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::COPIED);
+
+        pipe.report_focus("kgx").expect("console");
+        insert::with_test_copied_inserts(
+            Arc::clone(&log),
+            Arc::clone(&chords),
+            pipe.paste_last(),
+        )
+        .await
+        .expect("console copy");
+
+        pipe.report_focus("org.gnome.gedit").expect("editor");
+        insert::with_test_copied_inserts(
+            Arc::clone(&log),
+            Arc::clone(&chords),
+            pipe.paste_last(),
+        )
+        .await
+        .expect("editor copy");
+        assert_eq!(
+            chords.lock().expect("chords").as_slice(),
+            [true, true, false]
+        );
+        assert_eq!(pipe.outcome_detail().expect("detail"), "Ctrl+V");
+        assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::COPIED);
     }
 
     #[test]

@@ -444,6 +444,8 @@ fn restore_clipboard_text(text: &str) -> Result<()> {
 #[cfg(test)]
 tokio::task_local! {
     static TEST_INSERT_LOG: std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+    static TEST_INSERT_TERMINAL: std::sync::Arc<std::sync::Mutex<Vec<bool>>>;
+    static TEST_FORCE_COPY: ();
 }
 
 /// Record paste text for `fut` and skip the portal.
@@ -453,6 +455,21 @@ pub(crate) async fn with_test_inserts<T>(
     fut: impl std::future::Future<Output = T>,
 ) -> T {
     TEST_INSERT_LOG.scope(log, fut).await
+}
+
+/// Record paste text and the terminal-chord flag, and force the copied outcome.
+#[cfg(test)]
+pub(crate) async fn with_test_copied_inserts<T>(
+    log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    chords: std::sync::Arc<std::sync::Mutex<Vec<bool>>>,
+    fut: impl std::future::Future<Output = T>,
+) -> T {
+    TEST_INSERT_LOG
+        .scope(
+            log,
+            TEST_INSERT_TERMINAL.scope(chords, TEST_FORCE_COPY.scope((), fut)),
+        )
+        .await
 }
 
 /// Per-task Backspace record. Tests must not open the real keyboard portal.
@@ -508,15 +525,45 @@ pub async fn send_backspaces(count: usize) -> Result<()> {
     Ok(())
 }
 
+/// GTK app ids and wm_class names that paste with Ctrl+Shift+V (FR-INS-2).
+const TERMINAL_APPS: &[&str] = &[
+    "org.gnome.Terminal",
+    "gnome-terminal",
+    "org.gnome.Console",
+    "kgx",
+    "org.gnome.Ptyxis",
+    "ptyxis",
+];
+
+/// True only for GNOME Terminal, Console, and Ptyxis. Unknown apps stay Ctrl+V.
+pub(crate) fn uses_terminal_paste(app_id: Option<&str>) -> bool {
+    match app_id {
+        Some(id) => TERMINAL_APPS.iter().any(|known| *known == id),
+        None => false,
+    }
+}
+
+/// Chord shown on the copied pill for the paste that just failed.
+pub(crate) fn paste_hint(terminal: bool) -> &'static str {
+    if terminal {
+        "Ctrl+Shift+V"
+    } else {
+        "Ctrl+V"
+    }
+}
+
 /// Insert `text` at the focused cursor; on failure leave it on the clipboard (FR-INS-1/2/3).
 ///
-/// `terminal`: Ctrl+Shift+V when true, else Ctrl+V. Callers keep `false` until Phase 2
-/// app context can detect terminals (FR-CTX-1); do not invent detection here.
+/// `terminal` selects Ctrl+Shift+V for GNOME Terminal, Console, and Ptyxis, otherwise Ctrl+V.
 pub async fn insert_text(text: &str, terminal: bool) -> InsertOutcome {
     #[cfg(test)]
     if let Ok(log) = TEST_INSERT_LOG.try_with(|log| log.clone()) {
         log.lock().expect("test insert entries").push(text.to_string());
-        return if text.is_empty() {
+        let _ = TEST_INSERT_TERMINAL.try_with(|flags| {
+            flags.lock().expect("test paste chords").push(terminal);
+        });
+        let force_copy = TEST_FORCE_COPY.try_with(|_| ()).is_ok();
+        return if text.is_empty() || force_copy {
             InsertOutcome::Copied
         } else {
             InsertOutcome::Inserted
@@ -601,6 +648,21 @@ pub async fn insert_text(text: &str, terminal: bool) -> InsertOutcome {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn only_the_three_vte_apps_use_shift_paste() {
+        assert!(uses_terminal_paste(Some("org.gnome.Terminal")));
+        assert!(uses_terminal_paste(Some("gnome-terminal")));
+        assert!(uses_terminal_paste(Some("org.gnome.Console")));
+        assert!(uses_terminal_paste(Some("kgx")));
+        assert!(uses_terminal_paste(Some("org.gnome.Ptyxis")));
+        assert!(uses_terminal_paste(Some("ptyxis")));
+        assert!(!uses_terminal_paste(Some("org.gnome.gedit")));
+        assert!(!uses_terminal_paste(Some("code")));
+        assert!(!uses_terminal_paste(None));
+        assert_eq!(paste_hint(true), "Ctrl+Shift+V");
+        assert_eq!(paste_hint(false), "Ctrl+V");
+    }
 
     #[tokio::test]
     async fn backspaces_match_unicode_scalars() {

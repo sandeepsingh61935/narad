@@ -20,6 +20,7 @@ use crate::pipeline::PipelineHandle;
 pub const APP_ID: &str = "dev.narad.Narad";
 const DICTATE_ID: &str = "narad-dictate";
 const PASTE_LAST_ID: &str = "narad-paste-last";
+const UNDO_LAST_ID: &str = "narad-undo-last";
 
 /// Paste-last is a press. Key-repeat while held must not paste again. Release is not hold/tap.
 pub(crate) fn paste_last_should_fire(already_down: bool) -> bool {
@@ -101,7 +102,7 @@ pub fn to_portal_trigger(hotkey: &str) -> String {
     parts.join("+")
 }
 
-/// Bind dictate (hold/tap) and paste-last (press) and forward portal events into the pipeline.
+/// Bind dictate (hold/tap), paste-last, and undo-last, and forward portal events into the pipeline.
 pub async fn run(pipeline: PipelineHandle) -> Result<()> {
     let exe = std::env::current_exe().context("current_exe")?;
     let desktop = ensure_desktop_file(&exe)?;
@@ -113,11 +114,12 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
         .context("Registry.Register failed")?;
     info!(app_id = APP_ID, "registered host app with portal Registry");
 
-    let (trigger, paste_trigger, threshold_ms) = {
+    let (trigger, paste_trigger, undo_trigger, threshold_ms) = {
         let cfg = pipeline.config();
         (
             to_portal_trigger(&cfg.activation.dictate_hotkey),
             to_portal_trigger(&cfg.activation.paste_last_hotkey),
+            to_portal_trigger(&cfg.activation.undo_last_hotkey),
             cfg.activation.hold_tap_threshold_ms,
         )
     };
@@ -129,6 +131,7 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
         version = portal.version(),
         trigger = %trigger,
         paste_last = %paste_trigger,
+        undo_last = %undo_trigger,
         "GlobalShortcuts connected"
     );
 
@@ -141,11 +144,13 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
         .preferred_trigger(Some(trigger.as_str()));
     let paste_last = NewShortcut::new(PASTE_LAST_ID, "Narad paste last transcription")
         .preferred_trigger(Some(paste_trigger.as_str()));
+    let undo_last = NewShortcut::new(UNDO_LAST_ID, "Narad undo last insertion")
+        .preferred_trigger(Some(undo_trigger.as_str()));
 
     let request = portal
         .bind_shortcuts(
             &session,
-            &[dictate, paste_last],
+            &[dictate, paste_last, undo_last],
             None,
             BindShortcutsOptions::default(),
         )
@@ -168,6 +173,7 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
     // True between first Activated and matching Deactivated (suppresses key-repeat Activates).
     let mut key_down = false;
     let mut paste_down = false;
+    let mut undo_down = false;
     let mut press_at: Option<Instant> = None;
     // After a second-tap stop, ignore the following Deactivated so it does not re-interpret hold.
     let mut suppress_deactivate = false;
@@ -176,7 +182,8 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
         trigger = %trigger,
         threshold_ms,
         paste_last = %paste_trigger,
-        "hotkeys listening (dictate hold/tap; paste-last on press; key-repeat ignored)"
+        undo_last = %undo_trigger,
+        "hotkeys listening (dictate hold/tap; paste-last and undo-last on press; key-repeat ignored)"
     );
 
     loop {
@@ -190,6 +197,15 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
                             if fire {
                                 info!("paste-last hotkey → PasteLast");
                                 pipeline.request_paste_last();
+                            }
+                            continue;
+                        }
+                        if ev.shortcut_id() == UNDO_LAST_ID {
+                            let fire = paste_last_should_fire(undo_down);
+                            undo_down = true;
+                            if fire {
+                                info!("undo-last hotkey → UndoLast");
+                                pipeline.request_undo_last();
                             }
                             continue;
                         }
@@ -238,6 +254,10 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
                     Some(ev) => {
                         if ev.shortcut_id() == PASTE_LAST_ID {
                             paste_down = false;
+                            continue;
+                        }
+                        if ev.shortcut_id() == UNDO_LAST_ID {
+                            undo_down = false;
                             continue;
                         }
                         if ev.shortcut_id() != DICTATE_ID {
@@ -297,6 +317,11 @@ mod tests {
         let cfg = crate::config::NaradConfig::default();
         assert_eq!(cfg.activation.dictate_hotkey, "Ctrl+Alt+Space");
         assert_eq!(cfg.activation.paste_last_hotkey, "Ctrl+Alt+V");
+        assert_eq!(cfg.activation.undo_last_hotkey, "Ctrl+Alt+Z");
+        assert_eq!(
+            to_portal_trigger(&cfg.activation.undo_last_hotkey),
+            "CTRL+ALT+z"
+        );
         assert_eq!(
             to_portal_trigger(&cfg.activation.paste_last_hotkey),
             "CTRL+ALT+v"

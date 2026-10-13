@@ -191,39 +191,80 @@ async fn paste_chord(
     }
 }
 
+/// Backspace via the same libei session, with portal NotifyKeyboardKeycode fallback.
+async fn backspace_chord(
+    remote: &RemoteDesktop,
+    session: &ashpd::desktop::Session<RemoteDesktop>,
+    count: usize,
+) -> Result<()> {
+    match remote
+        .connect_to_eis(session, ConnectToEISOptions::default())
+        .await
+    {
+        Ok(fd) => {
+            let stream = UnixStream::from(OwnedFd::from(fd));
+            tokio::task::spawn_blocking(move || libei_backspaces(stream, count))
+                .await
+                .context("libei join")??;
+            Ok(())
+        }
+        Err(err) => {
+            warn!(error = %err, "ConnectToEIS failed; falling back to NotifyKeyboardKeycode");
+            portal_backspaces(remote, session, count).await
+        }
+    }
+}
+
 const KEY_LEFTCTRL: i32 = 29;
 const KEY_LEFTSHIFT: i32 = 42;
 const KEY_V: i32 = 47;
+/// Linux evdev `KEY_BACKSPACE`. One press+release deletes one Unicode scalar.
+pub(crate) const KEY_BACKSPACE: i32 = 14;
+
+async fn portal_key(
+    remote: &RemoteDesktop,
+    session: &ashpd::desktop::Session<RemoteDesktop>,
+    keycode: i32,
+    state: KeyState,
+) -> Result<()> {
+    remote
+        .notify_keyboard_keycode(
+            session,
+            keycode,
+            state,
+            NotifyKeyboardKeycodeOptions::default(),
+        )
+        .await
+        .context("NotifyKeyboardKeycode")?;
+    Ok(())
+}
 
 async fn portal_paste(
     remote: &RemoteDesktop,
     session: &ashpd::desktop::Session<RemoteDesktop>,
     terminal: bool,
 ) -> Result<()> {
-    async fn key(
-        remote: &RemoteDesktop,
-        session: &ashpd::desktop::Session<RemoteDesktop>,
-        keycode: i32,
-        state: KeyState,
-    ) -> ashpd::Result<()> {
-        remote
-            .notify_keyboard_keycode(
-                session,
-                keycode,
-                state,
-                NotifyKeyboardKeycodeOptions::default(),
-            )
-            .await
-    }
     if terminal {
-        key(remote, session, KEY_LEFTSHIFT, KeyState::Pressed).await?;
+        portal_key(remote, session, KEY_LEFTSHIFT, KeyState::Pressed).await?;
     }
-    key(remote, session, KEY_LEFTCTRL, KeyState::Pressed).await?;
-    key(remote, session, KEY_V, KeyState::Pressed).await?;
-    key(remote, session, KEY_V, KeyState::Released).await?;
-    key(remote, session, KEY_LEFTCTRL, KeyState::Released).await?;
+    portal_key(remote, session, KEY_LEFTCTRL, KeyState::Pressed).await?;
+    portal_key(remote, session, KEY_V, KeyState::Pressed).await?;
+    portal_key(remote, session, KEY_V, KeyState::Released).await?;
+    portal_key(remote, session, KEY_LEFTCTRL, KeyState::Released).await?;
     if terminal {
-        key(remote, session, KEY_LEFTSHIFT, KeyState::Released).await?;
+        portal_key(remote, session, KEY_LEFTSHIFT, KeyState::Released).await?;
+    }
+    Ok(())
+}
+
+async fn portal_backspaces(
+    remote: &RemoteDesktop,
+    session: &ashpd::desktop::Session<RemoteDesktop>,
+    count: usize,
+) -> Result<()> {
+    for _ in 0..count {
+        portal_key(remote, session, KEY_BACKSPACE, KeyState::Pressed).await?;
+        portal_key(remote, session, KEY_BACKSPACE, KeyState::Released).await?;
     }
     Ok(())
 }
@@ -232,7 +273,41 @@ fn libei_paste(stream: UnixStream, terminal: bool) -> Result<()> {
     const EI_CTRL: u32 = 29 - 8;
     const EI_SHIFT: u32 = 42 - 8;
     const EI_V: u32 = 47 - 8;
+    libei_with_keyboard(stream, move |kb| {
+        let press = |keyboard: &ei::Keyboard, code: u32, down: bool| {
+            let state = if down {
+                ei::keyboard::KeyState::Press
+            } else {
+                ei::keyboard::KeyState::Released
+            };
+            keyboard.key(code, state);
+        };
+        if terminal {
+            press(kb, EI_SHIFT, true);
+        }
+        press(kb, EI_CTRL, true);
+        press(kb, EI_V, true);
+        press(kb, EI_V, false);
+        press(kb, EI_CTRL, false);
+        if terminal {
+            press(kb, EI_SHIFT, false);
+        }
+    })
+}
 
+fn libei_backspaces(stream: UnixStream, count: usize) -> Result<()> {
+    const EI_BACKSPACE: u32 = 14 - 8;
+    libei_with_keyboard(stream, move |kb| {
+        for _ in 0..count {
+            kb.key(EI_BACKSPACE, ei::keyboard::KeyState::Press);
+            kb.key(EI_BACKSPACE, ei::keyboard::KeyState::Released);
+        }
+    })
+}
+
+/// Same libei keyboard session paste uses. `emit` runs once the keyboard is ready.
+fn libei_with_keyboard(stream: UnixStream, emit: impl FnOnce(&ei::Keyboard)) -> Result<()> {
+    let mut emit = Some(emit);
     struct DeviceData {
         keyboard: Option<ei::Keyboard>,
     }
@@ -295,23 +370,8 @@ fn libei_paste(stream: UnixStream, terminal: bool) -> Result<()> {
                                 device.start_emulating(sequence, last_serial);
                                 sequence = sequence.wrapping_add(1);
                                 let _ = sequence;
-                                let press = |keyboard: &ei::Keyboard, code: u32, down: bool| {
-                                    let state = if down {
-                                        ei::keyboard::KeyState::Press
-                                    } else {
-                                        ei::keyboard::KeyState::Released
-                                    };
-                                    keyboard.key(code, state);
-                                };
-                                if terminal {
-                                    press(kb, EI_SHIFT, true);
-                                }
-                                press(kb, EI_CTRL, true);
-                                press(kb, EI_V, true);
-                                press(kb, EI_V, false);
-                                press(kb, EI_CTRL, false);
-                                if terminal {
-                                    press(kb, EI_SHIFT, false);
+                                if let Some(emit) = emit.take() {
+                                    emit(kb);
                                 }
                                 device.frame(last_serial, 0);
                                 device.stop_emulating(last_serial);
@@ -380,15 +440,72 @@ fn restore_clipboard_text(text: &str) -> Result<()> {
     copy_via_wl_copy(text)
 }
 
-/// Test stand-in for the portal paste. `None` uses the real inserter.
+/// Per-task paste record so parallel tests do not share one portal stand-in.
 #[cfg(test)]
-static TEST_INSERTS: std::sync::Mutex<Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>> =
-    std::sync::Mutex::new(None);
+tokio::task_local! {
+    static TEST_INSERT_LOG: std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+}
 
-/// Record paste text and skip the portal. Only the naradd test binary calls this.
+/// Record paste text for `fut` and skip the portal.
 #[cfg(test)]
-pub(crate) fn set_test_insert_log(log: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>) {
-    *TEST_INSERTS.lock().expect("test insert log") = log;
+pub(crate) async fn with_test_inserts<T>(
+    log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    fut: impl std::future::Future<Output = T>,
+) -> T {
+    TEST_INSERT_LOG.scope(log, fut).await
+}
+
+/// Per-task Backspace record. Tests must not open the real keyboard portal.
+#[cfg(test)]
+tokio::task_local! {
+    static TEST_BACKSPACE_LOG: std::sync::Arc<std::sync::Mutex<Vec<i32>>>;
+}
+
+/// Record Backspaces for `fut` and skip the portal.
+#[cfg(test)]
+pub(crate) async fn with_test_backspaces<T>(
+    log: std::sync::Arc<std::sync::Mutex<Vec<i32>>>,
+    fut: impl std::future::Future<Output = T>,
+) -> T {
+    TEST_BACKSPACE_LOG.scope(log, fut).await
+}
+
+/// `Ok(true)` when this build recorded the keys and must not open the portal.
+fn skip_backspaces_for_test(count: usize) -> Result<bool> {
+    #[cfg(test)]
+    {
+        return match TEST_BACKSPACE_LOG.try_with(|log| {
+            log.lock()
+                .expect("test backspace entries")
+                .extend(std::iter::repeat(KEY_BACKSPACE).take(count));
+        }) {
+            Ok(()) => Ok(true),
+            Err(_) => Err(anyhow!("backspace test log is not set")),
+        };
+    }
+    #[cfg(not(test))]
+    {
+        let _ = count;
+        Ok(false)
+    }
+}
+
+/// Send `count` Backspace keypresses. Callers pass `text.chars().count()` (Unicode scalars).
+pub async fn send_backspaces(count: usize) -> Result<()> {
+    if skip_backspaces_for_test(count)? {
+        return Ok(());
+    }
+
+    if count == 0 {
+        return Ok(());
+    }
+
+    let (remote, session, _) = open_remote_desktop_session(false)
+        .await
+        .context("RemoteDesktop for backspace")?;
+    backspace_chord(&remote, &session, count).await?;
+    info!(count, "backspace sequence sent");
+    Ok(())
 }
 
 /// Insert `text` at the focused cursor; on failure leave it on the clipboard (FR-INS-1/2/3).
@@ -397,7 +514,7 @@ pub(crate) fn set_test_insert_log(log: Option<std::sync::Arc<std::sync::Mutex<Ve
 /// app context can detect terminals (FR-CTX-1); do not invent detection here.
 pub async fn insert_text(text: &str, terminal: bool) -> InsertOutcome {
     #[cfg(test)]
-    if let Some(log) = TEST_INSERTS.lock().expect("test insert log").clone() {
+    if let Ok(log) = TEST_INSERT_LOG.try_with(|log| log.clone()) {
         log.lock().expect("test insert entries").push(text.to_string());
         return if text.is_empty() {
             InsertOutcome::Copied
@@ -477,5 +594,24 @@ pub async fn insert_text(text: &str, terminal: bool) -> InsertOutcome {
             warn!(error = %err, "paste failed; text remains on clipboard");
             InsertOutcome::Copied
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn backspaces_match_unicode_scalars() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let text = "café👍";
+        with_test_backspaces(Arc::clone(&log), send_backspaces(text.chars().count()))
+            .await
+            .expect("backspaces");
+        let keys = log.lock().expect("log").clone();
+        assert_eq!(keys.len(), text.chars().count());
+        assert!(keys.iter().all(|key| *key == KEY_BACKSPACE));
+        assert_ne!(text.chars().count(), text.len());
     }
 }

@@ -110,6 +110,14 @@ impl DaemonIpc {
             .map_err(zbus::fdo::Error::Failed)
     }
 
+    async fn undo_last(&self) -> zbus::fdo::Result<()> {
+        self.pipeline
+            .undo_last()
+            .await
+            .map(|_| ())
+            .map_err(zbus::fdo::Error::Failed)
+    }
+
     /// Server-side takes owned `Vec` so zbus can deserialize the array body.
     async fn delete_entries(&self, ids: Vec<i64>) -> zbus::fdo::Result<()> {
         self.pipeline
@@ -148,6 +156,11 @@ impl DaemonIpc {
     #[zbus(property)]
     async fn set_paused(&self, value: bool) -> zbus::fdo::Result<()> {
         self.pipeline.set_paused(value).map_err(lock_err)
+    }
+
+    #[zbus(property)]
+    async fn outcome_detail(&self) -> zbus::fdo::Result<String> {
+        self.pipeline.outcome_detail().map_err(lock_err)
     }
 
     #[zbus(property)]

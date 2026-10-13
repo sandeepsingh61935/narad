@@ -1,4 +1,4 @@
-//! Dictation session: idle → listening → processing → inserted|copied|cancelled|error → idle.
+//! Dictation session: idle → listening → processing → inserted|copied|cancelled|error|undone → idle.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -15,6 +15,43 @@ use crate::denoise;
 use crate::config::NaradConfig;
 use crate::insert::{self, InsertOutcome};
 use crate::ipc::DaemonIpc;
+
+/// HUD outcome signaled on `StateChanged`.
+///
+/// `Undone` includes the deleted text (FR-INS-5). Inserted, copied, cancelled,
+/// and error stay the existing brief outcomes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HudOutcome {
+    Inserted,
+    Copied,
+    Cancelled,
+    Error,
+    Undone(String),
+}
+
+impl HudOutcome {
+    fn state_name(&self) -> &'static str {
+        match self {
+            HudOutcome::Inserted => SessionState::INSERTED,
+            HudOutcome::Copied => SessionState::COPIED,
+            HudOutcome::Cancelled => SessionState::CANCELLED,
+            HudOutcome::Error => SessionState::ERROR,
+            HudOutcome::Undone(_) => SessionState::UNDONE,
+        }
+    }
+
+    pub fn deleted_text(&self) -> Option<&str> {
+        match self {
+            HudOutcome::Undone(text) => Some(text.as_str()),
+            _ => None,
+        }
+    }
+}
+
+enum UndoTarget {
+    Delete(String),
+    Refuse(&'static str),
+}
 
 struct SessionRuntime {
     dbus_state: String,
@@ -37,6 +74,12 @@ struct SessionRuntime {
     app_id_at_start: Option<String>,
     /// Focused app when text was last pasted. In memory for later undo / terminal chord.
     app_id_at_paste: Option<String>,
+    /// Final text of the last successful insertion. A copied row does not set this.
+    last_inserted: Option<String>,
+    /// Latest brief HUD outcome, including deleted text after undo.
+    hud_outcome: Option<HudOutcome>,
+    /// Deleted text, or the reason an undo was refused. Empty otherwise.
+    outcome_detail: String,
 }
 
 struct PipelineInner {
@@ -77,6 +120,9 @@ impl PipelineHandle {
                     focused_app: None,
                     app_id_at_start: None,
                     app_id_at_paste: None,
+                    last_inserted: None,
+                    hud_outcome: None,
+                    outcome_detail: String::new(),
                 }),
                 store: Mutex::new(store),
                 asr: Mutex::new(asr),
@@ -215,6 +261,19 @@ impl PipelineHandle {
 
     pub fn request_start(&self, mode: Option<String>) {
         self.spawn_listen(mode, ListenTrigger::Open);
+    }
+
+    /// Undo-last shortcut. One press deletes; release is not a second action.
+    pub fn request_undo_last(&self) {
+        let handle = self.clone();
+        tokio::spawn(async move {
+            if let Err(err) = handle.undo_last().await {
+                warn!(error = %err, "undo last failed");
+                handle.set_outcome_detail("Couldn't undo");
+                handle.signal_hud(HudOutcome::Error).await;
+                handle.schedule_idle_after(Duration::from_millis(800));
+            }
+        });
     }
 
     /// Paste-last shortcut. One press pastes; release is not a second action.
@@ -596,7 +655,7 @@ impl PipelineHandle {
         let outcome = insert::insert_text(&text, false).await;
         if matches!(outcome, InsertOutcome::Inserted) {
             if let Ok(mut st) = self.inner.state.lock() {
-                note_paste_focus(&mut st);
+                note_paste_focus(&mut st, &text);
             }
         }
         match outcome {
@@ -607,6 +666,80 @@ impl PipelineHandle {
                 Ok(())
             }
         }
+    }
+
+    /// Delete the last inserted final text when focus is still that app (FR-INS-5).
+    ///
+    /// A copied history row is not an insertion. Missing paste-time app id, missing
+    /// current focus, or a different app sends nothing and signals the HUD error outcome.
+    /// Success signals `undone` and includes the deleted text.
+    pub async fn undo_last(&self) -> Result<HudOutcome, String> {
+        let text = match self.undo_target()? {
+            UndoTarget::Delete(text) => text,
+            UndoTarget::Refuse(reason) => {
+                self.set_outcome_detail(reason);
+                self.signal_hud(HudOutcome::Error).await;
+                self.schedule_idle_after(Duration::from_millis(800));
+                return Ok(HudOutcome::Error);
+            }
+        };
+        let count = text.chars().count();
+        if let Err(err) = insert::send_backspaces(count).await {
+            warn!(error = %err, "undo backspaces failed");
+            self.signal_hud(HudOutcome::Error).await;
+            self.schedule_idle_after(Duration::from_millis(800));
+            return Ok(HudOutcome::Error);
+        }
+        {
+            let mut st = self
+                .inner
+                .state
+                .lock()
+                .map_err(|e| format!("state lock: {e}"))?;
+            st.last_inserted = None;
+        }
+        let outcome = HudOutcome::Undone(text);
+        self.signal_hud(outcome.clone()).await;
+        self.schedule_idle_after(Duration::from_millis(1200));
+        Ok(outcome)
+    }
+
+    /// Text to delete, or why undo must not touch the focused field.
+    fn undo_target(&self) -> Result<UndoTarget, String> {
+        let st = self
+            .inner
+            .state
+            .lock()
+            .map_err(|e| format!("state lock: {e}"))?;
+        let Some(text) = st.last_inserted.clone() else {
+            return Ok(UndoTarget::Refuse("Nothing to undo"));
+        };
+        let Some(pasted_in) = st.app_id_at_paste.clone() else {
+            return Ok(UndoTarget::Refuse("Focus unknown"));
+        };
+        let Some(focused) = st.focused_app.clone() else {
+            return Ok(UndoTarget::Refuse("Focus unknown"));
+        };
+        if focused != pasted_in {
+            return Ok(UndoTarget::Refuse("App changed"));
+        }
+        Ok(UndoTarget::Delete(text))
+    }
+
+    fn set_outcome_detail(&self, detail: &str) {
+        if let Ok(mut st) = self.inner.state.lock() {
+            st.outcome_detail = detail.to_string();
+        }
+    }
+
+    /// Deleted text after a successful undo, or the refuse reason. Empty otherwise.
+    pub fn outcome_detail(&self) -> Result<String, String> {
+        let st = self
+            .inner
+            .state
+            .lock()
+            .map_err(|e| format!("state lock: {e}"))?;
+        Ok(st.outcome_detail.clone())
     }
 
     /// Newest row by `created_at`, then id. Empty `final_text` is nothing to paste.
@@ -638,7 +771,7 @@ impl PipelineHandle {
         let outcome = insert::insert_text(&entry.final_text, false).await;
         if matches!(outcome, InsertOutcome::Inserted) {
             if let Ok(mut st) = self.inner.state.lock() {
-                note_paste_focus(&mut st);
+                note_paste_focus(&mut st, &entry.final_text);
             }
         }
         match outcome {
@@ -651,9 +784,27 @@ impl PipelineHandle {
         }
     }
 
+    async fn signal_hud(&self, outcome: HudOutcome) {
+        let name = outcome.state_name();
+        if let Ok(mut st) = self.inner.state.lock() {
+            st.dbus_state = name.to_string();
+            st.outcome_detail = match &outcome {
+                HudOutcome::Undone(text) => text.clone(),
+                HudOutcome::Error => st.outcome_detail.clone(),
+                _ => String::new(),
+            };
+            st.hud_outcome = Some(outcome);
+        }
+        self.emit_state(name).await;
+    }
+
     async fn set_state(&self, state: &str) {
         if let Ok(mut st) = self.inner.state.lock() {
             st.dbus_state = state.to_string();
+            if state == SessionState::IDLE {
+                st.outcome_detail.clear();
+                st.hud_outcome = None;
+            }
         }
         self.emit_state(state).await;
     }
@@ -728,7 +879,7 @@ impl PipelineHandle {
                 .lock()
                 .map_err(|e| format!("state lock: {e}"))?;
             if st.paused && insert_status == InsertStatus::Success {
-                note_paste_focus(&mut st);
+                note_paste_focus(&mut st, &final_text);
             }
             st.paused
         };
@@ -765,7 +916,7 @@ impl PipelineHandle {
                 .lock()
                 .map_err(|e| format!("state lock: {e}"))?;
             if insert_status == InsertStatus::Success {
-                note_paste_focus(&mut st);
+                note_paste_focus(&mut st, &final_text);
             }
             st.app_id_at_start.clone()
         };
@@ -807,8 +958,9 @@ fn snapshot_focus_at_start(st: &mut SessionRuntime) {
     st.app_id_at_start = st.focused_app.clone();
 }
 
-fn note_paste_focus(st: &mut SessionRuntime) {
+fn note_paste_focus(st: &mut SessionRuntime, text: &str) {
     st.app_id_at_paste = st.focused_app.clone();
+    st.last_inserted = Some(text.to_string());
 }
 
 /// Why listening started. Hold suppresses silence stop until the key release is a tap.
@@ -989,14 +1141,6 @@ mod tests {
 
         let (_dir, pipe) = test_pipe();
         let log = Arc::new(Mutex::new(Vec::new()));
-        insert::set_test_insert_log(Some(Arc::clone(&log)));
-        struct ClearLog;
-        impl Drop for ClearLog {
-            fn drop(&mut self) {
-                insert::set_test_insert_log(None);
-            }
-        }
-        let _clear = ClearLog;
 
         pipe.paste_last().await.expect("empty history");
         assert!(log.lock().expect("log").is_empty());
@@ -1024,7 +1168,9 @@ mod tests {
             .expect("newest copied");
         assert!(newest > older);
 
-        pipe.paste_last().await.expect("paste newest");
+        insert::with_test_inserts(Arc::clone(&log), pipe.paste_last())
+            .await
+            .expect("paste newest");
         assert_eq!(log.lock().expect("log").as_slice(), ["newest final"]);
         let status = pipe
             .with_store(|store| {
@@ -1050,6 +1196,134 @@ mod tests {
         pipe.paste_last().await.expect("no final text");
         assert_eq!(log.lock().expect("log").as_slice(), ["newest final"]);
         assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::ERROR);
+    }
+
+    fn count_backspaces(keys: &[i32]) -> usize {
+        assert!(keys.iter().all(|key| *key == insert::KEY_BACKSPACE));
+        keys.len()
+    }
+
+    async fn undo_with_keys(pipe: &PipelineHandle) -> (HudOutcome, Vec<i32>) {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let outcome = insert::with_test_backspaces(std::sync::Arc::clone(&log), pipe.undo_last())
+            .await
+            .expect("undo");
+        let keys = log.lock().expect("keys").clone();
+        (outcome, keys)
+    }
+
+    fn commit_text(pipe: &PipelineHandle, text: &str, status: InsertStatus) -> i64 {
+        pipe.commit_dictation(
+            10,
+            "plain".into(),
+            "test".into(),
+            text.into(),
+            text.into(),
+            status,
+        )
+        .expect("commit")
+    }
+
+    #[tokio::test]
+    async fn undo_last_matching_focus_deletes_each_scalar() {
+        let (_dir, pipe) = test_pipe();
+        let text = "café";
+        pipe.report_focus("org.gnome.TextEditor").expect("focus");
+        commit_text(&pipe, text, InsertStatus::Success);
+
+        let (outcome, keys) = undo_with_keys(&pipe).await;
+        assert_eq!(outcome, HudOutcome::Undone(text.into()));
+        assert_eq!(outcome.deleted_text(), Some(text));
+        assert_eq!(pipe.outcome_detail().expect("detail"), text);
+        assert_eq!(count_backspaces(&keys), text.chars().count());
+        assert_ne!(text.chars().count(), text.len());
+        assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::UNDONE);
+    }
+
+    #[tokio::test]
+    async fn undo_last_refuses_when_focus_app_differs() {
+        let (_dir, pipe) = test_pipe();
+        pipe.report_focus("org.gnome.TextEditor").expect("focus");
+        commit_text(&pipe, "hello", InsertStatus::Success);
+        pipe.report_focus("org.gnome.Terminal").expect("other app");
+
+        let outcome = pipe.undo_last().await.expect("refuse");
+        assert_eq!(outcome, HudOutcome::Error);
+        assert!(outcome.deleted_text().is_none());
+        assert_eq!(pipe.outcome_detail().expect("detail"), "App changed");
+        assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::ERROR);
+
+        pipe.report_focus("org.gnome.TextEditor").expect("back");
+        let (outcome, keys) = undo_with_keys(&pipe).await;
+        assert_eq!(outcome.deleted_text(), Some("hello"));
+        assert_eq!(count_backspaces(&keys), "hello".chars().count());
+    }
+
+    #[tokio::test]
+    async fn undo_last_refuses_when_paste_app_id_is_missing() {
+        let (_dir, pipe) = test_pipe();
+        commit_text(&pipe, "hello", InsertStatus::Success);
+        assert!(pipe.inner.state.lock().unwrap().app_id_at_paste.is_none());
+        pipe.report_focus("org.gnome.TextEditor").expect("later focus");
+
+        let outcome = pipe.undo_last().await.expect("refuse");
+        assert_eq!(outcome, HudOutcome::Error);
+        assert_eq!(pipe.outcome_detail().expect("detail"), "Focus unknown");
+        assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::ERROR);
+    }
+
+    #[tokio::test]
+    async fn undo_last_refuses_when_current_focus_is_missing() {
+        let (_dir, pipe) = test_pipe();
+        pipe.report_focus("org.gnome.TextEditor").expect("focus");
+        commit_text(&pipe, "hello", InsertStatus::Success);
+        pipe.report_focus("").expect("clear");
+
+        let outcome = pipe.undo_last().await.expect("refuse");
+        assert_eq!(outcome, HudOutcome::Error);
+        assert_eq!(pipe.outcome_detail().expect("detail"), "Focus unknown");
+        assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::ERROR);
+    }
+
+    #[tokio::test]
+    async fn undo_last_skips_copied_rows() {
+        let (_dir, pipe) = test_pipe();
+        pipe.report_focus("org.gnome.TextEditor").expect("focus");
+        commit_text(&pipe, "only copied", InsertStatus::Skipped);
+        let outcome = pipe.undo_last().await.expect("no insertion");
+        assert_eq!(outcome, HudOutcome::Error);
+        assert_eq!(pipe.outcome_detail().expect("detail"), "Nothing to undo");
+
+        let text = "café";
+        commit_text(&pipe, text, InsertStatus::Success);
+        commit_text(&pipe, "copied-row", InsertStatus::Skipped);
+        let (outcome, keys) = undo_with_keys(&pipe).await;
+        assert_eq!(outcome, HudOutcome::Undone(text.into()));
+        assert_eq!(count_backspaces(&keys), text.chars().count());
+        assert_ne!(count_backspaces(&keys), "copied-row".chars().count());
+    }
+
+    #[tokio::test]
+    async fn undo_last_undoes_a_successful_paste_last() {
+        use std::sync::{Arc, Mutex};
+
+        let (_dir, pipe) = test_pipe();
+        let pasted = Arc::new(Mutex::new(Vec::new()));
+
+        pipe.report_focus("org.gnome.TextEditor").expect("focus");
+        commit_text(&pipe, "old", InsertStatus::Success);
+        commit_text(&pipe, "néw", InsertStatus::Skipped);
+        insert::with_test_inserts(Arc::clone(&pasted), pipe.paste_last())
+            .await
+            .expect("paste");
+        assert_eq!(pasted.lock().expect("pasted").as_slice(), ["néw"]);
+
+        let (outcome, keys) = undo_with_keys(&pipe).await;
+        assert_eq!(outcome, HudOutcome::Undone("néw".into()));
+        assert_eq!(count_backspaces(&keys), "néw".chars().count());
+        assert_ne!("néw".chars().count(), "néw".len());
+        assert_eq!(pasted.lock().expect("pasted").as_slice(), ["néw"]);
+        assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::UNDONE);
     }
 
     #[test]

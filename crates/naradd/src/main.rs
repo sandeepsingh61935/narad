@@ -9,6 +9,7 @@ mod insert;
 mod ipc;
 mod paths;
 mod pipeline;
+mod text;
 
 use anyhow::{Context, Result};
 use config::{load_or_create, resolve_config_path, NaradConfig};

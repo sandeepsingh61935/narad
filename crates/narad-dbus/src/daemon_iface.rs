@@ -27,11 +27,20 @@ pub trait Daemon {
 
     async fn toggle(&self, mode: &str) -> zbus::Result<()>;
 
+    /// List or search history. Empty filter strings are omitted (FR-HIS-3).
+    ///
+    /// `from_day` and `to_day` are `YYYY-MM-DD` in the daemon's local timezone,
+    /// inclusive. A bad date fails and returns no rows.
     async fn history(
         &self,
         query: &str,
         offset: u32,
         limit: u32,
+        from_day: &str,
+        to_day: &str,
+        mode: &str,
+        app_id: &str,
+        src_lang: &str,
     ) -> zbus::Result<Vec<HistoryEntry>>;
 
     async fn reinsert_entry(&self, id: i64) -> zbus::Result<()>;

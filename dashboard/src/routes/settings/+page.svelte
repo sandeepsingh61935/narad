@@ -88,11 +88,11 @@
 <section class="flex-1 overflow-y-auto px-6 py-8 flex justify-center min-w-0">
   <div class="w-full max-w-2xl flex flex-col gap-space-xl">
     <div class="flex flex-col gap-1">
-      <div class="flex items-center gap-2 text-on-surface-variant font-body-muted text-body-muted">
+      <nav class="flex items-center gap-2 text-on-surface-variant font-body-muted text-body-muted" aria-label="Breadcrumb">
         <span>Settings</span>
-        <span class="material-symbols-outlined text-[14px]">chevron_right</span>
+        <span class="material-symbols-outlined text-[14px]" aria-hidden="true">chevron_right</span>
         <span class="text-on-surface">Hotkeys</span>
-      </div>
+      </nav>
       <h1 class="font-headline-lg text-headline-lg text-on-surface tracking-tight">
         Hotkeys & Shortcuts
       </h1>
@@ -109,7 +109,7 @@
     </div>
 
     {#if loading}
-      <p class="font-body-muted text-body-muted text-on-surface-variant">Loading…</p>
+      <p class="font-body-muted text-body-muted text-on-surface-variant" role="status" aria-live="polite">Loading…</p>
     {:else}
       <div class="flex flex-col gap-space-xs">
         <div class="px-space-xs flex items-center justify-between">
@@ -140,7 +140,7 @@
                 <input
                   id="dictate-hotkey"
                   bind:this={hotkeyField}
-                  class="w-40 px-2 py-1 rounded bg-surface-container-lowest border border-outline-variant/50 font-keycap text-keycap text-on-surface"
+                  class="w-40 px-2 py-1.5 min-h-[36px] rounded bg-surface-container-lowest border border-outline-variant/50 font-keycap text-keycap text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
                   type="text"
                   bind:value={config.activation.dictate_hotkey}
                   autocomplete="off"
@@ -159,8 +159,9 @@
                 </div>
               {/if}
               <button
-                class="px-3 py-1 text-on-surface bg-surface-container-high hover:bg-surface-bright rounded border border-outline-variant/40 font-body-muted text-body-muted text-[12px] transition-colors"
+                class="px-3 py-1.5 min-h-[36px] text-on-surface bg-surface-container-high hover:bg-surface-bright rounded border border-outline-variant/40 font-body-muted text-body-muted text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
                 type="button"
+                aria-label="Change dictate hotkey"
                 onclick={beginHotkeyEdit}
               >
                 Change
@@ -195,8 +196,9 @@
                 >
               </div>
               <button
-                class="px-3 py-1 text-on-surface bg-surface-container-high hover:bg-surface-bright rounded border border-outline-variant/40 font-body-muted text-body-muted text-[12px] transition-colors"
+                class="px-3 py-1.5 min-h-[36px] text-on-surface bg-surface-container-high hover:bg-surface-bright rounded border border-outline-variant/40 font-body-muted text-body-muted text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
                 type="button"
+                aria-label="Change selection command hotkey"
               >
                 Change
               </button>
@@ -230,8 +232,9 @@
                 >
               </div>
               <button
-                class="px-3 py-1 text-on-surface bg-surface-container-high hover:bg-surface-bright rounded border border-outline-variant/40 font-body-muted text-body-muted text-[12px] transition-colors"
+                class="px-3 py-1.5 min-h-[36px] text-on-surface bg-surface-container-high hover:bg-surface-bright rounded border border-outline-variant/40 font-body-muted text-body-muted text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
                 type="button"
+                aria-label="Change paste last transcription hotkey"
               >
                 Change
               </button>
@@ -265,8 +268,9 @@
                 >
               </div>
               <button
-                class="px-3 py-1 text-on-surface bg-surface-container-high hover:bg-surface-bright rounded border border-outline-variant/40 font-body-muted text-body-muted text-[12px] transition-colors"
+                class="px-3 py-1.5 min-h-[36px] text-on-surface bg-surface-container-high hover:bg-surface-bright rounded border border-outline-variant/40 font-body-muted text-body-muted text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
                 type="button"
+                aria-label="Change undo last insert hotkey"
               >
                 Change
               </button>
@@ -295,8 +299,9 @@
                 >
               </div>
               <button
-                class="px-3 py-1 text-on-surface-variant/50 bg-surface-container-high/30 rounded border border-outline-variant/20 font-body-muted text-body-muted text-[12px] cursor-not-allowed"
+                class="px-3 py-1.5 min-h-[36px] text-on-surface-variant/50 bg-surface-container-high/30 rounded border border-outline-variant/20 font-body-muted text-body-muted text-[12px] cursor-not-allowed"
                 disabled
+                aria-label="Cancel recording shortcut is fixed to Escape"
                 type="button"
               >
                 Default
@@ -352,19 +357,21 @@
               </div>
               <button
                 aria-checked="true"
-                class="w-11 h-6 bg-primary-container rounded-full relative p-0.5 transition-colors cursor-pointer flex items-center"
+                aria-label="Quick mode prefix switching"
+                class="w-11 h-6 bg-primary-container rounded-full relative p-0.5 transition-colors cursor-pointer flex items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-container"
                 role="switch"
                 type="button"
               >
                 <span
                   class="w-5 h-5 bg-on-primary-container rounded-full shadow transition-transform translate-x-5 flex items-center justify-center"
                 >
-                  <span class="material-symbols-outlined text-[12px] text-primary">check</span>
+                  <span class="material-symbols-outlined text-[12px] text-primary" aria-hidden="true">check</span>
                 </span>
               </button>
               <button
-                class="px-3 py-1 text-on-surface bg-surface-container-high hover:bg-surface-bright rounded border border-outline-variant/40 font-body-muted text-body-muted text-[12px] transition-colors"
+                class="px-3 py-1.5 min-h-[36px] text-on-surface bg-surface-container-high hover:bg-surface-bright rounded border border-outline-variant/40 font-body-muted text-body-muted text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
                 type="button"
+                aria-label="Change quick mode prefix"
               >
                 Change Prefix
               </button>
@@ -405,9 +412,9 @@
               <span class="font-label-code text-label-code text-on-surface-variant text-[11px]"
                 >100 ms</span
               >
-              <div class="relative flex-1 flex items-center">
+              <div class="relative flex-1 flex items-center min-h-[36px]">
                 <input
-                  class="w-full accent-primary-container bg-surface-container-highest h-1.5 rounded cursor-pointer"
+                  class="w-full accent-primary-container bg-surface-container-highest h-1.5 rounded cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-container"
                   id="threshold-slider"
                   max="600"
                   min="100"
@@ -415,6 +422,10 @@
                   type="range"
                   value={config.activation.hold_tap_threshold_ms}
                   aria-label="Hold vs. Tap Threshold"
+                  aria-valuemin="100"
+                  aria-valuemax="600"
+                  aria-valuenow={config.activation.hold_tap_threshold_ms}
+                  aria-valuetext="{config.activation.hold_tap_threshold_ms} milliseconds"
                   oninput={onThresholdInput}
                   onchange={commit}
                   onblur={commit}
@@ -437,7 +448,7 @@
             <div
               class="flex items-center gap-1.5 bg-surface-container-lowest border border-outline-variant/40 px-2.5 py-1 rounded-full shrink-0"
             >
-              <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+              <span class="w-2 h-2 rounded-full bg-emerald-500" aria-hidden="true"></span>
               <span class="font-label-code text-label-code text-on-surface text-[11px]"
                 >Active (libportal 0.7.1)</span
               >
@@ -454,7 +465,8 @@
             </div>
             <button
               aria-checked="true"
-              class="w-11 h-6 bg-primary-container rounded-full relative p-0.5 transition-colors cursor-pointer flex items-center shrink-0"
+              aria-label="Release latency guard"
+              class="w-11 h-6 bg-primary-container rounded-full relative p-0.5 transition-colors cursor-pointer flex items-center shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-container"
               id="latency-toggle"
               role="switch"
               type="button"
@@ -462,7 +474,7 @@
               <span
                 class="w-5 h-5 bg-on-primary-container rounded-full shadow transition-transform translate-x-5 flex items-center justify-center"
               >
-                <span class="material-symbols-outlined text-[12px] text-primary">check</span>
+                <span class="material-symbols-outlined text-[12px] text-primary" aria-hidden="true">check</span>
               </span>
             </button>
           </div>

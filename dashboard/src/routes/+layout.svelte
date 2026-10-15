@@ -11,9 +11,9 @@
   ] as const;
 
   const activeClass =
-    "flex items-center gap-space-md px-space-md py-space-sm rounded-lg transition-colors bg-surface-container-high text-on-surface font-medium";
+    "flex items-center gap-space-md px-space-md py-space-sm min-h-[44px] rounded-lg transition-colors bg-surface-container-high text-on-surface font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-container-low";
   const idleClass =
-    "flex items-center gap-space-md px-space-md py-space-sm rounded-lg text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors";
+    "flex items-center gap-space-md px-space-md py-space-sm min-h-[44px] rounded-lg text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-container-low";
 
   function isActive(href: string): boolean {
     const path = page.url.pathname;
@@ -24,6 +24,7 @@
 
 <aside
   class="fixed left-0 top-0 h-full w-64 bg-surface-container-low border-r border-outline-variant flex flex-col z-30 select-none"
+  aria-label="Sidebar"
 >
   <div class="flex flex-col">
     <div
@@ -41,7 +42,7 @@
           class={isActive(link.href) ? activeClass : idleClass}
           aria-current={isActive(link.href) ? "page" : undefined}
         >
-          <span class="material-symbols-outlined text-[18px]">{link.icon}</span>
+          <span class="material-symbols-outlined text-[18px]" aria-hidden="true">{link.icon}</span>
           <span class="font-body-default text-body-default">{link.label}</span>
         </a>
       {/each}

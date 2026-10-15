@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import type { DashboardConfig } from "$lib/config";
+  import { ACTIVE_MODES, type DashboardConfig } from "$lib/config";
   import { formatDuration, formatTime, type HistoryEntry, type TextView } from "$lib/history";
   import { historyScreen, type RowView } from "$lib/screen-state";
 
@@ -46,6 +46,7 @@
   let selectedId = $state<number | null>(null);
   let textView = $state<TextView>("final");
   let actionBusy = $state(false);
+  let retranscribeMode = $state("plain");
   let actionMessage = $state<string | null>(null);
   let actionError = $state<string | null>(null);
   let daemonBannerOpen = $state(true);
@@ -240,6 +241,51 @@
     try {
       await invoke("reinsert_entry", { id });
       actionMessage = "Re-inserted";
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : String(e);
+    } finally {
+      actionBusy = false;
+    }
+  }
+
+  async function playSelected() {
+    if (detail == null || !detail.canPlay || actionBusy) return;
+    const id = detail.id;
+    actionBusy = true;
+    actionMessage = null;
+    actionError = null;
+    try {
+      const bytes = await invoke<number[]>("read_audio", { id });
+      const blob = new Blob([new Uint8Array(bytes)], { type: "audio/wav" });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => URL.revokeObjectURL(url);
+      await audio.play();
+      actionMessage = "Playing";
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : String(e);
+    } finally {
+      actionBusy = false;
+    }
+  }
+
+  async function retranscribeSelected() {
+    if (detail == null || actionBusy) return;
+    const id = detail.id;
+    const mode = retranscribeMode;
+    actionBusy = true;
+    actionMessage = null;
+    actionError = null;
+    try {
+      const newId = await invoke<number>("retranscribe", {
+        id,
+        mode,
+        modelId,
+      });
+      await loadHistory();
+      selectedId = newId;
+      textView = "final";
+      actionMessage = "Retranscribed";
     } catch (e) {
       actionError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -760,6 +806,41 @@
                 <span class="material-symbols-outlined text-[16px]">input</span>
                 <span>Re-insert</span>
                 <kbd class="ml-1 px-1 py-0.2 bg-primary/20 text-on-primary-container rounded text-[10px] font-keycap font-semibold">Enter</kbd>
+              </button>
+              {#if detail.canPlay}
+                <button
+                  class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-surface-container hover:bg-surface-container-high text-on-surface border border-outline-variant/40 font-headline-md text-[13px] transition-colors disabled:opacity-50"
+                  id="play-btn"
+                  title="Play retained audio"
+                  type="button"
+                  disabled={actionBusy}
+                  onclick={() => playSelected()}
+                >
+                  <span class="material-symbols-outlined text-[16px] text-primary">play_arrow</span>
+                  <span>Play</span>
+                </button>
+              {/if}
+              <label class="sr-only" for="retranscribe-mode">Retranscribe mode</label>
+              <select
+                id="retranscribe-mode"
+                class="px-2 py-1.5 rounded-lg bg-surface-container text-on-surface border border-outline-variant/40 font-headline-md text-[13px] disabled:opacity-50"
+                bind:value={retranscribeMode}
+                disabled={actionBusy}
+              >
+                {#each ACTIVE_MODES as item (item)}
+                  <option value={item}>{item}</option>
+                {/each}
+              </select>
+              <button
+                class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-surface-container hover:bg-surface-container-high text-on-surface border border-outline-variant/40 font-headline-md text-[13px] transition-colors disabled:opacity-50"
+                id="retranscribe-btn"
+                title="Retranscribe retained audio with the configured model"
+                type="button"
+                disabled={actionBusy}
+                onclick={() => retranscribeSelected()}
+              >
+                <span class="material-symbols-outlined text-[16px] text-primary">replay</span>
+                <span>Retranscribe</span>
               </button>
               <div class="h-4 w-px bg-outline-variant/40 mx-0.5"></div>
               <button

@@ -50,13 +50,20 @@ export type RowView = {
 export type DetailView = {
   id: number;
   text: string;
+  /** True when the row has a retained audio path. */
+  canPlay: boolean;
 };
 
 function detailView(input: HistoryScreenInput): DetailView | null {
   if (input.selectedId == null) return null;
   const selected = input.rows.find((row) => row.id === input.selectedId);
   if (selected == null) return null;
-  return { id: selected.id, text: displayText(selected, input.textView) };
+  const path = selected.audio_path;
+  return {
+    id: selected.id,
+    text: displayText(selected, input.textView),
+    canPlay: path != null && path.length > 0,
+  };
 }
 
 function sessionStatus(input: HistoryScreenInput): string {

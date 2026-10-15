@@ -58,6 +58,26 @@ async fn reinsert_entry(id: i64) -> Result<(), String> {
         .map_err(|e| format!("ReinsertEntry: {e}"))
 }
 
+/// Retained WAV bytes (`ReadAudio`). The dashboard plays them; the daemon does not.
+#[tauri::command]
+async fn read_audio(id: i64) -> Result<Vec<u8>, String> {
+    daemon_proxy()
+        .await?
+        .read_audio(id)
+        .await
+        .map_err(|e| format!("ReadAudio: {e}"))
+}
+
+/// New history row from retained audio (`Retranscribe`). Does not paste.
+#[tauri::command]
+async fn retranscribe(id: i64, mode: String, model_id: String) -> Result<i64, String> {
+    daemon_proxy()
+        .await?
+        .retranscribe(id, &mode, &model_id)
+        .await
+        .map_err(|e| format!("Retranscribe: {e}"))
+}
+
 /// Delete history entries by id (`DeleteEntries`).
 #[tauri::command]
 async fn delete_entries(ids: Vec<i64>) -> Result<(), String> {
@@ -105,6 +125,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_history,
             reinsert_entry,
+            read_audio,
+            retranscribe,
             delete_entries,
             load_config,
             save_config,

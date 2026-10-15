@@ -21,6 +21,7 @@ function entry(overrides: Partial<HistoryEntry> = {}): HistoryEntry {
     cleanup_flagged: false,
     audio_path: null,
     pinned: false,
+    kind: "dictation",
     ...overrides,
   };
 }
@@ -133,10 +134,10 @@ test("detail keeps the final/raw fallback when the chosen side is blank", () => 
     if (screen.kind !== "results") return null;
     return screen.detail;
   };
-  assert.deepEqual(detailFor(1, "raw"), { id: 1, text: "kept final" });
-  assert.deepEqual(detailFor(2, "final"), { id: 2, text: "kept raw" });
-  assert.deepEqual(detailFor(3, "final"), { id: 3, text: "(empty)" });
-  assert.deepEqual(detailFor(4, "raw"), { id: 4, text: "raw side" });
+  assert.deepEqual(detailFor(1, "raw"), { id: 1, text: "kept final", canPlay: false });
+  assert.deepEqual(detailFor(2, "final"), { id: 2, text: "kept raw", canPlay: false });
+  assert.deepEqual(detailFor(3, "final"), { id: 3, text: "(empty)", canPlay: false });
+  assert.deepEqual(detailFor(4, "raw"), { id: 4, text: "raw side", canPlay: false });
   assert.equal(detailFor(null, "final"), null);
   assert.equal(detailFor(99, "final"), null);
 });
@@ -244,7 +245,29 @@ test("Devanagari and multiline text round-trip unchanged", () => {
     screen.rows.map((row) => row.preview),
     [devanagari, snippet],
   );
-  assert.deepEqual(screen.detail, { id: 2, text: snippet });
+  assert.deepEqual(screen.detail, { id: 2, text: snippet, canPlay: false });
+});
+
+test("a retained audio path can play and a missing path cannot", () => {
+  const withAudio = historyScreen(
+    input({
+      rows: [entry({ id: 7, audio_path: "/tmp/7.wav" })],
+      selectedId: 7,
+    }),
+  );
+  assert.equal(withAudio.kind, "results");
+  if (withAudio.kind !== "results") return;
+  assert.deepEqual(withAudio.detail, { id: 7, text: "final words", canPlay: true });
+
+  const without = historyScreen(
+    input({
+      rows: [entry({ id: 7, audio_path: null })],
+      selectedId: 7,
+    }),
+  );
+  assert.equal(without.kind, "results");
+  if (without.kind !== "results") return;
+  assert.deepEqual(without.detail, { id: 7, text: "final words", canPlay: false });
 });
 
 test("row preview prefers final text, then raw text, then (empty)", () => {

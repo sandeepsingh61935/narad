@@ -16,6 +16,8 @@ export type HistoryEntry = {
   cleanup_flagged: boolean;
   audio_path: string | null;
   pinned: boolean;
+  /** `dictation` or `retranscribe`. */
+  kind: string;
 };
 
 export type TextView = "final" | "raw";

@@ -13,7 +13,8 @@
     border: 1px solid rgba(255, 255, 255, 0.20);
 }
 
-.narad-hud-anchor:hover {
+.narad-hud-anchor:hover,
+.narad-hud-anchor:focus {
     background-color: rgba(255, 255, 255, 0.15);
 }
 
@@ -24,7 +25,8 @@
     background-color: rgba(230, 226, 223, 0.80);
 }
 
-.narad-hud-anchor:hover .narad-hud-anchor-core {
+.narad-hud-anchor:hover .narad-hud-anchor-core,
+.narad-hud-anchor:focus .narad-hud-anchor-core {
     background-color: #e08a1e;
 }
 
@@ -55,6 +57,11 @@
     width: 10px;
     height: 10px;
     background-color: #e08a1e;
+}
+
+.narad-hud-anchor-processing StIcon {
+    icon-size: 14px;
+    color: #1c1b1a;
 }
 
 /* Copied / inserted success */
@@ -182,6 +189,10 @@
     font-size: 9px;
     font-family: "JetBrains Mono", monospace;
     font-weight: 600;
+}
+
+.popup-menu-item .narad-hud-keycap {
+    margin-left: 12px;
 }
 
 .narad-hud-hint {

@@ -106,7 +106,9 @@ export default class NaradExtension extends Extension {
         this._anchor = new St.Bin({
             style_class: 'narad-hud-anchor',
             reactive: true,
+            can_focus: true,
             track_hover: true,
+            accessible_name: 'Narad dictation HUD',
             width: ANCHOR_SIZE,
             height: ANCHOR_SIZE,
             x_align: Clutter.ActorAlign.CENTER,

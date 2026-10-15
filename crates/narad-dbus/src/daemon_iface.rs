@@ -1,7 +1,8 @@
 //! Client proxy and method signatures for `dev.narad.Daemon` (Phase 1).
 //!
-//! Phase 2+ D-Bus methods still omitted: `SelectionCommand`, `Transcribe`,
+//! Phase 2+ D-Bus methods still omitted: `SelectionCommand`,
 //! `ListModels`, `SetActiveModel`, `Benchmark`.
+//! `Transcribe` is included (FR-ASR-6).
 //! `PasteLast` is included (FR-INS-4).
 //! `UndoLast` is included (FR-INS-5).
 //! `ReportFocus` is included (FR-CTX-1).
@@ -68,6 +69,12 @@ pub trait Daemon {
 
     /// New history row from the source audio. Does not paste. Allowed while paused.
     async fn retranscribe(&self, id: i64, mode: &str, model_id: &str) -> zbus::Result<i64>;
+
+    /// Transcribe one audio or video file. Does not paste or copy.
+    ///
+    /// Empty `mode` uses the session mode. Empty `dst_lang` stays English.
+    /// A non-empty `dst_lang` is an error. Returns the new history id.
+    async fn transcribe(&self, path: &str, mode: &str, dst_lang: &str) -> zbus::Result<i64>;
 
     /// Set one row's pin. A missing row is an error and changes nothing.
     async fn set_pinned(&self, id: i64, pinned: bool) -> zbus::Result<()>;

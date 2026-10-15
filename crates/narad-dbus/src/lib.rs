@@ -7,13 +7,14 @@
 //! Methods: `Start`, `Stop`, `Cancel`, `Toggle`, `History`, `ReinsertEntry`, `DeleteEntries`,
 //! `PasteLast` (FR-INS-4), `UndoLast` (FR-INS-5), `ReportFocus` (FR-CTX-1),
 //! `ReadAudio` and `Retranscribe` (FR-HIS-5), `SetPinned`, `SetTags`,
-//! `Export`, and `DeleteAll` (FR-HIS-6), `Stats` (FR-HIS-8).
+//! `Export`, and `DeleteAll` (FR-HIS-6), `Stats` (FR-HIS-8),
+//! `Transcribe` (FR-ASR-6).
 //! Signals: `StateChanged`, `Level`, `EntryAdded`.
 //! Properties: `Mode` (writable), `Paused` (writable), `HudVisible` (writable).
 //!
 //! ## Deferred (Phase 2+)
 //!
-//! Not defined in this crate yet: `SelectionCommand`, `Transcribe`,
+//! Not defined in this crate yet: `SelectionCommand`,
 //! `ListModels`, `SetActiveModel`, `Benchmark`.
 
 pub const SERVICE_NAME: &str = "dev.narad.Daemon";
@@ -154,6 +155,18 @@ mod tests {
                 stats.from_day,
                 stats.to_day,
             );
+        }
+        let _ = assert_sig;
+    }
+
+    #[test]
+    fn transcribe_is_on_the_daemon_proxy() {
+        async fn assert_sig(proxy: &DaemonProxy<'_>) {
+            let id: i64 = proxy
+                .transcribe("/tmp/clip.wav", "plain", "")
+                .await
+                .expect("id");
+            let _ = id;
         }
         let _ = assert_sig;
     }

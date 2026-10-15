@@ -30,6 +30,8 @@ pub enum StoreError {
     InvalidTimestamp,
     #[error("no history row {0}")]
     Missing(i64),
+    #[error("unknown export format: {0}")]
+    UnknownFormat(String),
 }
 
 /// How many rows a retention pass changed (FR-HIS-7).
@@ -331,6 +333,38 @@ impl HistoryStore {
         Ok(deleted)
     }
 
+    /// One document for `ids`, in that order. A missing id returns no document.
+    ///
+    /// The caller chooses the rows. This does not apply list filters.
+    pub fn export(&self, ids: &[i64], format: &str) -> Result<String, StoreError> {
+        let mut entries = Vec::with_capacity(ids.len());
+        for id in ids {
+            match self.get(*id)? {
+                Some(entry) => entries.push(entry),
+                None => return Err(StoreError::Missing(*id)),
+            }
+        }
+        export_document(&entries, format)
+    }
+
+    /// Delete every history row and unlink stored audio. A missing file still counts.
+    pub fn delete_all(&mut self) -> Result<u32, StoreError> {
+        let paths = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT audio_path FROM entries WHERE audio_path IS NOT NULL")?;
+            let paths = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            paths
+        };
+        for path in paths {
+            let _ = unlink_audio(&path);
+        }
+        let deleted = self.conn.execute("DELETE FROM entries", [])?;
+        Ok(deleted as u32)
+    }
+
     /// Apply text and audio retention (FR-HIS-7).
     ///
     /// `now_ms` is Unix epoch milliseconds. A `None` duration keeps that kind
@@ -420,6 +454,130 @@ fn unlink_audio(path: &str) -> std::io::Result<()> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         other => other,
     }
+}
+
+/// Build one export document. `format` is `json`, `markdown`, or `txt` after trim.
+///
+/// JSON is a compact array in entry order and includes pin, tags, and `audio_path`.
+/// It does not read the audio file. Markdown and txt are `final_text` only, with a
+/// blank line between entries and no trailing newline.
+pub fn export_document(entries: &[HistoryEntry], format: &str) -> Result<String, StoreError> {
+    match format.trim() {
+        "json" => Ok(json_document(entries)),
+        "markdown" | "txt" => Ok(entries
+            .iter()
+            .map(|entry| entry.final_text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n")),
+        other => Err(StoreError::UnknownFormat(other.to_string())),
+    }
+}
+
+fn json_document(entries: &[HistoryEntry]) -> String {
+    let mut out = String::from("[");
+    for (index, entry) in entries.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_json_entry(&mut out, entry);
+    }
+    out.push(']');
+    out
+}
+
+fn push_json_entry(out: &mut String, entry: &HistoryEntry) {
+    out.push('{');
+    push_json_key(out, "id");
+    push_json_i64(out, entry.id);
+    push_json_key(out, "created_at");
+    push_json_i64(out, entry.created_at);
+    push_json_key(out, "duration_ms");
+    push_json_u32(out, entry.duration_ms);
+    push_json_key(out, "mode");
+    push_json_string(out, &entry.mode);
+    push_json_key(out, "src_lang");
+    push_json_string(out, &entry.src_lang);
+    push_json_key(out, "dst_lang");
+    push_json_string(out, &entry.dst_lang);
+    push_json_key(out, "asr_model");
+    push_json_string(out, &entry.asr_model);
+    push_json_key(out, "mt_model");
+    push_json_opt_string(out, &entry.mt_model);
+    push_json_key(out, "llm_model");
+    push_json_opt_string(out, &entry.llm_model);
+    push_json_key(out, "app_id");
+    push_json_opt_string(out, &entry.app_id);
+    push_json_key(out, "raw_text");
+    push_json_string(out, &entry.raw_text);
+    push_json_key(out, "final_text");
+    push_json_string(out, &entry.final_text);
+    push_json_key(out, "insert_status");
+    push_json_string(out, entry.insert_status.as_str());
+    push_json_key(out, "cleanup_flagged");
+    push_json_bool(out, entry.cleanup_flagged);
+    push_json_key(out, "audio_path");
+    push_json_opt_string(out, &entry.audio_path);
+    push_json_key(out, "pinned");
+    push_json_bool(out, entry.pinned);
+    push_json_key(out, "kind");
+    push_json_string(out, &entry.kind);
+    push_json_key(out, "tags");
+    out.push('[');
+    for (index, tag) in entry.tags.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_json_string(out, tag);
+    }
+    out.push(']');
+    out.push('}');
+}
+
+fn push_json_key(out: &mut String, key: &str) {
+    if !out.ends_with('{') {
+        out.push(',');
+    }
+    push_json_string(out, key);
+    out.push(':');
+}
+
+fn push_json_i64(out: &mut String, value: i64) {
+    out.push_str(&value.to_string());
+}
+
+fn push_json_u32(out: &mut String, value: u32) {
+    out.push_str(&value.to_string());
+}
+
+fn push_json_bool(out: &mut String, value: bool) {
+    out.push_str(if value { "true" } else { "false" });
+}
+
+fn push_json_opt_string(out: &mut String, value: &Option<String>) {
+    match value {
+        Some(text) => push_json_string(out, text),
+        None => out.push_str("null"),
+    }
+}
+
+fn push_json_string(out: &mut String, value: &str) {
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{0008}' => out.push_str("\\b"),
+            '\u{000c}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
 }
 
 fn now_millis() -> Result<i64, StoreError> {
@@ -1171,5 +1329,104 @@ mod tests {
             store.get(second).expect("get").expect("row").tags,
             ["shared"]
         );
+    }
+
+    fn quoted_entry() -> HistoryEntry {
+        HistoryEntry {
+            id: 7,
+            created_at: 86_400_000,
+            duration_ms: 1000,
+            mode: "plain".into(),
+            src_lang: "en".into(),
+            dst_lang: "en".into(),
+            asr_model: "parakeet-ctc-110m-int8".into(),
+            mt_model: None,
+            llm_model: None,
+            app_id: Some("org.gnome.TextEditor".into()),
+            raw_text: "raw".into(),
+            final_text: "say \"hi\"".into(),
+            insert_status: InsertStatus::Success,
+            cleanup_flagged: false,
+            audio_path: Some("/tmp/7.wav".into()),
+            pinned: true,
+            kind: "dictation".into(),
+            tags: vec!["a".into(), "A".into()],
+        }
+    }
+
+    fn finals(texts: &[&str]) -> Vec<HistoryEntry> {
+        texts
+            .iter()
+            .enumerate()
+            .map(|(index, text)| HistoryEntry {
+                id: index as i64,
+                created_at: 0,
+                duration_ms: 0,
+                mode: "plain".into(),
+                src_lang: "en".into(),
+                dst_lang: "en".into(),
+                asr_model: "m".into(),
+                mt_model: None,
+                llm_model: None,
+                app_id: None,
+                raw_text: String::new(),
+                final_text: (*text).into(),
+                insert_status: InsertStatus::Success,
+                cleanup_flagged: false,
+                audio_path: None,
+                pinned: false,
+                kind: "dictation".into(),
+                tags: Vec::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn export_document_json_markdown_and_txt_match_the_literals() {
+        let entry = quoted_entry();
+        let json = export_document(std::slice::from_ref(&entry), "json").expect("json");
+        assert_eq!(
+            json,
+            r#"[{"id":7,"created_at":86400000,"duration_ms":1000,"mode":"plain","src_lang":"en","dst_lang":"en","asr_model":"parakeet-ctc-110m-int8","mt_model":null,"llm_model":null,"app_id":"org.gnome.TextEditor","raw_text":"raw","final_text":"say \"hi\"","insert_status":"success","cleanup_flagged":false,"audio_path":"/tmp/7.wav","pinned":true,"kind":"dictation","tags":["a","A"]}]"#
+        );
+        let rows = finals(&["one", "two"]);
+        assert_eq!(
+            export_document(&rows, "markdown").expect("markdown"),
+            "one\n\ntwo"
+        );
+        assert_eq!(export_document(&rows, "txt").expect("txt"), "one\n\ntwo");
+    }
+
+    #[test]
+    fn delete_all_removes_both_rows_and_the_named_wav() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wav = dir.path().join("7.wav");
+        std::fs::write(&wav, b"speech").expect("wav");
+        let missing = dir.path().join("missing.wav");
+        let mut store = HistoryStore::open(dir.path().join("t.db")).expect("open");
+        let mut first = sample_new("one", "one");
+        first.audio_path = Some(wav.display().to_string());
+        store.insert(&first).expect("one");
+        let mut second = sample_new("two", "two");
+        second.audio_path = Some(missing.display().to_string());
+        store.insert(&second).expect("two");
+
+        store.delete_all().expect("delete all");
+
+        assert!(store.list(0, 10).expect("list").is_empty());
+        assert!(!wav.exists());
+    }
+
+    #[test]
+    fn export_by_ids_reports_a_missing_row_and_includes_final_text() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        let id = store
+            .insert(&sample_new("raw", "kept final"))
+            .expect("insert");
+        let err = store.export(&[99], "json").expect_err("missing");
+        assert!(err.to_string().contains("no history row 99"));
+        let doc = store.export(&[id], "txt").expect("export");
+        assert!(doc.contains("kept final"));
     }
 }

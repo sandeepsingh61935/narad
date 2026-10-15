@@ -1008,9 +1008,125 @@ impl PipelineHandle {
                 cleanup_flagged: false,
                 audio_path: None,
                 pinned: false,
+                kind: "dictation".into(),
             })
             .map_err(|e| e.to_string())
     }
+
+    /// WAV bytes for a row. Missing row, empty path, missing file, or empty
+    /// bytes is an error. This does not play audio.
+    pub fn read_audio(&self, id: i64) -> Result<Vec<u8>, String> {
+        let path = self.with_store(|store| {
+            let row = store
+                .get(id)
+                .map_err(|err| err.to_string())?
+                .ok_or_else(|| format!("no history row {id}"))?;
+            match row.audio_path {
+                Some(path) if !path.is_empty() => Ok(path),
+                _ => Err("no audio".into()),
+            }
+        })?;
+        match std::fs::read(&path) {
+            Ok(bytes) if !bytes.is_empty() => Ok(bytes),
+            _ => Err("no audio".into()),
+        }
+    }
+
+    /// New `retranscribe` row from retained audio. Does not paste, does not
+    /// write a WAV, and is allowed while history is paused.
+    ///
+    /// `EntryAdded` is emitted by the D-Bus method after this returns an id.
+    pub fn retranscribe(&self, id: i64, mode: &str, model_id: &str) -> Result<i64, String> {
+        let source = self.with_store(|store| {
+            store
+                .get(id)
+                .map_err(|err| err.to_string())?
+                .ok_or_else(|| format!("no history row {id}"))
+        })?;
+        let bytes = match source.audio_path.as_deref().filter(|path| !path.is_empty()) {
+            Some(path) => match std::fs::read(path) {
+                Ok(bytes) if !bytes.is_empty() => bytes,
+                _ => return Err("no audio".into()),
+            },
+            None => return Err("no audio".into()),
+        };
+        if repeats_source_mode_and_model(&source.mode, &source.asr_model, mode, model_id) {
+            return Err("same mode and model".into());
+        }
+        self.require_loaded_model(model_id)?;
+        let pcm = crate::retained::decode_pcm16_wav(&bytes)
+            .map_err(|_| "wav is not pcm16 16 khz mono".to_string())?;
+        let samples = crate::retained::pcm16_to_f32(&pcm);
+        let raw = self.transcribe_loaded(model_id, &samples)?;
+        let Some(final_text) = self.accepted_transcript(&raw) else {
+            return Err("hallucination filter dropped output".into());
+        };
+        let duration_ms = u32::try_from(pcm.len() / 16).unwrap_or(u32::MAX);
+        self.with_store(|store| {
+            store
+                .insert(&NewHistoryEntry {
+                    duration_ms,
+                    mode: mode.to_string(),
+                    src_lang: source.src_lang.clone(),
+                    dst_lang: source.dst_lang.clone(),
+                    asr_model: model_id.to_string(),
+                    mt_model: None,
+                    llm_model: None,
+                    app_id: source.app_id.clone(),
+                    raw_text: raw,
+                    final_text,
+                    insert_status: InsertStatus::Failed,
+                    cleanup_flagged: false,
+                    audio_path: None,
+                    pinned: false,
+                    kind: "retranscribe".into(),
+                })
+                .map_err(|err| err.to_string())
+        })
+    }
+
+    fn require_loaded_model(&self, model_id: &str) -> Result<(), String> {
+        if model_id.is_empty() {
+            return Err("model is not loaded".into());
+        }
+        let guard = self
+            .inner
+            .asr
+            .lock()
+            .map_err(|err| format!("asr lock: {err}"))?;
+        match guard.as_ref() {
+            Some(engine) if engine.model_id == model_id => Ok(()),
+            _ => Err("model is not loaded".into()),
+        }
+    }
+
+    fn transcribe_loaded(&self, model_id: &str, samples: &[f32]) -> Result<String, String> {
+        self.require_loaded_model(model_id)?;
+        let guard = self
+            .inner
+            .asr
+            .lock()
+            .map_err(|err| format!("asr lock: {err}"))?;
+        let engine = guard
+            .as_ref()
+            .ok_or_else(|| "model is not loaded".to_string())?;
+        if engine.model_id != model_id {
+            return Err("model is not loaded".into());
+        }
+        engine
+            .transcribe(samples, audio::TARGET_SAMPLE_RATE)
+            .map_err(|err| err.to_string())
+    }
+}
+
+/// Same mode and same model cannot be retranscribed. Missing audio is not decided here.
+fn repeats_source_mode_and_model(
+    source_mode: &str,
+    source_model: &str,
+    mode: &str,
+    model_id: &str,
+) -> bool {
+    source_mode == mode && source_model == model_id
 }
 
 fn phrase_table(pairs: &[crate::config::Replacement]) -> Vec<crate::text::Replacement> {
@@ -1201,6 +1317,67 @@ mod tests {
         assert_eq!(stored.audio_path.as_deref(), Some(wav.to_str().unwrap()));
         let bytes = std::fs::read(wav).expect("wav");
         assert_eq!(&bytes[44..], &[0x00, 0x40]);
+    }
+
+    #[test]
+    fn same_mode_and_model_refuses_and_a_different_mode_allows() {
+        assert!(repeats_source_mode_and_model(
+            "plain",
+            "parakeet-ctc-110m-int8",
+            "plain",
+            "parakeet-ctc-110m-int8"
+        ));
+        assert!(!repeats_source_mode_and_model(
+            "plain",
+            "parakeet-ctc-110m-int8",
+            "email",
+            "parakeet-ctc-110m-int8"
+        ));
+    }
+
+    #[test]
+    fn retranscribe_without_audio_errors_and_keeps_the_row_count_while_paused() {
+        let (_dir, pipe) = test_pipe();
+        pipe.set_paused(true).expect("pause");
+        let id = insert_hello(&pipe);
+        assert_eq!(
+            pipe.retranscribe(id, "email", "other-model")
+                .expect_err("no audio"),
+            "no audio"
+        );
+        assert_eq!(row_count(&pipe), 1);
+    }
+
+    #[test]
+    fn retranscribe_same_mode_and_model_adds_no_row() {
+        let (dir, pipe) = test_pipe();
+        let id = insert_hello(&pipe);
+        let audio = dir.path().join("audio");
+        let wav = crate::retained::write_retained_wav(&audio, id, &[0.5]).expect("wav");
+        let before = std::fs::read(&wav).expect("read");
+        pipe.with_store(|store| {
+            store
+                .set_audio_path(id, wav.to_str().unwrap())
+                .map_err(|err| err.to_string())
+        })
+        .expect("path");
+        assert_eq!(
+            pipe.retranscribe(id, "plain", "test").expect_err("same"),
+            "same mode and model"
+        );
+        assert_eq!(row_count(&pipe), 1);
+        let stored = pipe
+            .with_store(|store| store.get(id).map_err(|err| err.to_string()))
+            .expect("store")
+            .expect("row");
+        assert_eq!(stored.kind, "dictation");
+        assert_eq!(stored.audio_path.as_deref(), Some(wav.to_str().unwrap()));
+        assert_eq!(std::fs::read(&wav).expect("still"), before);
+    }
+
+    fn row_count(pipe: &PipelineHandle) -> usize {
+        pipe.with_store(|store| Ok(store.list(0, 50).map_err(|err| err.to_string())?.len()))
+            .expect("count")
     }
 
     fn mark_started(pipe: &PipelineHandle) {

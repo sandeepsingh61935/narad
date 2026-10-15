@@ -95,6 +95,51 @@ fn pcm16_wav(samples: &[f32]) -> Vec<u8> {
     out
 }
 
+/// Decode the PCM16 16 kHz mono WAV this daemon writes. Anything else is an error.
+pub(crate) fn decode_pcm16_wav(bytes: &[u8]) -> Result<Vec<i16>, String> {
+    if bytes.len() < 44 {
+        return Err("wav is not pcm16 16 khz mono".into());
+    }
+    let riff_size = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+    let fmt_len = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
+    let audio_format = u16::from_le_bytes(bytes[20..22].try_into().unwrap());
+    let channels = u16::from_le_bytes(bytes[22..24].try_into().unwrap());
+    let rate = u32::from_le_bytes(bytes[24..28].try_into().unwrap());
+    let byte_rate = u32::from_le_bytes(bytes[28..32].try_into().unwrap());
+    let block_align = u16::from_le_bytes(bytes[32..34].try_into().unwrap());
+    let bits = u16::from_le_bytes(bytes[34..36].try_into().unwrap());
+    let data_len = u32::from_le_bytes(bytes[40..44].try_into().unwrap()) as usize;
+    let header_ok = &bytes[0..4] == b"RIFF"
+        && &bytes[8..12] == b"WAVE"
+        && &bytes[12..16] == b"fmt "
+        && fmt_len == 16
+        && audio_format == 1
+        && channels == 1
+        && rate == 16_000
+        && byte_rate == 32_000
+        && block_align == 2
+        && bits == 16
+        && &bytes[36..40] == b"data"
+        && data_len % 2 == 0
+        && riff_size == 36 + data_len
+        && bytes.len() == 44 + data_len;
+    if !header_ok {
+        return Err("wav is not pcm16 16 khz mono".into());
+    }
+    let mut samples = Vec::with_capacity(data_len / 2);
+    for frame in bytes[44..].chunks_exact(2) {
+        samples.push(i16::from_le_bytes([frame[0], frame[1]]));
+    }
+    Ok(samples)
+}
+
+pub(crate) fn pcm16_to_f32(samples: &[i16]) -> Vec<f32> {
+    samples
+        .iter()
+        .map(|sample| (*sample as f32 / 32767.0).clamp(-1.0, 1.0))
+        .collect()
+}
+
 fn pcm16(sample: f32) -> i16 {
     let finite = if sample.is_finite() { sample } else { 0.0 };
     (finite.clamp(-1.0, 1.0) * 32767.0).round() as i16
@@ -114,6 +159,15 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_half_sample_decodes_to_i16_16384() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_retained_wav(dir.path(), 7, &[0.5]).expect("wav");
+        let bytes = std::fs::read(path).expect("read");
+        let samples = decode_pcm16_wav(&bytes).expect("decode");
+        assert_eq!(samples, vec![16384]);
+    }
 
     #[test]
     fn one_half_sample_is_a_pcm16_wav() {
@@ -202,6 +256,7 @@ mod tests {
             cleanup_flagged: false,
             audio_path: None,
             pinned: false,
+            kind: "dictation".into(),
         }
     }
 

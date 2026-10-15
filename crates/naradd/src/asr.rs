@@ -19,7 +19,6 @@ pub fn supports_vocabulary_bias(_model_id: &str) -> bool {
 /// Warm-loaded English CTC recogniser.
 pub struct AsrEngine {
     recognizer: OfflineRecognizer,
-    #[allow(dead_code)]
     pub model_id: String,
     #[allow(dead_code)]
     pub model_dir: PathBuf,

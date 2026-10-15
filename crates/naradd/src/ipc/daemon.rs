@@ -136,6 +136,32 @@ impl DaemonIpc {
             .map_err(zbus::fdo::Error::Failed)
     }
 
+    async fn read_audio(&self, id: i64) -> zbus::fdo::Result<Vec<u8>> {
+        self.pipeline
+            .read_audio(id)
+            .map_err(zbus::fdo::Error::Failed)
+    }
+
+    async fn retranscribe(
+        &self,
+        id: i64,
+        mode: &str,
+        model_id: &str,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<i64> {
+        let mode = mode.to_string();
+        let model_id = model_id.to_string();
+        let pipeline = self.pipeline.clone();
+        let new_id = tokio::task::spawn_blocking(move || pipeline.retranscribe(id, &mode, &model_id))
+            .await
+            .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?
+            .map_err(zbus::fdo::Error::Failed)?;
+        Self::entry_added(&emitter, new_id)
+            .await
+            .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?;
+        Ok(new_id)
+    }
+
     async fn report_focus(&self, app_id: &str) -> zbus::fdo::Result<()> {
         self.pipeline.report_focus(app_id).map_err(lock_err)
     }
@@ -201,6 +227,7 @@ pub fn core_history_to_dbus(entry: &CoreHistoryEntry) -> HistoryEntry {
         cleanup_flagged: entry.cleanup_flagged,
         audio_path: entry.audio_path.clone(),
         pinned: entry.pinned,
+        kind: entry.kind.clone(),
     }
 }
 
@@ -234,6 +261,7 @@ mod tests {
                 cleanup_flagged: false,
                 audio_path: None,
                 pinned: true,
+                kind: "dictation".into(),
             })
             .expect("insert");
         let row = store.get(id).expect("get").expect("row");
@@ -241,5 +269,6 @@ mod tests {
         assert_eq!(dbus.insert_status, "skipped");
         assert_eq!(dbus.raw_text, "hi");
         assert!(dbus.pinned);
+        assert_eq!(dbus.kind, "dictation");
     }
 }

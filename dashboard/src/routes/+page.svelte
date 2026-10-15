@@ -652,14 +652,15 @@
 
 {#snippet searchField()}
   <form
-    class="relative flex-1 flex items-center bg-surface-container rounded-lg px-space-sm py-1.5 border border-outline-variant/40 focus-within:border-primary-container transition-colors"
+    role="search"
+    class="relative flex-1 flex items-center bg-surface-container rounded-lg px-space-sm py-1.5 border border-outline-variant/30 min-h-[36px] focus-within:border-primary transition-colors"
     onsubmit={onSearchSubmit}
   >
     <label class="sr-only" for={SEARCH_ID}>Search history</label>
-    <span class="material-symbols-outlined text-on-surface-variant text-[18px] mr-space-xs">search</span>
+    <span class="material-symbols-outlined text-on-surface-variant text-[18px] mr-space-xs" aria-hidden="true">search</span>
     <input
       id={SEARCH_ID}
-      class="w-full bg-transparent border-none outline-none font-body-default text-body-default text-on-surface placeholder:text-on-surface-variant/60"
+      class="w-full bg-transparent border-none outline-none font-body-default text-body-default text-on-surface placeholder:text-on-surface-variant/60 min-h-[36px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container rounded"
       type="search"
       placeholder="Search transcripts"
       bind:value={query}
@@ -667,7 +668,7 @@
       spellcheck="false"
     />
     <div class="flex items-center gap-1 shrink-0 ml-1">
-      <kbd class="px-1.5 py-0.5 rounded bg-surface-container-high border border-outline-variant/40 font-keycap text-keycap text-on-surface-variant">/</kbd>
+      <kbd class="px-1.5 py-0.5 rounded bg-surface-container-high border border-outline-variant/30 font-keycap text-keycap text-on-surface-variant">/</kbd>
     </div>
   </form>
 {/snippet}
@@ -677,8 +678,9 @@
     <div class="flex items-center justify-between gap-space-sm">
       {@render searchField()}
       <button
-        class="p-2 rounded-lg bg-surface-container hover:bg-surface-container-high text-on-surface-variant hover:text-on-surface border border-outline-variant/30 transition-colors flex items-center justify-center"
+        class="p-2 rounded-lg bg-surface-container hover:bg-surface-container-high text-on-surface-variant hover:text-on-surface border border-outline-variant/30 transition-colors flex items-center justify-center min-h-[36px] min-w-[36px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
         title="Refresh"
+        aria-label="Refresh history"
         type="button"
         onclick={() => loadHistory()}
       >
@@ -687,21 +689,21 @@
     </div>
     <div class="flex items-center gap-space-xs overflow-x-auto pb-0.5 text-on-surface-variant font-body-muted text-body-muted">
       <input
-        class="px-2.5 py-1 rounded bg-surface-container-high text-on-surface border border-outline-variant/40 shrink-0"
+        class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0 font-body-muted text-body-muted min-h-[36px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
         type="date"
         aria-label="From day"
         bind:value={fromDay}
         onchange={onFilterCommit}
       />
       <input
-        class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0"
+        class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0 font-body-muted text-body-muted min-h-[36px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
         type="date"
         aria-label="To day"
         bind:value={toDay}
         onchange={onFilterCommit}
       />
       <select
-        class="w-28 px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0 font-body-muted text-body-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        class="w-28 px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0 font-body-muted text-body-muted min-h-[36px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
         aria-label="Filter by mode"
         bind:value={modeFilter}
         onchange={onFilterCommit}
@@ -712,7 +714,7 @@
         {/each}
       </select>
       <input
-        class="w-40 px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0"
+        class="w-40 px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0 font-body-muted text-body-muted placeholder:text-on-surface-variant/60 min-h-[36px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
         type="text"
         aria-label="App id"
         placeholder="App id"
@@ -720,7 +722,7 @@
         onchange={onFilterCommit}
       />
       <input
-        class="w-24 px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0"
+        class="w-24 px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0 font-body-muted text-body-muted placeholder:text-on-surface-variant/60 min-h-[36px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
         type="text"
         aria-label="Source language"
         placeholder="Language"
@@ -737,26 +739,26 @@
 {#snippet historyActions()}
   <div class="flex flex-wrap items-center gap-1.5">
     <button
-      class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/40 font-body-muted text-body-muted hover:bg-surface-container-high disabled:opacity-50"
+      class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 font-body-muted text-body-muted min-h-[36px] hover:bg-surface-container-high disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
       type="button"
       disabled={actionBusy}
       onclick={() => exportHistory("json")}
     >Export JSON</button>
     <button
-      class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/40 font-body-muted text-body-muted hover:bg-surface-container-high disabled:opacity-50"
+      class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 font-body-muted text-body-muted min-h-[36px] hover:bg-surface-container-high disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
       type="button"
       disabled={actionBusy}
       onclick={() => exportHistory("markdown")}
     >Export Markdown</button>
     <button
-      class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/40 font-body-muted text-body-muted hover:bg-surface-container-high disabled:opacity-50"
+      class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 font-body-muted text-body-muted min-h-[36px] hover:bg-surface-container-high disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
       type="button"
       disabled={actionBusy}
       onclick={() => exportHistory("txt")}
     >Export TXT</button>
     {#if checkedIds.length > 0}
       <button
-        class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/40 font-body-muted text-body-muted hover:text-error disabled:opacity-50"
+        class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 font-body-muted text-body-muted min-h-[36px] hover:text-error disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
         type="button"
         disabled={actionBusy}
         onclick={() => deleteChecked()}
@@ -767,7 +769,7 @@
         <label class="sr-only" for={DELETE_ALL_ID}>Type delete all history</label>
         <input
           id={DELETE_ALL_ID}
-          class="w-44 px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/40"
+          class="w-44 px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 min-h-[36px] font-body-muted text-body-muted placeholder:text-on-surface-variant/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
           type="text"
           autocomplete="off"
           spellcheck="false"
@@ -775,14 +777,14 @@
           bind:value={deleteAllPhrase}
         />
         <button
-          class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/40 font-body-muted text-body-muted hover:text-error disabled:opacity-50"
+          class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 font-body-muted text-body-muted min-h-[36px] hover:text-error disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
           type="submit"
           disabled={actionBusy}
         >Delete all</button>
       </form>
     {:else}
       <button
-        class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/40 font-body-muted text-body-muted hover:text-error disabled:opacity-50"
+        class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 font-body-muted text-body-muted min-h-[36px] hover:text-error disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
         type="button"
         disabled={actionBusy}
         onclick={() => (deleteAllOpen = true)}
@@ -841,14 +843,15 @@
           <section class="flex flex-col rounded-xl bg-surface-container-low border border-outline-variant overflow-hidden">
             <div class="p-space-md bg-surface-container/60 border-b border-outline-variant flex flex-col md:flex-row items-center gap-space-md">
               <form
-                class="flex items-center bg-surface-container px-3 py-1.5 rounded-lg border border-primary-container gap-2 w-full md:w-80"
+                role="search"
+                class="flex items-center bg-surface-container px-3 py-1.5 rounded-lg border border-primary-container gap-2 w-full md:w-80 min-h-[36px]"
                 onsubmit={onSearchSubmit}
               >
                 <span class="material-symbols-outlined text-primary-container text-[18px]">search</span>
                 <label class="sr-only" for={SEARCH_ID}>Search history</label>
                 <input
                   id={SEARCH_ID}
-                  class="font-body-default text-body-default text-on-surface truncate flex-1 bg-transparent border-none outline-none placeholder:text-on-surface-variant/60 min-w-0"
+                  class="font-body-default text-body-default text-on-surface truncate flex-1 bg-transparent border-none outline-none placeholder:text-on-surface-variant/60 min-w-0 min-h-[36px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container rounded"
                   type="search"
                   placeholder="Search transcripts..."
                   bind:value={query}
@@ -857,7 +860,7 @@
                 />
                 <button
                   aria-label="Clear search"
-                  class="w-4 h-4 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant hover:text-on-surface"
+                  class="w-6 h-6 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
                   type="button"
                   onclick={clearSearch}
                 >
@@ -865,7 +868,7 @@
                 </button>
               </form>
               <div class="flex items-center gap-1.5 flex-wrap w-full md:w-auto">
-                <span class="px-2.5 py-1 rounded bg-surface-container border border-outline-variant font-label-code text-label-code text-on-surface flex items-center gap-1">
+                <span class="px-2.5 py-1 rounded bg-surface-container border border-outline-variant font-label-code text-label-code text-on-surface flex items-center gap-1 min-h-[36px]">
                   <span>Mode: All</span>
                   <span class="material-symbols-outlined text-[14px] text-outline">expand_more</span>
                 </span>
@@ -886,7 +889,7 @@
                 Try checking for typos or resetting filter boundaries.
               </p>
               <button
-                class="flex items-center gap-space-xs bg-surface-container hover:bg-surface-container-high text-on-surface px-space-md py-1.5 rounded-lg font-headline-md text-headline-md border border-outline-variant transition-colors mb-space-lg"
+                class="flex items-center gap-space-xs bg-surface-container hover:bg-surface-container-high text-on-surface px-space-md py-1.5 rounded-lg font-headline-md text-headline-md border border-outline-variant/30 min-h-[36px] transition-colors mb-space-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
                 type="button"
                 onclick={clearSearch}
               >

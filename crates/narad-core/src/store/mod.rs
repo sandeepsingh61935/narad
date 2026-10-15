@@ -76,12 +76,12 @@ impl HistoryStore {
                 created_at, duration_ms, mode, src_lang, dst_lang,
                 asr_model, mt_model, llm_model, app_id,
                 raw_text, final_text, insert_status, cleanup_flagged,
-                audio_path, pinned
+                audio_path, pinned, kind
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5,
                 ?6, ?7, ?8, ?9,
                 ?10, ?11, ?12, ?13,
-                ?14, ?15
+                ?14, ?15, ?16
             )
             ",
             params![
@@ -100,6 +100,7 @@ impl HistoryStore {
                 entry.cleanup_flagged as i32,
                 entry.audio_path,
                 entry.pinned as i32,
+                entry.kind,
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -113,7 +114,7 @@ impl HistoryStore {
                 id, created_at, duration_ms, mode, src_lang, dst_lang,
                 asr_model, mt_model, llm_model, app_id,
                 raw_text, final_text, insert_status, cleanup_flagged,
-                audio_path, pinned
+                audio_path, pinned, kind
             FROM entries
             WHERE id = ?1
             ",
@@ -134,7 +135,7 @@ impl HistoryStore {
                 id, created_at, duration_ms, mode, src_lang, dst_lang,
                 asr_model, mt_model, llm_model, app_id,
                 raw_text, final_text, insert_status, cleanup_flagged,
-                audio_path, pinned
+                audio_path, pinned, kind
             FROM entries
             ORDER BY created_at DESC, id DESC
             LIMIT ?1 OFFSET ?2
@@ -158,7 +159,7 @@ impl HistoryStore {
                 e.id, e.created_at, e.duration_ms, e.mode, e.src_lang, e.dst_lang,
                 e.asr_model, e.mt_model, e.llm_model, e.app_id,
                 e.raw_text, e.final_text, e.insert_status, e.cleanup_flagged,
-                e.audio_path, e.pinned
+                e.audio_path, e.pinned, e.kind
             FROM entries e
             INNER JOIN entries_fts ON entries_fts.rowid = e.id
             WHERE entries_fts MATCH ?1
@@ -185,7 +186,7 @@ impl HistoryStore {
             e.id, e.created_at, e.duration_ms, e.mode, e.src_lang, e.dst_lang,
             e.asr_model, e.mt_model, e.llm_model, e.app_id,
             e.raw_text, e.final_text, e.insert_status, e.cleanup_flagged,
-            e.audio_path, e.pinned
+            e.audio_path, e.pinned, e.kind
         ";
         let (sql, params_owned): (String, Vec<rusqlite::types::Value>) = if query.is_empty() {
             (
@@ -397,6 +398,7 @@ fn row_to_entry(row: &Row) -> Result<HistoryEntry, rusqlite::Error> {
         cleanup_flagged: row.get::<_, i32>(13)? != 0,
         audio_path: row.get(14)?,
         pinned: row.get::<_, i32>(15)? != 0,
+        kind: row.get(16)?,
     })
 }
 
@@ -419,7 +421,8 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
             insert_status TEXT NOT NULL,
             cleanup_flagged INTEGER NOT NULL DEFAULT 0,
             audio_path TEXT,
-            pinned INTEGER NOT NULL DEFAULT 0
+            pinned INTEGER NOT NULL DEFAULT 0,
+            kind TEXT NOT NULL DEFAULT 'dictation'
         );
 
         CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
@@ -447,6 +450,23 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
         END;
         ",
     )?;
+    ensure_kind_column(conn)?;
+    Ok(())
+}
+
+/// Databases created before replay have no `kind`. Existing rows stay `dictation`.
+fn ensure_kind_column(conn: &Connection) -> Result<(), StoreError> {
+    let found = {
+        let mut stmt = conn.prepare("PRAGMA table_info(entries)")?;
+        let names = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        names.collect::<Result<Vec<_>, _>>()?
+    };
+    if !found.iter().any(|name| name == "kind") {
+        conn.execute(
+            "ALTER TABLE entries ADD COLUMN kind TEXT NOT NULL DEFAULT 'dictation'",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -474,6 +494,7 @@ mod tests {
             cleanup_flagged: false,
             audio_path: None,
             pinned: false,
+            kind: "dictation".into(),
         }
     }
 
@@ -889,5 +910,57 @@ mod tests {
             .set_audio_path(9, dir.path().join("9.wav").to_str().unwrap())
             .expect_err("missing");
         assert!(err.to_string().contains("9"));
+    }
+
+    #[test]
+    fn insert_get_round_trips_retranscribe_kind() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        let mut entry = sample_new("heard", "heard");
+        entry.kind = "retranscribe".into();
+        let id = store.insert(&entry).expect("insert");
+        let row = store.get(id).expect("get").expect("row");
+        assert_eq!(row.kind, "retranscribe");
+        let listed = store.list(0, 10).expect("list");
+        assert_eq!(listed[0].kind, "retranscribe");
+    }
+
+    #[test]
+    fn existing_rows_stay_dictation() {
+        let file = NamedTempFile::new().expect("temp db");
+        let conn = Connection::open(file.path()).expect("open");
+        conn.execute_batch(
+            "
+            CREATE TABLE entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                mode TEXT NOT NULL,
+                src_lang TEXT NOT NULL,
+                dst_lang TEXT NOT NULL,
+                asr_model TEXT NOT NULL,
+                mt_model TEXT,
+                llm_model TEXT,
+                app_id TEXT,
+                raw_text TEXT NOT NULL,
+                final_text TEXT NOT NULL,
+                insert_status TEXT NOT NULL,
+                cleanup_flagged INTEGER NOT NULL DEFAULT 0,
+                audio_path TEXT,
+                pinned INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO entries (
+                created_at, duration_ms, mode, src_lang, dst_lang,
+                asr_model, raw_text, final_text, insert_status
+            ) VALUES (1, 10, 'plain', 'en', 'en', 'm', 'raw', 'final', 'success');
+            ",
+        )
+        .expect("old schema");
+        drop(conn);
+
+        let store = HistoryStore::open(file.path()).expect("open");
+        let row = store.get(1).expect("get").expect("row");
+        assert_eq!(row.kind, "dictation");
+        assert_eq!(row.final_text, "final");
     }
 }

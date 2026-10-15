@@ -46,6 +46,8 @@ pub struct NewHistoryEntry {
     pub cleanup_flagged: bool,
     pub audio_path: Option<String>,
     pub pinned: bool,
+    /// `dictation` or `retranscribe`. Required; there is no omitted default.
+    pub kind: String,
 }
 
 /// A stored history row. Primary key is SQLite `INTEGER PRIMARY KEY` (`i64` rowid).
@@ -68,4 +70,6 @@ pub struct HistoryEntry {
     pub cleanup_flagged: bool,
     pub audio_path: Option<String>,
     pub pinned: bool,
+    /// `dictation` for a normal utterance. `retranscribe` for a replay row.
+    pub kind: String,
 }

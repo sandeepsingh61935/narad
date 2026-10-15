@@ -52,3 +52,26 @@ test("right-click opens the dot menu and does not hide", () => {
     /<property name="Mode" type="s" access="readwrite"\/>/,
   );
 });
+
+test("right-click menu includes keycap accelerators for modes", () => {
+  assert.match(extensionSource, /Ctrl\+Alt\+1/);
+  assert.match(extensionSource, /Ctrl\+Alt\+2/);
+  assert.match(extensionSource, /Ctrl\+Alt\+3/);
+  assert.match(extensionSource, /Ctrl\+Alt\+4/);
+  assert.match(extensionSource, /narad-hud-keycap/);
+});
+
+test("right-click menu dynamically updates Pause history label", () => {
+  assert.match(extensionSource, /Resume history/);
+  assert.match(extensionSource, /_syncDotMenuPause/);
+});
+
+test("processing anchor state does not rely on color alone", () => {
+  const procStart = extensionSource.indexOf("case 'processing':");
+  assert.ok(procStart >= 0, "missing processing case");
+  const procEnd = extensionSource.indexOf("case 'inserted':", procStart);
+  assert.ok(procEnd > procStart, "processing case does not end before inserted");
+  const procBlock = extensionSource.slice(procStart, procEnd);
+  assert.match(procBlock, /emblem-synchronizing-symbolic/);
+  assert.match(procBlock, /_setAnchorChild\(this\._anchorIcon\)/);
+});

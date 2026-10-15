@@ -563,18 +563,38 @@ export default class NaradExtension extends Extension {
         this._menuManager = new PopupMenu.PopupMenuManager(this._root);
         this._menuManager.addMenu(this._menu);
 
+        const modeShortcuts = {
+            plain: 'Ctrl+Alt+1',
+            email: 'Ctrl+Alt+2',
+            bullet: 'Ctrl+Alt+3',
+            code: 'Ctrl+Alt+4',
+        };
         this._modeItems = [];
         for (const mode of ['plain', 'email', 'bullet', 'code']) {
             const item = new PopupMenu.PopupMenuItem(mode);
+            const accel = new St.Label({
+                text: modeShortcuts[mode],
+                style_class: 'narad-hud-keycap',
+                x_align: Clutter.ActorAlign.END,
+                x_expand: true,
+            });
+            item.add_child(accel);
             item.connect('activate', () => this._setModeProperty(mode));
             this._menu.addMenuItem(item);
             this._modeItems.push([mode, item]);
         }
         this._menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._menu.addAction('Open dashboard', () => this._openDashboard());
-        this._menu.addAction('Pause history', () => this._onPauseHistory());
+        this._pauseItem = this._menu.addAction('Pause history', () => this._onPauseHistory());
+        this._syncDotMenuPause();
         this._menu.addAction('Hide HUD', () => this._onHideClick());
         this._menu.addAction('Quit', () => this._quitDaemon());
+    }
+
+    _syncDotMenuPause() {
+        if (!this._pauseItem || !this._pauseItem.label)
+            return;
+        this._pauseItem.label.text = this._paused ? 'Resume history' : 'Pause history';
     }
 
     _syncDotMenuMode() {
@@ -840,7 +860,8 @@ export default class NaradExtension extends Extension {
 
         case 'processing':
             this._anchor.add_style_class_name('narad-hud-anchor-processing');
-            this._setAnchorChild(this._anchorCore);
+            this._anchorIcon.icon_name = 'emblem-synchronizing-symbolic';
+            this._setAnchorChild(this._anchorIcon);
             this._pill.visible = true;
             this._pillIcon.icon_name = 'emblem-synchronizing-symbolic';
             this._pillIcon.visible = true;
@@ -942,6 +963,7 @@ export default class NaradExtension extends Extension {
 
     _applyPaused(paused) {
         this._paused = !!paused;
+        this._syncDotMenuPause();
         if (!this._anchor)
             return;
         if (this._state === 'idle')

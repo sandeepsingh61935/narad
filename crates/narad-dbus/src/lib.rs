@@ -9,7 +9,7 @@
 //! `ReadAudio` and `Retranscribe` (FR-HIS-5), `SetPinned`, `SetTags`,
 //! `Export`, and `DeleteAll` (FR-HIS-6), `Stats` (FR-HIS-8).
 //! Signals: `StateChanged`, `Level`, `EntryAdded`.
-//! Properties: `Mode`, `Paused` (writable), `HudVisible` (writable).
+//! Properties: `Mode` (writable), `Paused` (writable), `HudVisible` (writable).
 //!
 //! ## Deferred (Phase 2+)
 //!
@@ -100,6 +100,15 @@ mod tests {
         async fn assert_sig(proxy: &DaemonProxy<'_>) {
             let _ = proxy.set_paused(true).await;
             let _ = proxy.paused().await;
+        }
+        let _ = assert_sig;
+    }
+
+    #[test]
+    fn mode_is_writable_on_the_daemon_proxy() {
+        async fn assert_sig(proxy: &DaemonProxy<'_>) {
+            let _ = proxy.set_mode("code").await;
+            let _ = proxy.mode().await;
         }
         let _ = assert_sig;
     }

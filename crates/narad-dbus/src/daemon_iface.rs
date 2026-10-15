@@ -104,8 +104,13 @@ pub trait Daemon {
     #[zbus(signal)]
     fn entry_added(&self, id: i64) -> zbus::Result<()>;
 
+    /// Session mode for the next utterance. Writable; proxy exposes `set_mode`.
+    /// The daemon accepts `plain`, `email`, `bullet`, and `code` only.
     #[zbus(property)]
     fn mode(&self) -> zbus::Result<String>;
+
+    #[zbus(property)]
+    fn set_mode(&self, value: &str) -> zbus::Result<()>;
 
     /// When true, a finished dictation still pastes but writes no history row
     /// and emits no `EntryAdded` (FR-HIS-7). Explicit transcribe and re-insert

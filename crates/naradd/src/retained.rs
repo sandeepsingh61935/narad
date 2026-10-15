@@ -95,6 +95,118 @@ fn pcm16_wav(samples: &[f32]) -> Vec<u8> {
     out
 }
 
+/// argv for turning any media file into PCM16 16 kHz mono WAV on stdout.
+pub(crate) fn ffmpeg_wav_args(path: &str) -> Vec<String> {
+    [
+        "ffmpeg",
+        "-nostdin",
+        "-hide_banner",
+        "-v",
+        "error",
+        "-i",
+        path,
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-f",
+        "wav",
+        "pipe:1",
+    ]
+    .map(str::to_string)
+    .to_vec()
+}
+
+/// PCM16 16 kHz mono WAV via [`decode_pcm16_wav`], otherwise ffmpeg.
+/// A missing path is `no file`. A missing ffmpeg binary is `ffmpeg is not installed`.
+pub(crate) fn load_pcm_f32(path: &Path) -> Result<Vec<f32>, String> {
+    if !path.is_file() {
+        return Err("no file".into());
+    }
+    let bytes = fs::read(path).map_err(|err| err.to_string())?;
+    if let Ok(pcm) = decode_pcm16_wav(&bytes) {
+        return Ok(pcm16_to_f32(&pcm));
+    }
+    let wav = ffmpeg_wav(path)?;
+    let pcm = pcm16_from_ffmpeg_stdout(&wav)?;
+    Ok(pcm16_to_f32(&pcm))
+}
+
+/// ffmpeg `-f wav pipe:1` writes an unknown RIFF size and a LIST chunk before `data`.
+/// [`decode_pcm16_wav`] stays strict for files this daemon wrote.
+fn pcm16_from_ffmpeg_stdout(bytes: &[u8]) -> Result<Vec<i16>, String> {
+    if let Ok(pcm) = decode_pcm16_wav(bytes) {
+        return Ok(pcm);
+    }
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err("ffmpeg failed".into());
+    }
+    let mut offset = 12usize;
+    let mut format_ok = false;
+    let mut data: Option<&[u8]> = None;
+    while offset + 8 <= bytes.len() {
+        let id = &bytes[offset..offset + 4];
+        let size = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap());
+        let start = offset + 8;
+        let unknown = size == u32::MAX;
+        let payload_len = if unknown {
+            bytes.len().saturating_sub(start)
+        } else {
+            size as usize
+        };
+        if start + payload_len > bytes.len() {
+            return Err("ffmpeg failed".into());
+        }
+        let payload = &bytes[start..start + payload_len];
+        if id == b"fmt " {
+            if payload.len() < 16 {
+                return Err("ffmpeg failed".into());
+            }
+            let audio_format = u16::from_le_bytes(payload[0..2].try_into().unwrap());
+            let channels = u16::from_le_bytes(payload[2..4].try_into().unwrap());
+            let rate = u32::from_le_bytes(payload[4..8].try_into().unwrap());
+            let bits = u16::from_le_bytes(payload[14..16].try_into().unwrap());
+            format_ok = audio_format == 1 && channels == 1 && rate == 16_000 && bits == 16;
+        } else if id == b"data" {
+            data = Some(payload);
+            if unknown {
+                break;
+            }
+        }
+        if unknown {
+            break;
+        }
+        offset = start + payload_len + (payload_len % 2);
+    }
+    if !format_ok {
+        return Err("ffmpeg failed".into());
+    }
+    let data = data.ok_or_else(|| "ffmpeg failed".to_string())?;
+    if data.len() % 2 != 0 {
+        return Err("ffmpeg failed".into());
+    }
+    let mut samples = Vec::with_capacity(data.len() / 2);
+    for frame in data.chunks_exact(2) {
+        samples.push(i16::from_le_bytes([frame[0], frame[1]]));
+    }
+    Ok(samples)
+}
+
+fn ffmpeg_wav(path: &Path) -> Result<Vec<u8>, String> {
+    let path = path.to_str().ok_or_else(|| "no file".to_string())?;
+    let args = ffmpeg_wav_args(path);
+    let mut cmd = std::process::Command::new(&args[0]);
+    cmd.args(&args[1..]).stdin(std::process::Stdio::null());
+    match cmd.output() {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            Err("ffmpeg is not installed".into())
+        }
+        Err(err) => Err(err.to_string()),
+        Ok(out) if !out.status.success() => Err("ffmpeg failed".into()),
+        Ok(out) => Ok(out.stdout),
+    }
+}
+
 /// Decode the PCM16 16 kHz mono WAV this daemon writes. Anything else is an error.
 pub(crate) fn decode_pcm16_wav(bytes: &[u8]) -> Result<Vec<i16>, String> {
     if bytes.len() < 44 {
@@ -159,6 +271,82 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ffmpeg_args_pcm_decode_and_missing_ffmpeg() {
+        assert_eq!(
+            ffmpeg_wav_args("/tmp/clip.mp3"),
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-hide_banner",
+                "-v",
+                "error",
+                "-i",
+                "/tmp/clip.mp3",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-f",
+                "wav",
+                "pipe:1",
+            ]
+            .map(str::to_string)
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wav = write_retained_wav(dir.path(), 1, &[0.5]).expect("wav");
+        let samples = load_pcm_f32(&wav).expect("pcm");
+        assert_eq!(samples[0], 16384.0 / 32767.0);
+
+        if std::env::var_os("NARAD_ASSERT_NO_FFMPEG").is_some() {
+            let mp3 = dir.path().join("clip.mp3");
+            std::fs::write(&mp3, b"not a wav").expect("mp3");
+            let err = load_pcm_f32(&mp3).expect_err("no ffmpeg");
+            assert!(err.contains("ffmpeg is not installed"), "{err}");
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().expect("exe"))
+            .env("PATH", "/nonexistent")
+            .env("NARAD_ASSERT_NO_FFMPEG", "1")
+            .args([
+                "--exact",
+                "retained::tests::ffmpeg_args_pcm_decode_and_missing_ffmpeg",
+                "--test-threads=1",
+            ])
+            .output()
+            .expect("re-exec");
+        assert!(
+            output.status.success(),
+            "stdout {}\nstderr {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn piped_ffmpeg_wav_keeps_pcm16_after_a_list_chunk() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&16_000u32.to_le_bytes());
+        bytes.extend_from_slice(&32_000u32.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"LIST");
+        bytes.extend_from_slice(&4u32.to_le_bytes());
+        bytes.extend_from_slice(b"INFO");
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.extend_from_slice(&16384i16.to_le_bytes());
+        let pcm = pcm16_from_ffmpeg_stdout(&bytes).expect("pcm");
+        assert_eq!(pcm, vec![16384]);
+        assert!(decode_pcm16_wav(&bytes).is_err());
+    }
 
     #[test]
     fn one_half_sample_decodes_to_i16_16384() {

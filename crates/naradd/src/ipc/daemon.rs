@@ -39,6 +39,9 @@ impl DaemonIpc {
         mode: &str,
         #[zbus(signal_emitter)] _emitter: SignalEmitter<'_>,
     ) -> zbus::fdo::Result<()> {
+        if self.pipeline.transcribing() {
+            return Err(zbus::fdo::Error::Failed("transcription in progress".into()));
+        }
         let mode = if mode.is_empty() {
             None
         } else {
@@ -69,6 +72,9 @@ impl DaemonIpc {
         mode: &str,
         #[zbus(signal_emitter)] _emitter: SignalEmitter<'_>,
     ) -> zbus::fdo::Result<()> {
+        if !self.pipeline.is_listening() && self.pipeline.transcribing() {
+            return Err(zbus::fdo::Error::Failed("transcription in progress".into()));
+        }
         let mode = if mode.is_empty() {
             None
         } else {
@@ -140,6 +146,28 @@ impl DaemonIpc {
         self.pipeline
             .read_audio(id)
             .map_err(zbus::fdo::Error::Failed)
+    }
+
+    async fn transcribe(
+        &self,
+        path: &str,
+        mode: &str,
+        dst_lang: &str,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<i64> {
+        let path = path.to_string();
+        let mode = mode.to_string();
+        let dst_lang = dst_lang.to_string();
+        let pipeline = self.pipeline.clone();
+        let new_id =
+            tokio::task::spawn_blocking(move || pipeline.transcribe(&path, &mode, &dst_lang))
+                .await
+                .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?
+                .map_err(zbus::fdo::Error::Failed)?;
+        Self::entry_added(&emitter, new_id)
+            .await
+            .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?;
+        Ok(new_id)
     }
 
     async fn retranscribe(

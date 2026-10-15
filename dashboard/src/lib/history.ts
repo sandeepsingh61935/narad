@@ -53,3 +53,9 @@ export function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)} ms`;
   return `${(ms / 1000).toFixed(1)} s`;
 }
+
+/** First path from a webview drop. An empty list is nothing. */
+export function firstDroppedPath(paths: readonly string[]): string | null {
+  if (paths.length === 0) return null;
+  return paths[0];
+}

@@ -71,6 +71,18 @@ async fn retranscribe(id: i64, mode: String, model_id: String) -> Result<i64, St
         .map_err(|e| format!("Retranscribe: {e}"))
 }
 
+/// New history row from one media file (`Transcribe`). Does not paste.
+///
+/// Empty `mode` is the session mode. Empty `dst_lang` stays English.
+#[tauri::command]
+async fn transcribe_file(path: String, mode: String, dst_lang: String) -> Result<i64, String> {
+    daemon_proxy()
+        .await?
+        .transcribe(&path, &mode, &dst_lang)
+        .await
+        .map_err(|e| format!("Transcribe: {e}"))
+}
+
 /// Set one row's pin (`SetPinned`). Does not filter the list.
 #[tauri::command]
 async fn set_pinned(id: i64, pinned: bool) -> Result<(), String> {
@@ -168,6 +180,7 @@ pub fn run() {
             reinsert_entry,
             read_audio,
             retranscribe,
+            transcribe_file,
             set_pinned,
             set_tags,
             delete_entries,

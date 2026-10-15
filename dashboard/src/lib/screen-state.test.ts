@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { HistoryEntry } from "./history.ts";
+import { firstDroppedPath, type HistoryEntry } from "./history.ts";
 import {
   deleteAllConfirmed,
   exportIds,
@@ -294,6 +294,11 @@ test("a retained audio path can play and a missing path cannot", () => {
   assert.equal(without.kind, "results");
   if (without.kind !== "results") return;
   assert.deepEqual(without.detail, { id: 7, text: "final words", canPlay: false, tags: [] });
+});
+
+test("the first dropped path is kept and an empty drop is nothing", () => {
+  assert.equal(firstDroppedPath(["/tmp/a.wav", "/tmp/b.mp3"]), "/tmp/a.wav");
+  assert.equal(firstDroppedPath([]), null);
 });
 
 test("delete all confirms only the exact trimmed phrase", () => {

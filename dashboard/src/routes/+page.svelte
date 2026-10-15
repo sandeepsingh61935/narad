@@ -1,8 +1,15 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { invoke, isTauri } from "@tauri-apps/api/core";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { ACTIVE_MODES, type DashboardConfig } from "$lib/config";
-  import { formatDuration, formatTime, type HistoryEntry, type TextView } from "$lib/history";
+  import {
+    firstDroppedPath,
+    formatDuration,
+    formatTime,
+    type HistoryEntry,
+    type TextView,
+  } from "$lib/history";
   import { deleteAllConfirmed, exportIds, historyScreen, type RowView } from "$lib/screen-state";
 
   const PAGE_SIZE = 50;
@@ -304,6 +311,28 @@
     }
   }
 
+  async function transcribeDropped(path: string) {
+    if (actionBusy) return;
+    actionBusy = true;
+    actionMessage = null;
+    actionError = null;
+    try {
+      const newId = await invoke<number>("transcribe_file", {
+        path,
+        mode: "",
+        dstLang: "",
+      });
+      await loadHistory();
+      selectedId = newId;
+      textView = "final";
+      actionMessage = "Transcribed";
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : String(e);
+    } finally {
+      actionBusy = false;
+    }
+  }
+
   async function retranscribeSelected() {
     if (detail == null || actionBusy) return;
     const id = detail.id;
@@ -589,6 +618,16 @@
 
   onMount(() => {
     void loadHistory();
+    if (!isTauri()) return;
+    const unlisten = getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type !== "drop") return;
+      const path = firstDroppedPath(event.payload.paths);
+      if (path == null) return;
+      void transcribeDropped(path);
+    });
+    return () => {
+      void unlisten.then((stop) => stop());
+    };
   });
 </script>
 

@@ -338,3 +338,29 @@ test("row preview prefers final text, then raw text, then (empty)", () => {
     ["said this", "heard only", "(empty)", "fallback raw"],
   );
 });
+
+test("HUD line reflects history paused state", () => {
+  assert.deepEqual(hudLine({ state: "idle", paused: true }), {
+    state: "idle",
+    pill: "History paused",
+    paused: true,
+  });
+  assert.deepEqual(
+    hudLine({ state: "listening", mode: "plain", elapsed: "0:12", paused: true }),
+    {
+      state: "listening",
+      mode: "plain",
+      elapsed: "0:12",
+      paused: true,
+    },
+  );
+  assert.deepEqual(
+    hudLine({ state: "processing", paused: true }),
+    {
+      state: "processing",
+      primary: "Transcribing…",
+      paused: true,
+    },
+  );
+});
+

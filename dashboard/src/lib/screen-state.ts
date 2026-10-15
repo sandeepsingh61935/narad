@@ -90,14 +90,15 @@ function rowPreview(entry: HistoryEntry): string {
 }
 
 export type HudLine =
-  | { state: "idle"; pill: null }
-  | { state: "listening"; mode: string; elapsed: string }
-  | { state: "processing"; primary: "Transcribing…" }
-  | { state: "inserted"; primary: "Inserted" }
-  | { state: "copied"; primary: "Copied to clipboard"; reason: "No text field focused" }
-  | { state: "cancelled"; primary: "Cancelled" }
-  | { state: "error"; primary: string; recovery: string }
-  | { state: "undone"; primary: "Undone"; deleted: string };
+  | { state: "idle"; pill: null; paused?: false }
+  | { state: "idle"; pill: "History paused"; paused: true }
+  | { state: "listening"; mode: string; elapsed: string; paused?: boolean }
+  | { state: "processing"; primary: "Transcribing…"; paused?: boolean }
+  | { state: "inserted"; primary: "Inserted"; paused?: boolean }
+  | { state: "copied"; primary: "Copied to clipboard"; reason: "No text field focused"; paused?: boolean }
+  | { state: "cancelled"; primary: "Cancelled"; paused?: boolean }
+  | { state: "error"; primary: string; recovery: string; paused?: boolean }
+  | { state: "undone"; primary: "Undone"; deleted: string; paused?: boolean };
 
 export type HudInput = {
   state: HudLine["state"];
@@ -106,26 +107,49 @@ export type HudInput = {
   errorPrimary?: string | null;
   /** Text removed by undo. Only the undone line reads this. */
   deleted?: string | null;
+  paused?: boolean;
 };
 
 export function hudLine(input: HudInput): HudLine {
+  const paused = input.paused;
   switch (input.state) {
     case "idle":
+      if (paused) {
+        return { state: "idle", pill: "History paused", paused: true };
+      }
       return { state: "idle", pill: null };
     case "listening":
-      return { state: "listening", mode: input.mode ?? "", elapsed: input.elapsed ?? "" };
+      return {
+        state: "listening",
+        mode: input.mode ?? "",
+        elapsed: input.elapsed ?? "",
+        ...(paused ? { paused: true } : {}),
+      };
     case "processing":
-      return { state: "processing", primary: "Transcribing…" };
+      return {
+        state: "processing",
+        primary: "Transcribing…",
+        ...(paused ? { paused: true } : {}),
+      };
     case "inserted":
-      return { state: "inserted", primary: "Inserted" };
+      return {
+        state: "inserted",
+        primary: "Inserted",
+        ...(paused ? { paused: true } : {}),
+      };
     case "copied":
       return {
         state: "copied",
         primary: "Copied to clipboard",
         reason: "No text field focused",
+        ...(paused ? { paused: true } : {}),
       };
     case "cancelled":
-      return { state: "cancelled", primary: "Cancelled" };
+      return {
+        state: "cancelled",
+        primary: "Cancelled",
+        ...(paused ? { paused: true } : {}),
+      };
     case "error":
       return {
         state: "error",
@@ -134,12 +158,14 @@ export function hudLine(input: HudInput): HudLine {
             ? input.errorPrimary
             : "Microphone unavailable",
         recovery: "Check audio settings",
+        ...(paused ? { paused: true } : {}),
       };
     case "undone":
       return {
         state: "undone",
         primary: "Undone",
         deleted: input.deleted ?? "",
+        ...(paused ? { paused: true } : {}),
       };
   }
 }

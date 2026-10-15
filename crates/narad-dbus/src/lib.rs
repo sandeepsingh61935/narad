@@ -6,7 +6,8 @@
 //!
 //! Methods: `Start`, `Stop`, `Cancel`, `Toggle`, `History`, `ReinsertEntry`, `DeleteEntries`,
 //! `PasteLast` (FR-INS-4), `UndoLast` (FR-INS-5), `ReportFocus` (FR-CTX-1),
-//! `ReadAudio` and `Retranscribe` (FR-HIS-5), `SetPinned` and `SetTags` (FR-HIS-6).
+//! `ReadAudio` and `Retranscribe` (FR-HIS-5), `SetPinned`, `SetTags`,
+//! `Export`, and `DeleteAll` (FR-HIS-6).
 //! Signals: `StateChanged`, `Level`, `EntryAdded`.
 //! Properties: `Mode`, `Paused` (writable), `HudVisible` (writable).
 //!
@@ -117,6 +118,15 @@ mod tests {
         async fn assert_sig(proxy: &DaemonProxy<'_>) {
             let _ = proxy.set_pinned(1, true).await;
             let _ = proxy.set_tags(1, &[" a ", "", "a", "A"]).await;
+        }
+        let _ = assert_sig;
+    }
+
+    #[test]
+    fn export_and_delete_all_are_on_the_daemon_proxy() {
+        async fn assert_sig(proxy: &DaemonProxy<'_>) {
+            let _ = proxy.export(&[7], "json").await;
+            let _ = proxy.delete_all().await;
         }
         let _ = assert_sig;
     }

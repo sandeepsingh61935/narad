@@ -7,6 +7,7 @@
 //! `ReportFocus` is included (FR-CTX-1).
 //! `ReadAudio` and `Retranscribe` are included (FR-HIS-5).
 //! `SetPinned` and `SetTags` are included (FR-HIS-6).
+//! `Export` and `DeleteAll` are included (FR-HIS-6).
 
 use crate::types::HistoryEntry;
 use zbus::proxy;
@@ -73,6 +74,15 @@ pub trait Daemon {
     /// Replace one entry's tags. The daemon trims, drops blanks, and drops
     /// exact case-sensitive duplicates. A missing row writes no tag rows.
     async fn set_tags(&self, id: i64, names: &[&str]) -> zbus::Result<()>;
+
+    /// One document for these ids, in this order. The daemon does not re-filter.
+    ///
+    /// `format` is `json`, `markdown`, or `txt`. A missing id or any other
+    /// format is an error and returns no document.
+    async fn export(&self, ids: &[i64], format: &str) -> zbus::Result<String>;
+
+    /// Delete every history row, not the current filter, and unlink stored audio.
+    async fn delete_all(&self) -> zbus::Result<()>;
 
     /// Focused application id from the shell extension (FR-CTX-1).
     ///

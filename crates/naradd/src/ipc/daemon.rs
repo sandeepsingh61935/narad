@@ -162,6 +162,25 @@ impl DaemonIpc {
         Ok(new_id)
     }
 
+    async fn set_pinned(&self, id: i64, pinned: bool) -> zbus::fdo::Result<()> {
+        self.pipeline
+            .with_store(|store| {
+                store.set_pinned(id, pinned).map_err(|err| err.to_string())?;
+                Ok(())
+            })
+            .map_err(zbus::fdo::Error::Failed)
+    }
+
+    async fn set_tags(&self, id: i64, names: Vec<String>) -> zbus::fdo::Result<()> {
+        self.pipeline
+            .with_store(|store| {
+                let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+                store.set_tags(id, &refs).map_err(|err| err.to_string())?;
+                Ok(())
+            })
+            .map_err(zbus::fdo::Error::Failed)
+    }
+
     async fn report_focus(&self, app_id: &str) -> zbus::fdo::Result<()> {
         self.pipeline.report_focus(app_id).map_err(lock_err)
     }
@@ -228,6 +247,7 @@ pub fn core_history_to_dbus(entry: &CoreHistoryEntry) -> HistoryEntry {
         audio_path: entry.audio_path.clone(),
         pinned: entry.pinned,
         kind: entry.kind.clone(),
+        tags: entry.tags.clone(),
     }
 }
 
@@ -270,5 +290,57 @@ mod tests {
         assert_eq!(dbus.raw_text, "hi");
         assert!(dbus.pinned);
         assert_eq!(dbus.kind, "dictation");
+        assert_eq!(dbus.tags, [] as [&str; 0]);
+    }
+
+    #[tokio::test]
+    async fn set_pinned_and_set_tags_round_trip() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = HistoryStore::open(dir.path().join("t.db")).expect("open");
+        let pipe = crate::pipeline::PipelineHandle::new(
+            crate::config::NaradConfig::default(),
+            store,
+            None,
+            dir.path().join("audio"),
+        );
+        let id = pipe
+            .with_store(|store| {
+                store
+                    .insert(&NewHistoryEntry {
+                        duration_ms: 100,
+                        mode: "plain".into(),
+                        src_lang: "en".into(),
+                        dst_lang: "en".into(),
+                        asr_model: "test".into(),
+                        mt_model: None,
+                        llm_model: None,
+                        app_id: None,
+                        raw_text: "hello".into(),
+                        final_text: "Hello".into(),
+                        insert_status: InsertStatus::Success,
+                        cleanup_flagged: false,
+                        audio_path: None,
+                        pinned: false,
+                        kind: "dictation".into(),
+                    })
+                    .map_err(|err| err.to_string())
+            })
+            .expect("insert");
+        let ipc = DaemonIpc::new(pipe.clone());
+        ipc.set_pinned(id, true).await.expect("pin");
+        ipc.set_tags(id, vec![" a ".into(), "".into(), "a".into(), "A".into()])
+            .await
+            .expect("tags");
+        let missing = ipc.set_pinned(41, true).await.expect_err("missing");
+        assert!(missing.to_string().contains("41"));
+
+        pipe.with_store(|store| {
+            let row = store.get(id).map_err(|err| err.to_string())?.expect("row");
+            let dbus = core_history_to_dbus(&row);
+            assert!(dbus.pinned);
+            assert_eq!(dbus.tags, ["a", "A"]);
+            Ok(())
+        })
+        .expect("mapped");
     }
 }

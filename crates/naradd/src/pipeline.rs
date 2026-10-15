@@ -252,6 +252,22 @@ impl PipelineHandle {
         Ok(())
     }
 
+    /// Session mode for the next utterance. An in-progress `utterance_mode` stays
+    /// as copied at listen start. Does not rewrite `config.toml`.
+    pub fn set_mode(&self, mode: &str) -> Result<(), String> {
+        let mode = mode.trim();
+        if !matches!(mode, "plain" | "email" | "bullet" | "code") {
+            return Err(format!("unknown mode: {mode}"));
+        }
+        let mut st = self
+            .inner
+            .state
+            .lock()
+            .map_err(|e| format!("state lock: {e}"))?;
+        st.mode = mode.to_string();
+        Ok(())
+    }
+
     /// Cache the focused app id. Empty string clears it (`None`).
     pub fn report_focus(&self, app_id: &str) -> Result<(), String> {
         let mut st = self
@@ -1287,6 +1303,37 @@ mod tests {
             dir.path().join("audio"),
         );
         (dir, pipe)
+    }
+
+    #[test]
+    fn set_mode_accepts_code_and_rejects_unknown() {
+        let (_dir, pipe) = test_pipe();
+        pipe.set_mode("code").expect("code");
+        assert_eq!(pipe.snapshot_props().expect("props").1, "code");
+        pipe.set_mode("  email  ").expect("trimmed");
+        assert_eq!(pipe.snapshot_props().expect("props").1, "email");
+        let err = pipe.set_mode("nope").expect_err("nope");
+        assert!(err.contains("unknown mode: nope"), "{err}");
+        assert_eq!(pipe.snapshot_props().expect("props").1, "email");
+        let padded = pipe.set_mode("  nope  ").expect_err("padded");
+        assert!(padded.contains("unknown mode: nope"), "{padded}");
+        assert_eq!(pipe.snapshot_props().expect("props").1, "email");
+        assert_eq!(pipe.config().general.active_mode, "plain");
+    }
+
+    #[test]
+    fn set_mode_while_listening_keeps_the_utterance_mode() {
+        let (_dir, pipe) = test_pipe();
+        {
+            let mut st = pipe.inner.state.lock().expect("state");
+            st.dbus_state = SessionState::LISTENING.to_string();
+            st.mode = "plain".into();
+            st.utterance_mode = "plain".into();
+        }
+        pipe.set_mode("email").expect("email");
+        let st = pipe.inner.state.lock().expect("state");
+        assert_eq!(st.utterance_mode, "plain");
+        assert_eq!(st.mode, "email");
     }
 
     #[test]

@@ -78,6 +78,27 @@ async fn retranscribe(id: i64, mode: String, model_id: String) -> Result<i64, St
         .map_err(|e| format!("Retranscribe: {e}"))
 }
 
+/// Set one row's pin (`SetPinned`). Does not filter the list.
+#[tauri::command]
+async fn set_pinned(id: i64, pinned: bool) -> Result<(), String> {
+    daemon_proxy()
+        .await?
+        .set_pinned(id, pinned)
+        .await
+        .map_err(|e| format!("SetPinned: {e}"))
+}
+
+/// Replace one entry's tags (`SetTags`).
+#[tauri::command]
+async fn set_tags(id: i64, names: Vec<String>) -> Result<(), String> {
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    daemon_proxy()
+        .await?
+        .set_tags(id, &refs)
+        .await
+        .map_err(|e| format!("SetTags: {e}"))
+}
+
 /// Delete history entries by id (`DeleteEntries`).
 #[tauri::command]
 async fn delete_entries(ids: Vec<i64>) -> Result<(), String> {
@@ -127,6 +148,8 @@ pub fn run() {
             reinsert_entry,
             read_audio,
             retranscribe,
+            set_pinned,
+            set_tags,
             delete_entries,
             load_config,
             save_config,

@@ -52,6 +52,8 @@ export type DetailView = {
   text: string;
   /** True when the row has a retained audio path. */
   canPlay: boolean;
+  /** Stored tag names in kept order. Not a list filter. */
+  tags: string[];
 };
 
 function detailView(input: HistoryScreenInput): DetailView | null {
@@ -63,6 +65,7 @@ function detailView(input: HistoryScreenInput): DetailView | null {
     id: selected.id,
     text: displayText(selected, input.textView),
     canPlay: path != null && path.length > 0,
+    tags: selected.tags,
   };
 }
 

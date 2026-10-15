@@ -7,6 +7,7 @@
 
   const PAGE_SIZE = 50;
   const SEARCH_ID = "history-search";
+  const TAGS_ID = "entry-tags";
   const RECOVERY_COMMAND = "systemctl --user restart narad.service";
 
   const segmentOn =
@@ -50,6 +51,9 @@
   let actionMessage = $state<string | null>(null);
   let actionError = $state<string | null>(null);
   let daemonBannerOpen = $state(true);
+  let tagDraft = $state("");
+  let tagDraftId = $state<number | null>(null);
+  let tagCommitBusy = false;
 
   const screen = $derived(
     historyScreen({
@@ -72,6 +76,15 @@
   );
   const selectedEntry = $derived(detail == null ? undefined : entryById(detail.id));
   const groups = $derived.by(() => groupRows(screen.kind === "results" ? screen.rows : []));
+
+  $effect(() => {
+    const id = detail?.id ?? null;
+    const tags = detail?.tags ?? [];
+    if (id !== tagDraftId) {
+      tagDraftId = id;
+      tagDraft = tags.join(", ");
+    }
+  });
   const statusLabel = $derived(
     screen.kind === "loading" || screen.kind === "daemon-unreachable" ? null : screen.status,
   );
@@ -380,7 +393,47 @@
 
   function typingInSearch(event: KeyboardEvent): boolean {
     const target = event.target;
-    return target instanceof HTMLElement && target.id === SEARCH_ID;
+    if (!(target instanceof HTMLElement)) return false;
+    return target.id === SEARCH_ID || target.id === TAGS_ID;
+  }
+
+  async function togglePin(entry: HistoryEntry) {
+    const pinned = !entry.pinned;
+    actionError = null;
+    try {
+      await invoke("set_pinned", { id: entry.id, pinned });
+      entries = entries.map((row) => (row.id === entry.id ? { ...row, pinned } : row));
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function commitTags() {
+    if (detail == null || actionBusy || tagCommitBusy) return;
+    const id = detail.id;
+    const names = tagDraft.length === 0 ? [] : tagDraft.split(",");
+    tagCommitBusy = true;
+    actionBusy = true;
+    actionMessage = null;
+    actionError = null;
+    try {
+      await invoke("set_tags", { id, names });
+      const listed = await invoke<HistoryEntry[]>("list_history", {
+        query: query.trim(),
+        offset: 0,
+        limit: PAGE_SIZE,
+        ...filterArgs(),
+      });
+      entries = listed;
+      const updated = listed.find((row) => row.id === id);
+      tagDraft = updated == null ? "" : updated.tags.join(", ");
+      actionMessage = "Tags saved";
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : String(e);
+    } finally {
+      tagCommitBusy = false;
+      actionBusy = false;
+    }
   }
 
   function onKeyDown(event: KeyboardEvent) {
@@ -732,8 +785,22 @@
                             {formatTime(entry.created_at)}
                           </time>
                           <span
+                            role="button"
+                            tabindex="-1"
                             class={entry.pinned ? "text-primary" : "text-on-surface-variant/40"}
                             title={entry.pinned ? "Pinned" : "Not pinned"}
+                            aria-pressed={entry.pinned}
+                            onclick={(event) => {
+                              event.stopPropagation();
+                              event.preventDefault();
+                              void togglePin(entry);
+                            }}
+                            onkeydown={(event) => {
+                              if (event.key !== "Enter" && event.key !== " ") return;
+                              event.stopPropagation();
+                              event.preventDefault();
+                              void togglePin(entry);
+                            }}
                           >
                             <span
                               class="material-symbols-outlined text-[16px]"
@@ -931,6 +998,27 @@
                     <span class="text-primary font-semibold">{speakingWpm(selectedEntry, detail.text)}</span>
                   {/if}
                 </div>
+              </div>
+              <div class="px-space-md py-2.5 flex items-center justify-between text-on-surface gap-space-md">
+                <label class="flex items-center gap-2 shrink-0" for={TAGS_ID}>
+                  <span class="material-symbols-outlined text-[16px] text-on-surface-variant">label</span>
+                  <span class="font-body-default text-[13px]">Tags</span>
+                </label>
+                <input
+                  id={TAGS_ID}
+                  class="min-w-0 flex-1 max-w-md bg-surface-container-low border border-outline-variant/40 rounded px-2 py-1 font-body-default text-[13px] text-on-surface"
+                  type="text"
+                  placeholder="comma-separated tags"
+                  bind:value={tagDraft}
+                  onchange={() => void commitTags()}
+                  onkeydown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void commitTags();
+                    }
+                  }}
+                />
               </div>
               <div class="px-space-md py-2.5 flex items-center justify-between text-on-surface gap-space-md">
                 <div class="flex items-center gap-2">

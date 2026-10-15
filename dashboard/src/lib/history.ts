@@ -18,6 +18,8 @@ export type HistoryEntry = {
   pinned: boolean;
   /** `dictation` or `retranscribe`. */
   kind: string;
+  /** Tag names in kept order. */
+  tags: string[];
 };
 
 export type TextView = "final" | "raw";

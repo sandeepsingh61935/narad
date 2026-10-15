@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   filterCacheKey,
   isFilterNarrowed,
   prepareHistoryFilter,
   type HistoryFilterDraft,
 } from "./history-search.ts";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const pageSource = readFileSync(join(here, "../routes/+page.svelte"), "utf8");
+
 
 test("prepareHistoryFilter trims all fields and keeps valid dates and modes", () => {
   const draft: HistoryFilterDraft = {
@@ -128,3 +135,10 @@ test("filterCacheKey generates unique key for cache busting", () => {
   });
   assert.notEqual(key1, key2);
 });
+
+test("history page uses prepareHistoryFilter and active mode options", () => {
+  assert.match(pageSource, /prepareHistoryFilter/);
+  assert.match(pageSource, /ACTIVE_MODES/);
+  assert.match(pageSource, /All modes/);
+});
+

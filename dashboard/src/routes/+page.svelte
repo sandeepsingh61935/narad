@@ -11,6 +11,11 @@
     type TextView,
   } from "$lib/history";
   import { deleteAllConfirmed, exportIds, historyScreen, type RowView } from "$lib/screen-state";
+  import {
+    filterCacheKey,
+    isFilterNarrowed,
+    prepareHistoryFilter,
+  } from "$lib/history-search";
 
   const PAGE_SIZE = 50;
   const SEARCH_ID = "history-search";
@@ -168,23 +173,35 @@
     loading = true;
     actionMessage = null;
     actionError = null;
-    const trimmed = query.trim();
-    const filters = filterArgs();
-    const narrowed = Object.values(filters).some((value) => value.length > 0);
-    const nextKey = [
-      trimmed,
-      filters.from_day,
-      filters.to_day,
-      filters.mode,
-      filters.app_id,
-      filters.src_lang,
-    ].join("\0");
+    const prepared = prepareHistoryFilter({
+      query,
+      from_day: fromDay,
+      to_day: toDay,
+      mode: modeFilter,
+      app_id: appFilter,
+      src_lang: langFilter,
+    });
+    if (!prepared.ok) {
+      actionError = prepared.error;
+      loading = false;
+      return;
+    }
+    const filters = prepared.filter;
+    const narrowed = isFilterNarrowed(filters);
+    const nextKey = filterCacheKey(filters);
     if (nextKey !== appliedKey) {
       checkedIds = [];
       appliedKey = nextKey;
     }
+    if (prepared.isReversed) {
+      entries = [];
+      appliedQuery = filters.query;
+      appliedNarrowed = true;
+      reachable = true;
+      loading = false;
+      return;
+    }
     const listed = invoke<HistoryEntry[]>("list_history", {
-      query: trimmed,
       offset: 0,
       limit: PAGE_SIZE,
       ...filters,
@@ -196,7 +213,7 @@
     try {
       entries = await listed;
       reachable = true;
-      appliedQuery = trimmed;
+      appliedQuery = filters.query;
       appliedNarrowed = narrowed;
       if (selectedId != null && !entries.some((entry) => entry.id === selectedId)) {
         selectedId = null;
@@ -683,14 +700,17 @@
         bind:value={toDay}
         onchange={onFilterCommit}
       />
-      <input
-        class="w-24 px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0"
-        type="text"
-        aria-label="Mode"
-        placeholder="Mode"
+      <select
+        class="w-28 px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0 font-body-muted text-body-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        aria-label="Filter by mode"
         bind:value={modeFilter}
         onchange={onFilterCommit}
-      />
+      >
+        <option value="">All modes</option>
+        {#each ACTIVE_MODES as m}
+          <option value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>
+        {/each}
+      </select>
       <input
         class="w-40 px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/30 shrink-0"
         type="text"

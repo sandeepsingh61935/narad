@@ -126,7 +126,7 @@
               class="flex-1 bg-surface-container-high text-on-surface px-3 py-1.5 rounded-lg"
               type="text"
               aria-label={`Vocabulary spoken ${index + 1}`}
-              placeholder="spoken"
+              placeholder="Spoken"
               bind:value={config.vocabulary[index].spoken}
               disabled={!loaded}
               onblur={commit}
@@ -135,7 +135,7 @@
               class="flex-1 bg-surface-container-high text-on-surface px-3 py-1.5 rounded-lg"
               type="text"
               aria-label={`Vocabulary written ${index + 1}`}
-              placeholder="written"
+              placeholder="Written"
               bind:value={config.vocabulary[index].written}
               disabled={!loaded}
               onblur={commit}
@@ -174,7 +174,7 @@
               class="flex-1 bg-surface-container-high text-on-surface px-3 py-1.5 rounded-lg"
               type="text"
               aria-label={`Replacement spoken ${index + 1}`}
-              placeholder="spoken"
+              placeholder="Spoken"
               bind:value={config.replacements[index].spoken}
               disabled={!loaded}
               onblur={commit}
@@ -183,7 +183,7 @@
               class="flex-1 bg-surface-container-high text-on-surface px-3 py-1.5 rounded-lg"
               type="text"
               aria-label={`Replacement written ${index + 1}`}
-              placeholder="written"
+              placeholder="Written"
               bind:value={config.replacements[index].written}
               disabled={!loaded}
               onblur={commit}

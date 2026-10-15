@@ -72,14 +72,13 @@ impl Default for ActivationConfig {
 #[serde(default)]
 pub struct AudioConfig {
     pub sounds_enabled: bool,
-    /// Round-tripped; not edited in basic Settings UI.
+    /// Seconds without speech before auto-stop. `0` disables it and does not restore 2.
     pub auto_stop_silence_secs: u32,
-    /// Round-tripped; not edited in basic Settings UI.
+    /// Hard cap on one recording. `0` disables it and does not restore 300.
     pub max_duration_secs: u32,
     /// PipeWire source id (FR-AUD-4). Empty follows the system default.
-    /// Round-tripped so a settings save does not drop a daemon-set target.
     pub input_target: String,
-    /// RNNoise before VAD/ASR (FR-AUD-5). Round-tripped; no settings control yet.
+    /// RNNoise before VAD/ASR (FR-AUD-5). Off until the user turns it on.
     pub noise_suppression: bool,
 }
 

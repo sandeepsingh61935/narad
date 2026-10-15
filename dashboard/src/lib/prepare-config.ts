@@ -1,4 +1,4 @@
-import type { DashboardConfig, Replacement } from "./config";
+import { ACTIVE_MODES, type DashboardConfig, type Replacement } from "./config";
 
 export type PreparedConfig =
   | { ok: true; config: DashboardConfig }
@@ -52,6 +52,10 @@ export function prepareConfigForSave(config: ConfigDraft): PreparedConfig {
   if (hold_tap_threshold_ms === null) {
     return { ok: false, error: THRESHOLD_ERROR };
   }
+  const active_mode = config.general.active_mode.trim() || "plain";
+  if (!(ACTIVE_MODES as readonly string[]).includes(active_mode)) {
+    return { ok: false, error: `unknown mode: ${active_mode}` };
+  }
   return {
     ok: true,
     config: {
@@ -67,7 +71,7 @@ export function prepareConfigForSave(config: ConfigDraft): PreparedConfig {
         noise_suppression: config.audio.noise_suppression === true,
       },
       general: {
-        active_mode: config.general.active_mode.trim() || "plain",
+        active_mode,
       },
       models: {
         asr_english: config.models.asr_english.trim(),

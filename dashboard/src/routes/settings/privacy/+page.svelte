@@ -1,8 +1,110 @@
 <script lang="ts">
-  let keepAudio = $state(false);
-  let pauseHistory = $state(false);
-  let textRetention = $state("30d");
-  let audioRetention = $state("7d");
+  import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
+  import { defaultConfig, type DashboardConfig } from "$lib/config";
+  import { SAVED_NOTICE, saveDashboardConfig } from "$lib/settings-form";
+
+  let config = $state<DashboardConfig>(defaultConfig());
+  let textDays = $state("");
+  let audioDays = $state("");
+  let paused = $state<boolean | null>(null);
+  let pauseBusy = $state(false);
+  let loaded = $state(false);
+  let error = $state<string | null>(null);
+  let notice = $state<string | null>(null);
+  let saveChain: Promise<void> = Promise.resolve();
+
+  function dayField(value: number | null): string {
+    return value == null ? "" : String(value);
+  }
+
+  function parseDays(raw: string): number | null | undefined {
+    const trimmed = raw.trim();
+    if (trimmed === "") return null;
+    if (!/^\d+$/.test(trimmed)) return undefined;
+    return Number(trimmed);
+  }
+
+  function showDays(next: DashboardConfig) {
+    textDays = dayField(next.history.text_retention_days);
+    audioDays = dayField(next.history.audio_retention_days);
+  }
+
+  async function load() {
+    error = null;
+    try {
+      config = await invoke<DashboardConfig>("load_config");
+      showDays(config);
+      loaded = true;
+    } catch (caught) {
+      loaded = false;
+      error = caught instanceof Error ? caught.message : String(caught);
+    }
+    try {
+      const status = await invoke<{ paused: boolean }>("session_status");
+      paused = status.paused;
+    } catch (caught) {
+      paused = null;
+      const message = caught instanceof Error ? caught.message : String(caught);
+      error = error == null ? message : `${error} ${message}`;
+    }
+  }
+
+  function commit() {
+    if (!loaded) return;
+    const text = parseDays(textDays);
+    const audio = parseDays(audioDays);
+    if (text === undefined || audio === undefined) {
+      error = "Retention must be a whole number of days, or blank to keep.";
+      notice = null;
+      return;
+    }
+    const toSave: DashboardConfig = {
+      ...config,
+      history: {
+        retain_audio: config.history.retain_audio,
+        text_retention_days: text,
+        audio_retention_days: audio,
+      },
+    };
+    error = null;
+    saveChain = saveChain.then(
+      () => persist(toSave),
+      () => persist(toSave),
+    );
+  }
+
+  async function persist(toSave: DashboardConfig) {
+    const result = await saveDashboardConfig(toSave);
+    if (!result.ok) {
+      error = result.error;
+      notice = null;
+      return;
+    }
+    config = result.config;
+    showDays(result.config);
+    notice = SAVED_NOTICE;
+    error = null;
+  }
+
+  async function setPaused(next: boolean) {
+    if (pauseBusy || paused == null) return;
+    const previous = paused;
+    paused = next;
+    pauseBusy = true;
+    try {
+      await invoke("set_paused", { paused: next });
+    } catch (caught) {
+      paused = previous;
+      error = caught instanceof Error ? caught.message : String(caught);
+    } finally {
+      pauseBusy = false;
+    }
+  }
+
+  onMount(() => {
+    void load();
+  });
 </script>
 
 <section class="flex-1 overflow-y-auto px-6 py-8 flex justify-center bg-surface min-w-0">
@@ -51,60 +153,58 @@
       </div>
     </div>
 
+    {#if error}
+      <p class="font-body-muted text-body-muted text-error" role="alert">{error}</p>
+    {/if}
+    {#if notice}
+      <p class="font-body-muted text-body-muted text-on-surface" role="status">{notice}</p>
+    {/if}
+
     <div class="flex flex-col gap-2">
       <h2 class="font-label-code text-label-code text-on-surface-variant uppercase tracking-wider px-2">
         Capture & Storage
       </h2>
       <div class="bg-surface-container-low rounded-xl overflow-hidden shadow-sm flex flex-col">
-        <div class="p-4 flex items-center justify-between gap-4 hover:bg-surface-container transition-colors">
-          <div class="flex items-center gap-3.5 min-w-0">
-            <span class="material-symbols-outlined text-[20px] text-on-surface-variant shrink-0"
-              >mic_none</span
-            >
-            <div class="flex flex-col min-w-0">
-              <span class="font-body-default text-body-default font-medium text-on-surface truncate"
-                >Keep audio recordings</span
-              >
-              <span class="font-body-muted text-body-muted text-on-surface-variant"
-                >Store raw FLAC audio clips alongside transcripts. Disabling discards audio immediately
-                after transcription.</span
-              >
-            </div>
+        <div class="p-4 flex items-center justify-between gap-4">
+          <div class="flex flex-col min-w-0">
+            <span class="font-body-default text-body-default font-medium text-on-surface">
+              Keep audio recordings
+            </span>
+            <span class="font-body-muted text-body-muted text-on-surface-variant">
+              Store WAV audio clips alongside transcripts. Off discards audio after transcription.
+            </span>
           </div>
-          <label class="relative inline-flex items-center cursor-pointer shrink-0 ml-3">
-            <input class="sr-only peer" id="toggle-keep-audio" type="checkbox" bind:checked={keepAudio} />
-            <div
-              class="w-11 h-6 bg-surface-container-highest peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-surface peer-checked:bg-primary-container after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-on-background after:rounded-full after:h-5 after:w-5 after:transition-all"
-            ></div>
-          </label>
+          <input
+            id="toggle-keep-audio"
+            aria-label="Keep audio recordings"
+            type="checkbox"
+            bind:checked={config.history.retain_audio}
+            disabled={!loaded}
+            onchange={commit}
+          />
         </div>
         <div class="h-px bg-surface-container-high w-full"></div>
-        <div class="p-4 flex items-center justify-between gap-4 hover:bg-surface-container transition-colors">
-          <div class="flex items-center gap-3.5 min-w-0">
-            <span class="material-symbols-outlined text-[20px] text-on-surface-variant shrink-0"
-              >history_toggle_off</span
-            >
-            <div class="flex flex-col min-w-0">
-              <span class="font-body-default text-body-default font-medium text-on-surface truncate"
-                >Pause history</span
-              >
-              <span class="font-body-muted text-body-muted text-on-surface-variant"
-                >Perform real-time dictation and paste into target apps without storing any record in
-                History.</span
-              >
-            </div>
+        <div class="p-4 flex items-center justify-between gap-4">
+          <div class="flex flex-col min-w-0">
+            <span class="font-body-default text-body-default font-medium text-on-surface">
+              Pause history
+            </span>
+            <span class="font-body-muted text-body-muted text-on-surface-variant">
+              Dictation still pastes, but no history row is stored. This applies immediately and is
+              not saved in the config file.
+            </span>
           </div>
-          <label class="relative inline-flex items-center cursor-pointer shrink-0 ml-3">
-            <input
-              class="sr-only peer"
-              id="toggle-pause-history"
-              type="checkbox"
-              bind:checked={pauseHistory}
-            />
-            <div
-              class="w-11 h-6 bg-surface-container-highest peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-surface peer-checked:bg-primary-container after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-on-background after:rounded-full after:h-5 after:w-5 after:transition-all"
-            ></div>
-          </label>
+          <input
+            id="toggle-pause-history"
+            aria-label="Pause history"
+            type="checkbox"
+            checked={paused === true}
+            disabled={paused == null || pauseBusy}
+            onchange={(event) => {
+              const target = event.currentTarget;
+              if (target instanceof HTMLInputElement) void setPaused(target.checked);
+            }}
+          />
         </div>
       </div>
     </div>
@@ -114,69 +214,48 @@
         Automatic Retention
       </h2>
       <div class="bg-surface-container-low rounded-xl overflow-hidden shadow-sm flex flex-col">
-        <div class="p-4 flex items-center justify-between gap-4 hover:bg-surface-container transition-colors">
-          <div class="flex items-center gap-3.5 min-w-0">
-            <span class="material-symbols-outlined text-[20px] text-on-surface-variant shrink-0"
-              >auto_delete</span
-            >
-            <div class="flex flex-col min-w-0">
-              <span class="font-body-default text-body-default font-medium text-on-surface truncate"
-                >Auto-delete text transcripts</span
-              >
-              <span class="font-body-muted text-body-muted text-on-surface-variant"
-                >Prune transcription text entries older than the selected retention period.</span
-              >
-            </div>
+        <div class="p-4 flex items-center justify-between gap-4">
+          <div class="flex flex-col min-w-0">
+            <label class="font-body-default text-body-default font-medium text-on-surface" for="text-retention-days">
+              Auto-delete text transcripts
+            </label>
+            <span class="font-body-muted text-body-muted text-on-surface-variant">
+              Whole days before text rows are deleted. Blank keeps text. 0 is kept as 0.
+            </span>
           </div>
-          <div class="relative shrink-0">
-            <select
-              aria-label="Auto-delete text transcripts retention period"
-              class="appearance-none bg-surface-container-high hover:bg-surface-bright text-on-surface font-body-default text-body-default pl-3 pr-8 py-1.5 rounded-lg focus:outline-none cursor-pointer"
-              bind:value={textRetention}
-            >
-              <option value="7d">7 days</option>
-              <option value="14d">14 days</option>
-              <option value="30d">30 days</option>
-              <option value="90d">90 days</option>
-              <option value="never">Never</option>
-            </select>
-            <span
-              class="material-symbols-outlined pointer-events-none absolute right-2 top-2 text-[16px] text-on-surface-variant"
-              >arrow_drop_down</span
-            >
-          </div>
+          <input
+            id="text-retention-days"
+            class="w-24 bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg"
+            type="text"
+            inputmode="numeric"
+            placeholder="keep"
+            autocomplete="off"
+            bind:value={textDays}
+            disabled={!loaded}
+            onblur={commit}
+          />
         </div>
         <div class="h-px bg-surface-container-high w-full"></div>
-        <div class="p-4 flex items-center justify-between gap-4 hover:bg-surface-container transition-colors">
-          <div class="flex items-center gap-3.5 min-w-0">
-            <span class="material-symbols-outlined text-[20px] text-on-surface-variant shrink-0"
-              >timer</span
-            >
-            <div class="flex flex-col min-w-0">
-              <span class="font-body-default text-body-default font-medium text-on-surface truncate"
-                >Auto-delete cached audio</span
-              >
-              <span class="font-body-muted text-body-muted text-on-surface-variant"
-                >Delete temporary audio buffers after they expire.</span
-              >
-            </div>
+        <div class="p-4 flex items-center justify-between gap-4">
+          <div class="flex flex-col min-w-0">
+            <label class="font-body-default text-body-default font-medium text-on-surface" for="audio-retention-days">
+              Auto-delete retained audio
+            </label>
+            <span class="font-body-muted text-body-muted text-on-surface-variant">
+              Whole days before WAV files are removed. Blank keeps audio.
+            </span>
           </div>
-          <div class="relative shrink-0">
-            <select
-              aria-label="Auto-delete cached audio retention period"
-              class="appearance-none bg-surface-container-high hover:bg-surface-bright text-on-surface font-body-default text-body-default pl-3 pr-8 py-1.5 rounded-lg focus:outline-none cursor-pointer"
-              bind:value={audioRetention}
-            >
-              <option value="24h">24 hours</option>
-              <option value="7d">7 days</option>
-              <option value="14d">14 days</option>
-              <option value="30d">30 days</option>
-            </select>
-            <span
-              class="material-symbols-outlined pointer-events-none absolute right-2 top-2 text-[16px] text-on-surface-variant"
-              >arrow_drop_down</span
-            >
-          </div>
+          <input
+            id="audio-retention-days"
+            class="w-24 bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg"
+            type="text"
+            inputmode="numeric"
+            placeholder="keep"
+            autocomplete="off"
+            bind:value={audioDays}
+            disabled={!loaded}
+            onblur={commit}
+          />
         </div>
       </div>
     </div>
@@ -192,7 +271,7 @@
         <div class="flex flex-col gap-1.5">
           <div class="h-3 w-full bg-surface-container-highest rounded-full overflow-hidden flex gap-0.5">
             <div class="h-full bg-primary-container rounded-l-full" style="width: 4%;" title="Transcripts: 12 MB"></div>
-            <div class="h-full bg-tertiary-container" style="width: 14%;" title="Cached Audio: 340 MB"></div>
+            <div class="h-full bg-tertiary-container" style="width: 14%;" title="Cached audio: 340 MB"></div>
             <div class="h-full bg-outline rounded-r-full" style="width: 82%;" title="AI Models: 2.1 GB"></div>
           </div>
           <div
@@ -236,7 +315,7 @@
               <span class="w-3 h-3 rounded-sm bg-tertiary-container shrink-0"></span>
               <div class="flex flex-col">
                 <span class="font-body-default text-body-default font-medium text-on-surface"
-                  >Cached Audio FLAC</span
+                  >Cached audio</span
                 >
                 <span
                   class="font-body-muted text-body-muted text-on-surface-variant font-label-code text-label-code"

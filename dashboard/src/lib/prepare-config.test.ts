@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defaultConfig } from "./config.ts";
 import { prepareConfigForSave } from "./prepare-config.ts";
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 test("a valid edit rounds the threshold and trims hotkey, mode, and model id", () => {
   const input = defaultConfig();
@@ -202,6 +207,90 @@ test("a settings save keeps vocabulary phrases", () => {
   if (!result.ok) return;
   assert.deepEqual(result.config.vocabulary, [{ spoken: "nar ad", written: "Narad" }]);
   assert.deepEqual(result.config.replacements, [{ spoken: "hi", written: "hello" }]);
+});
+
+test("zero audio limits stay off and retention days parse", () => {
+  const input = defaultConfig();
+  input.audio.auto_stop_silence_secs = 0;
+  input.audio.max_duration_secs = 0;
+  input.audio.noise_suppression = false;
+  input.audio.input_target = "  alsa  ";
+  input.history.text_retention_days = "   " as unknown as number;
+
+  const blank = prepareConfigForSave(input);
+
+  assert.equal(blank.ok, true);
+  if (!blank.ok) return;
+  assert.equal(blank.config.audio.auto_stop_silence_secs, 0);
+  assert.equal(blank.config.audio.max_duration_secs, 0);
+  assert.equal(blank.config.audio.noise_suppression, false);
+  assert.equal(blank.config.audio.input_target, "alsa");
+  assert.equal(blank.config.history.text_retention_days, null);
+
+  const days = defaultConfig();
+  days.history.text_retention_days = "4" as unknown as number;
+  const parsed = prepareConfigForSave(days);
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.equal(parsed.config.history.text_retention_days, 4);
+
+  const zeroDays = defaultConfig();
+  zeroDays.history.text_retention_days = "0" as unknown as number;
+  zeroDays.history.audio_retention_days = 0;
+  const zero = prepareConfigForSave(zeroDays);
+  assert.equal(zero.ok, true);
+  if (!zero.ok) return;
+  assert.equal(zero.config.history.text_retention_days, 0);
+  assert.equal(zero.config.history.audio_retention_days, 0);
+});
+
+test("an unknown mode is rejected", () => {
+  const input = defaultConfig();
+  input.general.active_mode = "notes";
+
+  const result = prepareConfigForSave(input);
+
+  assert.deepEqual(result, { ok: false, error: "unknown mode: notes" });
+});
+
+test("the modes page lists the four modes and privacy drops the mock copy", () => {
+  const modes = readFileSync(join(here, "../routes/settings/modes/+page.svelte"), "utf8");
+  const privacy = readFileSync(join(here, "../routes/settings/privacy/+page.svelte"), "utf8");
+  for (const mode of ["plain", "email", "bullet", "code"]) {
+    assert.ok(modes.includes(`"${mode}"`), `modes page missing ${mode}`);
+  }
+  for (const source of [modes, privacy]) {
+    assert.equal(source.includes("FLAC"), false);
+    assert.equal(source.includes("30 days"), false);
+  }
+  assert.ok(privacy.includes("WAV"));
+  assert.ok(privacy.includes("set_paused"));
+  assert.ok(privacy.includes("session_status"));
+  assert.ok(privacy.includes("retain_audio"));
+  assert.ok(privacy.includes("text_retention_days"));
+  assert.ok(privacy.includes("audio_retention_days"));
+
+  const audio = readFileSync(join(here, "../routes/settings/audio/+page.svelte"), "utf8");
+  assert.ok(audio.includes("input_target"));
+  assert.ok(audio.includes("noise_suppression"));
+  assert.ok(audio.includes("auto_stop_silence_secs"));
+  assert.ok(audio.includes("max_duration_secs"));
+  assert.equal(audio.includes("sounds_enabled"), false);
+
+  const dictionary = readFileSync(join(here, "../routes/dictionary/+page.svelte"), "utf8");
+  assert.ok(dictionary.includes("vocabulary"));
+  assert.ok(dictionary.includes("replacements"));
+
+  const notice = "Saved. The daemon reads this config on its next start.";
+  const form = readFileSync(join(here, "settings-form.ts"), "utf8");
+  assert.ok(form.includes(notice));
+  for (const page of [modes, privacy, audio, dictionary]) {
+    assert.ok(page.includes("SAVED_NOTICE"));
+  }
+
+  const commands = readFileSync(join(here, "../../src-tauri/src/lib.rs"), "utf8");
+  assert.ok(commands.includes("async fn set_paused"));
+  assert.ok(commands.includes("set_paused"));
 });
 
 test("a non-numeric threshold is rejected", () => {

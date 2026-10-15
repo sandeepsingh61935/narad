@@ -165,6 +165,16 @@ async fn session_status() -> Result<SessionStatus, String> {
     Ok(SessionStatus { paused, mode })
 }
 
+/// Set the daemon `Paused` property now. This is not a config.toml key.
+#[tauri::command]
+async fn set_paused(paused: bool) -> Result<(), String> {
+    daemon_proxy()
+        .await?
+        .set_paused(paused)
+        .await
+        .map_err(|e| format!("Paused: {e}"))
+}
+
 /// Write settings to `~/.config/narad/config.toml`. FR-HIS-9.
 #[tauri::command]
 fn save_config(config: DashboardConfig) -> Result<(), String> {
@@ -189,7 +199,8 @@ pub fn run() {
             history_stats,
             load_config,
             save_config,
-            session_status
+            session_status,
+            set_paused
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

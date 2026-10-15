@@ -3,10 +3,12 @@
   import { invoke } from "@tauri-apps/api/core";
   import { defaultConfig, type DashboardConfig } from "$lib/config";
   import { prepareConfigForSave } from "$lib/prepare-config";
+  import { SAVED_NOTICE } from "$lib/settings-form";
 
   let config = $state<DashboardConfig>(defaultConfig());
   let loading = $state(true);
   let error = $state<string | null>(null);
+  let notice = $state<string | null>(null);
   let editingHotkey = $state(false);
   let hotkeyField = $state<HTMLInputElement | null>(null);
   let saveChain: Promise<void> = Promise.resolve();
@@ -37,6 +39,7 @@
     const prepared = prepareConfigForSave(config);
     if (!prepared.ok) {
       error = prepared.error;
+      notice = null;
       return;
     }
     error = null;
@@ -51,7 +54,9 @@
   async function persist(toSave: DashboardConfig) {
     try {
       await invoke("save_config", { config: toSave });
+      notice = SAVED_NOTICE;
     } catch (e) {
+      notice = null;
       error = e instanceof Error ? e.message : String(e);
     }
   }
@@ -97,6 +102,9 @@
       </p>
       {#if error}
         <p class="font-body-muted text-body-muted text-error" role="alert">{error}</p>
+      {/if}
+      {#if notice}
+        <p class="font-body-muted text-body-muted text-on-surface" role="status">{notice}</p>
       {/if}
     </div>
 

@@ -52,4 +52,6 @@ pub struct HistoryEntry {
     pub cleanup_flagged: bool,
     pub audio_path: Option<String>,
     pub pinned: bool,
+    /// `dictation` or `retranscribe`. Last field on the D-Bus struct.
+    pub kind: String,
 }

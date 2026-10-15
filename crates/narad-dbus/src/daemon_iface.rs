@@ -5,6 +5,7 @@
 //! `PasteLast` is included (FR-INS-4).
 //! `UndoLast` is included (FR-INS-5).
 //! `ReportFocus` is included (FR-CTX-1).
+//! `ReadAudio` and `Retranscribe` are included (FR-HIS-5).
 
 use crate::types::HistoryEntry;
 use zbus::proxy;
@@ -57,6 +58,13 @@ pub trait Daemon {
 
     /// Clients may pass a slice; the daemon interface deserializes as `Vec<i64>`.
     async fn delete_entries(&self, ids: &[i64]) -> zbus::Result<()>;
+
+    /// Retained WAV bytes. Missing row, empty path, or a missing file is `Failed`.
+    /// An empty array is not success. The daemon does not play the bytes.
+    async fn read_audio(&self, id: i64) -> zbus::Result<Vec<u8>>;
+
+    /// New history row from the source audio. Does not paste. Allowed while paused.
+    async fn retranscribe(&self, id: i64, mode: &str, model_id: &str) -> zbus::Result<i64>;
 
     /// Focused application id from the shell extension (FR-CTX-1).
     ///

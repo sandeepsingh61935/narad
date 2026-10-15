@@ -6,6 +6,7 @@
 //! `UndoLast` is included (FR-INS-5).
 //! `ReportFocus` is included (FR-CTX-1).
 //! `ReadAudio` and `Retranscribe` are included (FR-HIS-5).
+//! `SetPinned` and `SetTags` are included (FR-HIS-6).
 
 use crate::types::HistoryEntry;
 use zbus::proxy;
@@ -65,6 +66,13 @@ pub trait Daemon {
 
     /// New history row from the source audio. Does not paste. Allowed while paused.
     async fn retranscribe(&self, id: i64, mode: &str, model_id: &str) -> zbus::Result<i64>;
+
+    /// Set one row's pin. A missing row is an error and changes nothing.
+    async fn set_pinned(&self, id: i64, pinned: bool) -> zbus::Result<()>;
+
+    /// Replace one entry's tags. The daemon trims, drops blanks, and drops
+    /// exact case-sensitive duplicates. A missing row writes no tag rows.
+    async fn set_tags(&self, id: i64, names: &[&str]) -> zbus::Result<()>;
 
     /// Focused application id from the shell extension (FR-CTX-1).
     ///

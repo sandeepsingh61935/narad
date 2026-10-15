@@ -6,7 +6,7 @@
 //!
 //! Methods: `Start`, `Stop`, `Cancel`, `Toggle`, `History`, `ReinsertEntry`, `DeleteEntries`,
 //! `PasteLast` (FR-INS-4), `UndoLast` (FR-INS-5), `ReportFocus` (FR-CTX-1),
-//! `ReadAudio` and `Retranscribe` (FR-HIS-5).
+//! `ReadAudio` and `Retranscribe` (FR-HIS-5), `SetPinned` and `SetTags` (FR-HIS-6).
 //! Signals: `StateChanged`, `Level`, `EntryAdded`.
 //! Properties: `Mode`, `Paused` (writable), `HudVisible` (writable).
 //!
@@ -113,6 +113,40 @@ mod tests {
     }
 
     #[test]
+    fn set_pinned_and_set_tags_are_on_the_daemon_proxy() {
+        async fn assert_sig(proxy: &DaemonProxy<'_>) {
+            let _ = proxy.set_pinned(1, true).await;
+            let _ = proxy.set_tags(1, &[" a ", "", "a", "A"]).await;
+        }
+        let _ = assert_sig;
+    }
+
+    #[test]
+    fn history_entry_tags_follow_kind() {
+        let entry = HistoryEntry {
+            id: 4,
+            created_at: 5,
+            duration_ms: 16,
+            mode: "email".into(),
+            src_lang: "en".into(),
+            dst_lang: "en".into(),
+            asr_model: "parakeet-ctc-110m-int8".into(),
+            mt_model: None,
+            llm_model: None,
+            app_id: Some("org.gnome.TextEditor".into()),
+            raw_text: "raw".into(),
+            final_text: "final".into(),
+            insert_status: "failed".into(),
+            cleanup_flagged: false,
+            audio_path: None,
+            pinned: false,
+            kind: "dictation".into(),
+            tags: vec!["a".into(), "A".into()],
+        };
+        assert_eq!(entry.tags, ["a", "A"]);
+    }
+
+    #[test]
     fn history_entry_kind_is_retranscribe_when_set() {
         let entry = HistoryEntry {
             id: 4,
@@ -132,6 +166,7 @@ mod tests {
             audio_path: None,
             pinned: false,
             kind: "retranscribe".into(),
+            tags: Vec::new(),
         };
         assert_eq!(entry.kind, "retranscribe");
     }

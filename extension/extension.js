@@ -1,5 +1,6 @@
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
@@ -40,7 +41,7 @@ const DaemonIfaceXml = `
     <signal name="Level">
       <arg type="d" name="rms"/>
     </signal>
-    <property name="Mode" type="s" access="read"/>
+    <property name="Mode" type="s" access="readwrite"/>
     <property name="Paused" type="b" access="readwrite"/>
     <property name="HudVisible" type="b" access="readwrite"/>
     <property name="OutcomeDetail" type="s" access="read"/>
@@ -75,6 +76,9 @@ export default class NaradExtension extends Extension {
         this._elapsedSec = 0;
         this._outcomeTimer = 0;
         this._levelDriven = false;
+        this._menu = null;
+        this._menuManager = null;
+        this._modeItems = null;
 
         this._root = new St.BoxLayout({
             reactive: true,
@@ -216,11 +220,13 @@ export default class NaradExtension extends Extension {
         this._column.add_child(this._row);
         this._column.add_child(this._hint);
         this._root.add_child(this._column);
+        this._buildDotMenu();
 
         this._connect(this._root, 'button-press-event', (_actor, event) => {
             const button = event.get_button();
             if (button === Clutter.BUTTON_SECONDARY) {
-                this._onHideClick();
+                this._syncDotMenuMode();
+                this._menu.open();
                 return Clutter.EVENT_STOP;
             }
             if (button !== Clutter.BUTTON_PRIMARY)
@@ -550,8 +556,127 @@ export default class NaradExtension extends Extension {
         this._applyState(next);
     }
 
+    _buildDotMenu() {
+        this._menu = new PopupMenu.PopupMenu(this._anchor, 0.5, St.Side.TOP);
+        Main.uiGroup.add_child(this._menu.actor);
+        this._menu.actor.hide();
+        this._menuManager = new PopupMenu.PopupMenuManager(this._root);
+        this._menuManager.addMenu(this._menu);
+
+        this._modeItems = [];
+        for (const mode of ['plain', 'email', 'bullet', 'code']) {
+            const item = new PopupMenu.PopupMenuItem(mode);
+            item.connect('activate', () => this._setModeProperty(mode));
+            this._menu.addMenuItem(item);
+            this._modeItems.push([mode, item]);
+        }
+        this._menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._menu.addAction('Open dashboard', () => this._openDashboard());
+        this._menu.addAction('Pause history', () => this._onPauseHistory());
+        this._menu.addAction('Hide HUD', () => this._onHideClick());
+        this._menu.addAction('Quit', () => this._quitDaemon());
+    }
+
+    _syncDotMenuMode() {
+        if (!this._modeItems)
+            return;
+        const current = this._mode || DEFAULT_MODE;
+        for (const [mode, item] of this._modeItems) {
+            item.setOrnament(
+                mode === current ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE,
+            );
+        }
+    }
+
+    _setModeProperty(mode) {
+        if (!(this._daemonConnected && this._proxy)) {
+            console.warn('[narad] set Mode failed: daemon proxy missing');
+            return;
+        }
+        Gio.DBus.session.call(
+            DAEMON_NAME,
+            DAEMON_PATH,
+            'org.freedesktop.DBus.Properties',
+            'Set',
+            new GLib.Variant('(ssv)', [
+                DAEMON_IFACE,
+                'Mode',
+                new GLib.Variant('s', mode),
+            ]),
+            null,
+            Gio.DBusCallFlags.NONE,
+            -1,
+            null,
+            (conn, result) => {
+                try {
+                    conn.call_finish(result);
+                    this._mode = mode;
+                } catch (e) {
+                    console.warn(`[narad] set Mode failed: ${e.message}`);
+                }
+            },
+        );
+    }
+
+    _onPauseHistory() {
+        const next = !this._paused;
+        if (!(this._daemonConnected && this._proxy)) {
+            console.warn('[narad] set Paused failed: daemon proxy missing');
+            return;
+        }
+        Gio.DBus.session.call(
+            DAEMON_NAME,
+            DAEMON_PATH,
+            'org.freedesktop.DBus.Properties',
+            'Set',
+            new GLib.Variant('(ssv)', [
+                DAEMON_IFACE,
+                'Paused',
+                new GLib.Variant('b', next),
+            ]),
+            null,
+            Gio.DBusCallFlags.NONE,
+            -1,
+            null,
+            (conn, result) => {
+                try {
+                    conn.call_finish(result);
+                    this._applyPaused(next);
+                } catch (e) {
+                    console.warn(`[narad] set Paused failed: ${e.message}`);
+                }
+            },
+        );
+    }
+
+    _spawnLine(command) {
+        try {
+            const proc = Gio.Subprocess.new(
+                command.split(' '),
+                Gio.SubprocessFlags.NONE,
+            );
+            proc.wait_check_async(null, (_source, result) => {
+                try {
+                    proc.wait_check_finish(result);
+                } catch (e) {
+                    console.warn(`[narad] ${command} failed: ${e.message}`);
+                }
+            });
+        } catch (e) {
+            console.warn(`[narad] ${command} failed: ${e.message}`);
+        }
+    }
+
+    _openDashboard() {
+        this._spawnLine('gio launch dev.narad.Dashboard');
+    }
+
+    _quitDaemon() {
+        this._spawnLine('systemctl --user stop narad.service');
+    }
+
     _onHideClick() {
-        console.log('[narad] HUD hide (right-click)');
+        console.log('[narad] HUD hide');
         if (this._daemonConnected && this._proxy) {
             this._setHudVisibleProperty(false);
         } else {
@@ -947,6 +1072,14 @@ export default class NaradExtension extends Extension {
         }
         this._releaseGrab();
         this._press = null;
+        if (this._menu) {
+            if (this._menuManager)
+                this._menuManager.removeMenu(this._menu);
+            this._menu.destroy();
+            this._menu = null;
+            this._menuManager = null;
+            this._modeItems = null;
+        }
         this._disconnectProxySignals();
         this._proxy = null;
         this._daemonConnected = false;

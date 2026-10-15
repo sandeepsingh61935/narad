@@ -1,4 +1,4 @@
-//! Local calendar bounds for history filters (FR-HIS-3).
+//! Local calendar bounds for history filters and stats (FR-HIS-3, FR-HIS-8).
 
 /// Bounds for `created_at`. `to_ms` is the next local midnight and is exclusive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,15 +58,9 @@ fn parse_day(raw: &str) -> Result<Option<Civil>, String> {
     if year.len() != 4 || month.len() != 2 || day.len() != 2 {
         return Err(format!("invalid date: {text}"));
     }
-    let year: i32 = year
-        .parse()
-        .map_err(|_| format!("invalid date: {text}"))?;
-    let month: u32 = month
-        .parse()
-        .map_err(|_| format!("invalid date: {text}"))?;
-    let day: u32 = day
-        .parse()
-        .map_err(|_| format!("invalid date: {text}"))?;
+    let year: i32 = year.parse().map_err(|_| format!("invalid date: {text}"))?;
+    let month: u32 = month.parse().map_err(|_| format!("invalid date: {text}"))?;
+    let day: u32 = day.parse().map_err(|_| format!("invalid date: {text}"))?;
     if month < 1 || month > 12 || day < 1 || day > days_in_month(year, month) {
         return Err(format!("invalid date: {text}"));
     }
@@ -187,6 +181,128 @@ struct LibcTm {
 
 unsafe extern "C" {
     fn mktime(tm: *mut LibcTm) -> i64;
+    fn localtime_r(timep: *const i64, result: *mut LibcTm) -> *mut LibcTm;
+}
+
+/// Inclusive `from_day` and `to_day`, and the millisecond window the store receives.
+pub(crate) struct StatsBounds {
+    pub from_ms: i64,
+    pub to_ms: i64,
+    pub from_day: String,
+    pub to_day: String,
+}
+
+/// `day` or `week` at a fixed UTC offset. Week is Monday through Sunday.
+pub(crate) fn stats_window_with_offset(
+    range: &str,
+    anchor_day: &str,
+    offset_secs: i32,
+) -> Result<DayWindow, String> {
+    let anchor = match parse_day(anchor_day)? {
+        Some(day) => day,
+        None => return Err(format!("invalid date: {}", anchor_day.trim())),
+    };
+    let (from_day, to_day) = stats_days(range, anchor)?;
+    history_day_window_with_offset(&format_civil(from_day), &format_civil(to_day), offset_secs)
+}
+
+/// Live day or Monday-week bounds. The store sees only the millisecond window.
+pub(crate) fn stats_bounds(range: &str) -> Result<StatsBounds, String> {
+    let today = local_today()?;
+    let (from_day, to_day) = stats_days(range, today)?;
+    let from_day = format_civil(from_day);
+    let to_day = format_civil(to_day);
+    let prepared = history_filter(&from_day, &to_day, "", "", "")?;
+    match (prepared.filter.from_ms, prepared.filter.to_ms) {
+        (Some(from_ms), Some(to_ms)) => Ok(StatsBounds {
+            from_ms,
+            to_ms,
+            from_day,
+            to_day,
+        }),
+        _ => Err("missing stats bounds".into()),
+    }
+}
+
+fn stats_days(range: &str, anchor: Civil) -> Result<(Civil, Civil), String> {
+    match range.trim() {
+        "day" => Ok((anchor, anchor)),
+        "week" => Ok(monday_through_sunday(anchor)),
+        other => Err(format!("unknown stats range: {other}")),
+    }
+}
+
+fn format_civil(day: Civil) -> String {
+    format!("{:04}-{:02}-{:02}", day.0, day.1, day.2)
+}
+
+/// `1970-01-01` is Thursday, so Monday is weekday 0 when this is 0.
+fn days_since_monday(day: Civil) -> i64 {
+    (civil_ord(day) + 3).rem_euclid(7)
+}
+
+fn prev_civil(day: Civil) -> Civil {
+    let (year, month, dom) = day;
+    if dom > 1 {
+        return (year, month, dom - 1);
+    }
+    if month == 1 {
+        return (year - 1, 12, 31);
+    }
+    let month = month - 1;
+    (year, month, days_in_month(year, month))
+}
+
+fn monday_through_sunday(day: Civil) -> (Civil, Civil) {
+    let mut monday = day;
+    for _ in 0..days_since_monday(day) {
+        monday = prev_civil(monday);
+    }
+    let mut sunday = monday;
+    for _ in 0..6 {
+        sunday = next_civil(sunday);
+    }
+    (monday, sunday)
+}
+
+fn local_today() -> Result<Civil, String> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "system time before Unix epoch".to_string())?
+        .as_millis();
+    let now_ms = i64::try_from(now_ms).map_err(|_| "system time overflow".to_string())?;
+    let secs = now_ms.div_euclid(1_000);
+    let mut tm = LibcTm {
+        tm_sec: 0,
+        tm_min: 0,
+        tm_hour: 0,
+        tm_mday: 0,
+        tm_mon: 0,
+        tm_year: 0,
+        tm_wday: 0,
+        tm_yday: 0,
+        tm_isdst: 0,
+        tm_gmtoff: 0,
+        tm_zone: std::ptr::null(),
+    };
+    let ptr = unsafe { localtime_r(&secs, &mut tm) };
+    if ptr.is_null() {
+        return Err("local time unavailable".into());
+    }
+    let month = tm.tm_mon + 1;
+    let day = tm.tm_mday;
+    if month < 1 || day < 1 {
+        return Err("local time unavailable".into());
+    }
+    let guess = (tm.tm_year + 1900, month as u32, day as u32);
+    for candidate in [guess, prev_civil(guess), next_civil(guess)] {
+        let start = local_midnight_ms(candidate)?;
+        let end = local_midnight_ms(next_civil(candidate))?;
+        if now_ms >= start && now_ms < end {
+            return Ok(candidate);
+        }
+    }
+    Err("local time unavailable".into())
 }
 
 pub(crate) fn history_filter_at_offset(
@@ -299,15 +415,9 @@ mod tests {
 
     #[test]
     fn history_args_trim_and_a_reversed_range_matches_nothing() {
-        let prepared = history_filter_at_offset(
-            "1970-01-02",
-            "1970-01-02",
-            " email ",
-            "  ",
-            " en ",
-            0,
-        )
-        .expect("prepared");
+        let prepared =
+            history_filter_at_offset("1970-01-02", "1970-01-02", " email ", "  ", " en ", 0)
+                .expect("prepared");
         assert!(!prepared.match_none);
         assert_eq!(prepared.filter.mode, "email");
         assert_eq!(prepared.filter.app_id, "");
@@ -319,6 +429,22 @@ mod tests {
             history_filter_at_offset("1970-01-03", "1970-01-02", "", "", "", 0).expect("reversed");
         assert!(reversed.match_none);
         assert!(history_filter_at_offset("1970-13-01", "", "email", "", "", 0).is_err());
+    }
+
+    #[test]
+    fn stats_window_is_the_civil_day_or_the_monday_week() {
+        let week = history_day_window_with_offset("2026-10-12", "2026-10-18", 0).expect("week");
+        for anchor in ["2026-10-15", "2026-10-18", "2026-10-12"] {
+            let window = stats_window_with_offset("week", anchor, 0).expect(anchor);
+            assert_eq!(window, week);
+        }
+        let day = history_day_window_with_offset("2026-10-15", "2026-10-15", 0).expect("day");
+        assert_eq!(
+            stats_window_with_offset("day", "2026-10-15", 0).expect("day window"),
+            day
+        );
+        let err = stats_window_with_offset("year", "2026-10-15", 0).expect_err("year");
+        assert!(err.contains("unknown stats range: year"));
     }
 
     #[test]

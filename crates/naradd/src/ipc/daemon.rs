@@ -1,10 +1,10 @@
 //! D-Bus server for `dev.narad.Daemon`.
 
 use narad_core::store::HistoryEntry as CoreHistoryEntry;
-use narad_dbus::HistoryEntry;
+use narad_dbus::{HistoryEntry, HistoryStats};
 use zbus::{interface, object_server::SignalEmitter};
 
-use crate::history_days::history_filter;
+use crate::history_days::{history_filter, stats_bounds};
 use crate::pipeline::PipelineHandle;
 
 pub struct DaemonIpc {
@@ -152,10 +152,11 @@ impl DaemonIpc {
         let mode = mode.to_string();
         let model_id = model_id.to_string();
         let pipeline = self.pipeline.clone();
-        let new_id = tokio::task::spawn_blocking(move || pipeline.retranscribe(id, &mode, &model_id))
-            .await
-            .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?
-            .map_err(zbus::fdo::Error::Failed)?;
+        let new_id =
+            tokio::task::spawn_blocking(move || pipeline.retranscribe(id, &mode, &model_id))
+                .await
+                .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?
+                .map_err(zbus::fdo::Error::Failed)?;
         Self::entry_added(&emitter, new_id)
             .await
             .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?;
@@ -165,7 +166,9 @@ impl DaemonIpc {
     async fn set_pinned(&self, id: i64, pinned: bool) -> zbus::fdo::Result<()> {
         self.pipeline
             .with_store(|store| {
-                store.set_pinned(id, pinned).map_err(|err| err.to_string())?;
+                store
+                    .set_pinned(id, pinned)
+                    .map_err(|err| err.to_string())?;
                 Ok(())
             })
             .map_err(zbus::fdo::Error::Failed)
@@ -194,6 +197,26 @@ impl DaemonIpc {
             .with_store(|store| {
                 store.delete_all().map_err(|err| err.to_string())?;
                 Ok(())
+            })
+            .map_err(zbus::fdo::Error::Failed)
+    }
+
+    /// `day` or `week`. The store receives local millisecond bounds only.
+    async fn stats(&self, range: &str) -> zbus::fdo::Result<HistoryStats> {
+        let bounds = stats_bounds(range).map_err(zbus::fdo::Error::Failed)?;
+        self.pipeline
+            .with_store(|store| {
+                let totals = store
+                    .stats(bounds.from_ms, bounds.to_ms)
+                    .map_err(|err| err.to_string())?;
+                Ok(HistoryStats {
+                    words: totals.words,
+                    utterances: totals.utterances,
+                    speaking_wpm: totals.speaking_wpm,
+                    time_saved_ms: totals.time_saved_ms,
+                    from_day: bounds.from_day,
+                    to_day: bounds.to_day,
+                })
             })
             .map_err(zbus::fdo::Error::Failed)
     }

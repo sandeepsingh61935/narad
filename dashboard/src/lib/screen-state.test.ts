@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { HistoryEntry } from "./history.ts";
-import { historyScreen, hudLine, type HistoryScreenInput } from "./screen-state.ts";
+import {
+  deleteAllConfirmed,
+  exportIds,
+  historyScreen,
+  hudLine,
+  type HistoryScreenInput,
+} from "./screen-state.ts";
 
 function entry(overrides: Partial<HistoryEntry> = {}): HistoryEntry {
   return {
@@ -286,6 +292,17 @@ test("a retained audio path can play and a missing path cannot", () => {
   assert.equal(without.kind, "results");
   if (without.kind !== "results") return;
   assert.deepEqual(without.detail, { id: 7, text: "final words", canPlay: false, tags: [] });
+});
+
+test("delete all confirms only the exact trimmed phrase", () => {
+  assert.equal(deleteAllConfirmed(" delete all history "), true);
+  assert.equal(deleteAllConfirmed("Delete all history"), false);
+  assert.equal(deleteAllConfirmed(""), false);
+});
+
+test("export ids use the checked rows, or the loaded list when none are checked", () => {
+  assert.deepEqual(exportIds([2], [1, 2, 3]), [2]);
+  assert.deepEqual(exportIds([], [1, 2]), [1, 2]);
 });
 
 test("row preview prefers final text, then raw text, then (empty)", () => {

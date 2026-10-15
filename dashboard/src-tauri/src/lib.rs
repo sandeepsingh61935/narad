@@ -109,6 +109,26 @@ async fn delete_entries(ids: Vec<i64>) -> Result<(), String> {
         .map_err(|e| format!("DeleteEntries: {e}"))
 }
 
+/// One history document for the ids the dashboard already listed (`Export`).
+#[tauri::command]
+async fn export_history(ids: Vec<i64>, format: String) -> Result<String, String> {
+    daemon_proxy()
+        .await?
+        .export(&ids, &format)
+        .await
+        .map_err(|e| format!("Export: {e}"))
+}
+
+/// Delete every history row, not the current filter (`DeleteAll`).
+#[tauri::command]
+async fn delete_all_history() -> Result<(), String> {
+    daemon_proxy()
+        .await?
+        .delete_all()
+        .await
+        .map_err(|e| format!("DeleteAll: {e}"))
+}
+
 /// Load `~/.config/narad/config.toml` (defaults if missing). FR-HIS-9.
 #[tauri::command]
 fn load_config() -> Result<DashboardConfig, String> {
@@ -151,6 +171,8 @@ pub fn run() {
             set_pinned,
             set_tags,
             delete_entries,
+            export_history,
+            delete_all_history,
             load_config,
             save_config,
             session_status

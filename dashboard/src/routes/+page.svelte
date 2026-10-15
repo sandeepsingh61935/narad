@@ -3,11 +3,17 @@
   import { invoke } from "@tauri-apps/api/core";
   import { ACTIVE_MODES, type DashboardConfig } from "$lib/config";
   import { formatDuration, formatTime, type HistoryEntry, type TextView } from "$lib/history";
-  import { historyScreen, type RowView } from "$lib/screen-state";
+  import { deleteAllConfirmed, exportIds, historyScreen, type RowView } from "$lib/screen-state";
 
   const PAGE_SIZE = 50;
   const SEARCH_ID = "history-search";
   const TAGS_ID = "entry-tags";
+  const DELETE_ALL_ID = "delete-all-history";
+  const EXPORT_FILES = {
+    json: "history.json",
+    markdown: "history.md",
+    txt: "history.txt",
+  } as const;
   const RECOVERY_COMMAND = "systemctl --user restart narad.service";
 
   const segmentOn =
@@ -54,6 +60,10 @@
   let tagDraft = $state("");
   let tagDraftId = $state<number | null>(null);
   let tagCommitBusy = false;
+  let checkedIds = $state<number[]>([]);
+  let appliedKey = $state("");
+  let deleteAllOpen = $state(false);
+  let deleteAllPhrase = $state("");
 
   const screen = $derived(
     historyScreen({
@@ -154,6 +164,18 @@
     const trimmed = query.trim();
     const filters = filterArgs();
     const narrowed = Object.values(filters).some((value) => value.length > 0);
+    const nextKey = [
+      trimmed,
+      filters.from_day,
+      filters.to_day,
+      filters.mode,
+      filters.app_id,
+      filters.src_lang,
+    ].join("\0");
+    if (nextKey !== appliedKey) {
+      checkedIds = [];
+      appliedKey = nextKey;
+    }
     const listed = invoke<HistoryEntry[]>("list_history", {
       query: trimmed,
       offset: 0,
@@ -394,7 +416,98 @@
   function typingInSearch(event: KeyboardEvent): boolean {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return false;
-    return target.id === SEARCH_ID || target.id === TAGS_ID;
+    return target.id === SEARCH_ID || target.id === TAGS_ID || target.id === DELETE_ALL_ID;
+  }
+
+  function toggleChecked(id: number) {
+    if (checkedIds.includes(id)) {
+      checkedIds = checkedIds.filter((existing) => existing !== id);
+    } else {
+      checkedIds = [...checkedIds, id];
+    }
+  }
+
+  function downloadDocument(filename: string, text: string) {
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function exportHistory(format: keyof typeof EXPORT_FILES) {
+    if (actionBusy) return;
+    const ids = exportIds(
+      checkedIds,
+      entries.map((entry) => entry.id),
+    );
+    actionBusy = true;
+    actionMessage = null;
+    actionError = null;
+    try {
+      const text = await invoke<string>("export_history", { ids, format });
+      downloadDocument(EXPORT_FILES[format], text);
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : String(e);
+    } finally {
+      actionBusy = false;
+    }
+  }
+
+  async function deleteChecked() {
+    const ids = exportIds(
+      checkedIds,
+      entries.map((entry) => entry.id),
+    );
+    if (ids.length === 0 || actionBusy) return;
+    actionBusy = true;
+    actionMessage = null;
+    actionError = null;
+    try {
+      await invoke("delete_entries", { ids });
+      const gone = new Set(ids);
+      entries = entries.filter((entry) => !gone.has(entry.id));
+      checkedIds = checkedIds.filter((id) => !gone.has(id));
+      if (selectedId != null && gone.has(selectedId)) {
+        selectedId = null;
+        textView = "final";
+      }
+      actionMessage = "Deleted";
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : String(e);
+    } finally {
+      actionBusy = false;
+    }
+  }
+
+  async function submitDeleteAll(event: Event) {
+    event.preventDefault();
+    if (!deleteAllConfirmed(deleteAllPhrase)) {
+      actionMessage = null;
+      return;
+    }
+    if (actionBusy) return;
+    actionBusy = true;
+    actionMessage = null;
+    actionError = null;
+    try {
+      await invoke("delete_all_history");
+      entries = [];
+      checkedIds = [];
+      selectedId = null;
+      textView = "final";
+      deleteAllOpen = false;
+      deleteAllPhrase = "";
+      actionMessage = "Deleted";
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : String(e);
+    } finally {
+      actionBusy = false;
+    }
   }
 
   async function togglePin(entry: HistoryEntry) {
@@ -556,6 +669,66 @@
         onchange={onFilterCommit}
       />
     </div>
+    {#if reachable && !loading}
+      {@render historyActions()}
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet historyActions()}
+  <div class="flex flex-wrap items-center gap-1.5">
+    <button
+      class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/40 font-body-muted text-body-muted hover:bg-surface-container-high disabled:opacity-50"
+      type="button"
+      disabled={actionBusy}
+      onclick={() => exportHistory("json")}
+    >Export JSON</button>
+    <button
+      class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/40 font-body-muted text-body-muted hover:bg-surface-container-high disabled:opacity-50"
+      type="button"
+      disabled={actionBusy}
+      onclick={() => exportHistory("markdown")}
+    >Export Markdown</button>
+    <button
+      class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/40 font-body-muted text-body-muted hover:bg-surface-container-high disabled:opacity-50"
+      type="button"
+      disabled={actionBusy}
+      onclick={() => exportHistory("txt")}
+    >Export TXT</button>
+    {#if checkedIds.length > 0}
+      <button
+        class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/40 font-body-muted text-body-muted hover:text-error disabled:opacity-50"
+        type="button"
+        disabled={actionBusy}
+        onclick={() => deleteChecked()}
+      >Delete selected</button>
+    {/if}
+    {#if deleteAllOpen}
+      <form class="flex items-center gap-1.5" onsubmit={submitDeleteAll}>
+        <label class="sr-only" for={DELETE_ALL_ID}>Type delete all history</label>
+        <input
+          id={DELETE_ALL_ID}
+          class="w-44 px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/40"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="delete all history"
+          bind:value={deleteAllPhrase}
+        />
+        <button
+          class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/40 font-body-muted text-body-muted hover:text-error disabled:opacity-50"
+          type="submit"
+          disabled={actionBusy}
+        >Delete all</button>
+      </form>
+    {:else}
+      <button
+        class="px-2.5 py-1 rounded bg-surface-container text-on-surface border border-outline-variant/40 font-body-muted text-body-muted hover:text-error disabled:opacity-50"
+        type="button"
+        disabled={actionBusy}
+        onclick={() => (deleteAllOpen = true)}
+      >Delete all</button>
+    {/if}
   </div>
 {/snippet}
 
@@ -639,6 +812,9 @@
                 </span>
                 <span class="font-body-muted text-body-muted text-on-surface-variant ml-auto md:ml-2">0 matches</span>
               </div>
+              {#if reachable && !loading}
+                {@render historyActions()}
+              {/if}
             </div>
             <div class="py-14 px-space-md flex flex-col items-center justify-center text-center max-w-lg mx-auto w-full">
               <div class="w-20 h-20 rounded-full bg-surface-container flex items-center justify-center border border-outline-variant mb-space-md">
@@ -759,14 +935,23 @@
                 {#each group.rows as row (row.id)}
                   {@const entry = entryById(row.id)}
                   {#if entry}
-                    <button
-                      type="button"
-                      id="history-row-{row.id}"
-                      class={selectedId === row.id ? rowOn : rowOff}
-                      role="option"
-                      aria-selected={selectedId === row.id}
-                      onclick={() => selectEntry(row.id)}
-                    >
+                    <div class="flex items-start gap-2">
+                      <input
+                        class="mt-3 shrink-0"
+                        type="checkbox"
+                        aria-label="Select entry"
+                        checked={checkedIds.includes(row.id)}
+                        onclick={(event) => event.stopPropagation()}
+                        onchange={() => toggleChecked(row.id)}
+                      />
+                      <button
+                        type="button"
+                        id="history-row-{row.id}"
+                        class={`${selectedId === row.id ? rowOn : rowOff} !w-auto flex-1 min-w-0`}
+                        role="option"
+                        aria-selected={selectedId === row.id}
+                        onclick={() => selectEntry(row.id)}
+                      >
                       <div class="flex items-start justify-between gap-2 mb-1.5">
                         <div class="flex items-center gap-2 min-w-0">
                           <div class="w-6 h-6 rounded flex items-center justify-center bg-surface-container-high text-primary shrink-0 border border-outline-variant/40">
@@ -821,7 +1006,8 @@
                         </div>
                         <span class="text-[10px] text-on-surface-variant/80">{row.insert}</span>
                       </div>
-                    </button>
+                      </button>
+                    </div>
                   {/if}
                 {/each}
               </div>

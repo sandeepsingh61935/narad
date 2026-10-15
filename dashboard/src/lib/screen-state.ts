@@ -144,6 +144,21 @@ export function hudLine(input: HudInput): HudLine {
   }
 }
 
+/** Trim, then require the exact phrase `delete all history`. */
+export function deleteAllConfirmed(phrase: string): boolean {
+  return phrase.trim() === "delete all history";
+}
+
+/**
+ * Checked ids in current list order. An empty selection exports every loaded id.
+ * Checked ids that are not in the loaded list are omitted.
+ */
+export function exportIds(selected: readonly number[], listed: readonly number[]): number[] {
+  if (selected.length === 0) return [...listed];
+  const chosen = new Set(selected);
+  return listed.filter((id) => chosen.has(id));
+}
+
 export function historyScreen(input: HistoryScreenInput): HistoryScreen {
   if (input.loading) return { kind: "loading" };
   if (!input.reachable) {

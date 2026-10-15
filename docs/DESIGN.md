@@ -1,8 +1,8 @@
 # Narad — UX Guidelines
 
-How Narad should behave and be structured. Visual design (colors, type, components) comes from the Stitch project (**Quiet Precision**). Prompts to apply these guidelines in Stitch: [STITCH_PROMPTS.md](STITCH_PROMPTS.md).
+How Narad should behave and be structured. Visual tokens come from Quiet Precision (warm charcoal, saffron `#E08A1E`, Inter, JetBrains Mono, libadwaita radii, no glow or glass). Prompts that produced the Stitch export: [STITCH_PROMPTS.md](STITCH_PROMPTS.md).
 
-**Visual / surface authority:** Stitch export `stitch_narad_offline_voice_to_text_desktop_app` — especially `quiet_precision/DESIGN.md` and `narad_floating_hud_component_sheet/`. Behavior here must stay consistent with that export.
+**Visual / surface authority:** the 28px circular anchor and the companion pill while dictating, as drawn in the Stitch export `quiet_precision/DESIGN.md` and `narad_floating_hud_component_sheet/`. That export is not behavior authority. Where a Stitch screen disagrees with this file or [REQUIREMENTS.md](REQUIREMENTS.md), those docs win. Visual polish runs inside the phase that owns the surface, after the control uses live daemon state ([ROADMAP.md](ROADMAP.md), “How a phase ships”).
 
 ## 1. Principles
 

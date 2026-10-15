@@ -20,26 +20,25 @@ Narad is a **local, universal voice-to-text** tool: speak anywhere on the deskto
 
 Everything runs on-device. The only network use is an explicit, user-initiated model download. The primary product chrome is a **floating waveform HUD capsule** (Stitch Quiet Precision), with a quiet Tauri dashboard as archive/control room; most usage never opens the dashboard.
 
-## Surface decision (2026-10-09)
+## Surface decision (2026-10-15)
 
-- **Authority:** Stitch export at `/home/sandy/Downloads/stitch_narad_offline_voice_to_text_desktop_app/` (`quiet_precision/DESIGN.md` + `narad_floating_hud_component_sheet/`).
-- **Chosen floating surface:** Compact ~28px circular anchor + companion waveform HUD pill while active (Stitch sheet). Quiet Precision tokens (saffron accent, warm charcoal, Inter / JetBrains Mono).
-- **Synced:** `docs/DESIGN.md`, FR-DOT-* / related rows in `docs/REQUIREMENTS.md`, `docs/ARCHITECTURE.md` (incl. D-Bus `HudVisible`), `docs/STITCH_PROMPTS.md`, `docs/ROADMAP.md`.
+- **Behavior authority:** `docs/REQUIREMENTS.md` and `docs/DESIGN.md`. Phase order: `docs/ROADMAP.md`.
+- **Visual authority:** Quiet Precision tokens and the ~28px circular anchor plus companion waveform pill. The Stitch HTML is a picture of that HUD, not a spec for dashboard behavior.
+- **Chosen floating surface:** Compact ~28px circular anchor + companion waveform HUD pill while active. Saffron accent, warm charcoal, Inter / JetBrains Mono. No glow, no glass.
+- **Impeccable:** Operate mode. `shape` only before a new phase surface. `distill`, `critique`, and `audit` after that surface reads live data. Do not run `bolder`, `delight`, or `overdrive`.
 
 ## Operating Context
 
 - OS/desktop: Linux — Fedora 44, GNOME 50 on Wayland (v1); other desktops later.
 - Surfaces: GNOME Shell extension (floating HUD, hotkey UX) + Tauri v2 / Svelte dashboard + CLI; Rust daemon owns state and inference over D-Bus.
-- UX behavior authority: `docs/DESIGN.md`. Visual design (colors, type, components) deferred to the Stitch project (`docs/STITCH_PROMPTS.md`).
-- Stitch prototype (pending access): https://stitch.withgoogle.com/preview/6703747760591777930?node-id=de92b7b12ed045609b949b4879de87e5
+- UX behavior authority: `docs/DESIGN.md`. Quiet Precision tokens are the visual system. `docs/STITCH_PROMPTS.md` is how the export was prompted, not a requirement.
 
 ## Capabilities and Constraints
 
 - Local-only; near-zero idle CPU; memory bounded and user-controllable.
 - Hold vs tap dictation; Esc cancels; clipboard fallback when no text field focused.
 - Floating HUD states: idle (anchor); listening (saffron + waveform companion pill); processing; inserted/copied/cancelled/error outcome pills.
-- Dashboard is archive/control room (history, models, settings) — out of scope for this UI pass.
-- Open: Stitch screens not yet visible from agent tooling (Google sign-in). Visual tokens remain Stitch-owned until export/screenshots are available.
+- Dashboard is the archive and control room. Phase 2 shows History, Stats, and Settings. Models waits for Phase 3. The cleanup mode editor waits for Phase 4.
 
 ## Brand Commitments
 
@@ -48,14 +47,9 @@ Everything runs on-device. The only network use is an explicit, user-initiated m
 
 ## Evidence on Hand
 
-- Specs: `docs/REQUIREMENTS.md`, `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/DESIGN.md`, `docs/STITCH_PROMPTS.md`.
-- Extension stub: `extension/` (HUD surface lives here; Phase 0 spike is the idle circular anchor).
-- Dashboard folder reserved (`dashboard/`) but empty of app UI.
-- Stitch local export (visual authority): `/home/sandy/Downloads/stitch_narad_offline_voice_to_text_desktop_app/`
-  - Design system: `quiet_precision/DESIGN.md` (“Quiet Precision”)
-  - Floating HUD / indicator sheet: `narad_floating_hud_component_sheet/`
-  - First-run, empty/edge, history, models, settings, dictionary, stats, privacy screens also present
-- Stitch preview URL (auth-gated for agents): https://stitch.withgoogle.com/preview/6703747760591777930?node-id=de92b7b12ed045609b949b4879de87e5
+- Specs: `docs/REQUIREMENTS.md`, `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/DESIGN.md`.
+- HUD: `extension/`. Dashboard: `dashboard/` (Tauri + Svelte). History, stats, dictionary, audio, and privacy read the daemon or config. The Models route and `/setup` are still Stitch pastes and are scheduled for removal in the shell-honesty plan.
+- Stitch export, HUD picture only: `/home/sandy/Downloads/stitch_narad_offline_voice_to_text_desktop_app/` (`quiet_precision/DESIGN.md`, `narad_floating_hud_component_sheet/`).
 
 ## Product Principles
 

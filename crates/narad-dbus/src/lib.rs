@@ -7,7 +7,7 @@
 //! Methods: `Start`, `Stop`, `Cancel`, `Toggle`, `History`, `ReinsertEntry`, `DeleteEntries`,
 //! `PasteLast` (FR-INS-4), `UndoLast` (FR-INS-5), `ReportFocus` (FR-CTX-1),
 //! `ReadAudio` and `Retranscribe` (FR-HIS-5), `SetPinned`, `SetTags`,
-//! `Export`, and `DeleteAll` (FR-HIS-6).
+//! `Export`, and `DeleteAll` (FR-HIS-6), `Stats` (FR-HIS-8).
 //! Signals: `StateChanged`, `Level`, `EntryAdded`.
 //! Properties: `Mode`, `Paused` (writable), `HudVisible` (writable).
 //!
@@ -29,7 +29,7 @@ pub mod types;
 /// The `#[zbus::proxy]` definition in [`daemon_iface`] uses an internal trait name `Daemon`;
 /// zbus expands it into this type (the trait itself is not exported).
 pub use daemon_iface::DaemonProxy;
-pub use types::{HistoryEntry, SessionState};
+pub use types::{HistoryEntry, HistoryStats, SessionState};
 
 #[cfg(test)]
 mod tests {
@@ -108,7 +108,9 @@ mod tests {
     fn read_audio_and_retranscribe_are_on_the_daemon_proxy() {
         async fn assert_sig(proxy: &DaemonProxy<'_>) {
             let _ = proxy.read_audio(1).await;
-            let _ = proxy.retranscribe(1, "email", "parakeet-ctc-110m-int8").await;
+            let _ = proxy
+                .retranscribe(1, "email", "parakeet-ctc-110m-int8")
+                .await;
         }
         let _ = assert_sig;
     }
@@ -127,6 +129,22 @@ mod tests {
         async fn assert_sig(proxy: &DaemonProxy<'_>) {
             let _ = proxy.export(&[7], "json").await;
             let _ = proxy.delete_all().await;
+        }
+        let _ = assert_sig;
+    }
+
+    #[test]
+    fn stats_is_on_the_daemon_proxy() {
+        async fn assert_sig(proxy: &DaemonProxy<'_>) {
+            let stats = proxy.stats("day").await.expect("stats");
+            let _ = (
+                stats.words,
+                stats.utterances,
+                stats.speaking_wpm,
+                stats.time_saved_ms,
+                stats.from_day,
+                stats.to_day,
+            );
         }
         let _ = assert_sig;
     }

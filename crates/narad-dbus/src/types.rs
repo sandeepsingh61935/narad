@@ -25,15 +25,7 @@ impl SessionState {
 /// Field layout matches `narad_core::store::HistoryEntry` (FR-HIS-1) for straightforward mapping in
 /// `naradd`. `insert_status` uses the same string values as `InsertStatus::as_str` in core
 /// (`success`, `failed`, `skipped`).
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    Type,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct HistoryEntry {
     pub id: i64,
     /// Unix epoch milliseconds (UTC).
@@ -56,4 +48,17 @@ pub struct HistoryEntry {
     pub kind: String,
     /// Tag names in kept order. Last field on the D-Bus struct.
     pub tags: Vec<String>,
+}
+
+/// One day or Monday-week aggregate from [`crate::DaemonProxy::stats`] (FR-HIS-8).
+///
+/// `from_day` and `to_day` are inclusive `YYYY-MM-DD` in the daemon's local timezone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct HistoryStats {
+    pub words: u64,
+    pub utterances: u64,
+    pub speaking_wpm: u64,
+    pub time_saved_ms: i64,
+    pub from_day: String,
+    pub to_day: String,
 }

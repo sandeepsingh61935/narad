@@ -8,8 +8,9 @@
 //! `ReadAudio` and `Retranscribe` are included (FR-HIS-5).
 //! `SetPinned` and `SetTags` are included (FR-HIS-6).
 //! `Export` and `DeleteAll` are included (FR-HIS-6).
+//! `Stats` is included (FR-HIS-8).
 
-use crate::types::HistoryEntry;
+use crate::types::{HistoryEntry, HistoryStats};
 use zbus::proxy;
 
 /// Phase 1 D-Bus interface for the Narad daemon (ARCHITECTURE §6).
@@ -83,6 +84,10 @@ pub trait Daemon {
 
     /// Delete every history row, not the current filter, and unlink stored audio.
     async fn delete_all(&self) -> zbus::Result<()>;
+
+    /// Dictation totals for `day` or `week` (Monday through Sunday). Any other
+    /// range fails. `from_day` and `to_day` are inclusive.
+    async fn stats(&self, range: &str) -> zbus::Result<HistoryStats>;
 
     /// Focused application id from the shell extension (FR-CTX-1).
     ///

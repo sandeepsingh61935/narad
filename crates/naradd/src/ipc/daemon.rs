@@ -181,6 +181,23 @@ impl DaemonIpc {
             .map_err(zbus::fdo::Error::Failed)
     }
 
+    /// Ids are the caller's selection. This does not re-run history filters.
+    async fn export(&self, ids: Vec<i64>, format: &str) -> zbus::fdo::Result<String> {
+        self.pipeline
+            .with_store(|store| store.export(&ids, format).map_err(|err| err.to_string()))
+            .map_err(zbus::fdo::Error::Failed)
+    }
+
+    /// Every history row, including ones outside the dashboard's current filter.
+    async fn delete_all(&self) -> zbus::fdo::Result<()> {
+        self.pipeline
+            .with_store(|store| {
+                store.delete_all().map_err(|err| err.to_string())?;
+                Ok(())
+            })
+            .map_err(zbus::fdo::Error::Failed)
+    }
+
     async fn report_focus(&self, app_id: &str) -> zbus::fdo::Result<()> {
         self.pipeline.report_focus(app_id).map_err(lock_err)
     }
@@ -342,5 +359,55 @@ mod tests {
             Ok(())
         })
         .expect("mapped");
+    }
+
+    #[tokio::test]
+    async fn export_returns_final_text_and_delete_all_empties_the_store() {
+        let dir = TempDir::new().expect("tempdir");
+        let wav = dir.path().join("7.wav");
+        std::fs::write(&wav, b"speech").expect("wav");
+        let store = HistoryStore::open(dir.path().join("t.db")).expect("open");
+        let pipe = crate::pipeline::PipelineHandle::new(
+            crate::config::NaradConfig::default(),
+            store,
+            None,
+            dir.path().join("audio"),
+        );
+        let id = pipe
+            .with_store(|store| {
+                store
+                    .insert(&NewHistoryEntry {
+                        duration_ms: 1000,
+                        mode: "plain".into(),
+                        src_lang: "en".into(),
+                        dst_lang: "en".into(),
+                        asr_model: "parakeet-ctc-110m-int8".into(),
+                        mt_model: None,
+                        llm_model: None,
+                        app_id: Some("org.gnome.TextEditor".into()),
+                        raw_text: "raw".into(),
+                        final_text: "kept final".into(),
+                        insert_status: InsertStatus::Success,
+                        cleanup_flagged: false,
+                        audio_path: Some(wav.display().to_string()),
+                        pinned: false,
+                        kind: "dictation".into(),
+                    })
+                    .map_err(|err| err.to_string())
+            })
+            .expect("insert");
+        let ipc = DaemonIpc::new(pipe.clone());
+        let doc = ipc.export(vec![id], "txt").await.expect("export");
+        assert!(doc.contains("kept final"));
+        let missing = ipc.export(vec![99], "json").await.expect_err("missing");
+        assert!(missing.to_string().contains("no history row 99"));
+        ipc.delete_all().await.expect("delete all");
+        assert!(!wav.exists());
+        pipe.with_store(|store| {
+            let rows = store.list(0, 10).map_err(|err| err.to_string())?;
+            assert!(rows.is_empty());
+            Ok(())
+        })
+        .expect("empty");
     }
 }

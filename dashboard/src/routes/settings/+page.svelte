@@ -468,36 +468,6 @@
           </div>
         </div>
       </div>
-
-      <div class="flex flex-col gap-space-sm pb-8">
-        <div
-          class="bg-surface-container-high/50 border border-outline-variant/30 rounded-xl p-4 flex items-center gap-3"
-        >
-          <div class="w-8 h-8 rounded-full bg-emerald-500/10 flex items-center justify-center shrink-0">
-            <span class="material-symbols-outlined text-emerald-400 text-[18px]">verified</span>
-          </div>
-          <div class="flex flex-col flex-1">
-            <span class="font-headline-md text-headline-md text-[13px] text-on-surface"
-              >No Keybinding Conflicts</span
-            >
-            <span class="font-body-muted text-body-muted text-on-surface-variant text-[12px]"
-              >Zero overlapping accelerators detected with GNOME Shell or Mutter window manager.</span
-            >
-          </div>
-        </div>
-        <div class="flex justify-between items-center pt-2">
-          <span class="font-label-code text-label-code text-on-surface-variant text-[11px]"
-            >Configuration backed by gsettings: org.gnome.shell.keybindings</span
-          >
-          <button
-            class="px-4 py-1.5 text-on-surface hover:text-on-surface bg-surface-container hover:bg-surface-container-high border border-outline-variant/40 rounded-lg font-headline-md text-headline-md text-[13px] transition-colors flex items-center gap-1.5"
-            type="button"
-          >
-            <span class="material-symbols-outlined text-[16px] text-on-surface-variant">restart_alt</span>
-            Reset Hotkeys to Default
-          </button>
-        </div>
-      </div>
     {/if}
   </div>
 </section>

@@ -25,3 +25,14 @@ test("phase 3 costume routes are not in the tree", () => {
   assert.equal(existsSync(join(here, "../routes/models/+page.svelte")), false);
   assert.equal(existsSync(join(here, "../routes/setup/+page.svelte")), false);
 });
+
+const hotkeys = readFileSync(join(here, "../routes/settings/+page.svelte"), "utf8");
+
+test("hotkeys copy does not invent a gsettings backend", () => {
+  assert.equal(hotkeys.includes("gsettings"), false);
+  assert.equal(hotkeys.includes("org.gnome.shell.keybindings"), false);
+  assert.equal(hotkeys.includes("No Keybinding Conflicts"), false);
+  assert.equal(hotkeys.includes("Reset Hotkeys to Default"), false);
+  assert.match(hotkeys, /beginHotkeyEdit/);
+});
+

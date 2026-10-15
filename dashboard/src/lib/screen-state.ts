@@ -149,6 +149,22 @@ export function deleteAllConfirmed(phrase: string): boolean {
   return phrase.trim() === "delete all history";
 }
 
+/** A day is the date. A week is Monday through Sunday. */
+export function statsHeadline(fromDay: string, toDay: string): string {
+  if (fromDay === toDay) return fromDay;
+  return `${fromDay} to ${toDay}`;
+}
+
+/** `0` ms is `0 min`. Whole minutes omit seconds. */
+export function formatTimeSaved(ms: number): string {
+  if (ms <= 0) return "0 min";
+  const totalSec = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSec / 60);
+  const seconds = totalSec % 60;
+  if (seconds === 0) return `${minutes} min`;
+  return `${minutes} min ${seconds} sec`;
+}
+
 /**
  * Checked ids in current list order. An empty selection exports every loaded id.
  * Checked ids that are not in the loaded list are omitted.

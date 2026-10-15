@@ -4,8 +4,10 @@ import type { HistoryEntry } from "./history.ts";
 import {
   deleteAllConfirmed,
   exportIds,
+  formatTimeSaved,
   historyScreen,
   hudLine,
+  statsHeadline,
   type HistoryScreenInput,
 } from "./screen-state.ts";
 
@@ -303,6 +305,14 @@ test("delete all confirms only the exact trimmed phrase", () => {
 test("export ids use the checked rows, or the loaded list when none are checked", () => {
   assert.deepEqual(exportIds([2], [1, 2, 3]), [2]);
   assert.deepEqual(exportIds([], [1, 2]), [1, 2]);
+});
+
+test("stats headline is the selected range and time saved is minutes and seconds", () => {
+  assert.equal(statsHeadline("2026-10-15", "2026-10-15"), "2026-10-15");
+  assert.equal(statsHeadline("2026-10-12", "2026-10-18"), "2026-10-12 to 2026-10-18");
+  assert.equal(formatTimeSaved(0), "0 min");
+  assert.equal(formatTimeSaved(60000), "1 min");
+  assert.equal(formatTimeSaved(105000), "1 min 45 sec");
 });
 
 test("row preview prefers final text, then raw text, then (empty)", () => {

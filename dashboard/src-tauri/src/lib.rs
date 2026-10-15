@@ -3,7 +3,7 @@
 mod config;
 
 use config::DashboardConfig;
-use narad_dbus::{DaemonProxy, HistoryEntry};
+use narad_dbus::{DaemonProxy, HistoryEntry, HistoryStats};
 use zbus::Connection;
 
 async fn daemon_proxy() -> Result<DaemonProxy<'static>, String> {
@@ -35,14 +35,7 @@ async fn list_history(
     daemon_proxy()
         .await?
         .history(
-            &query,
-            offset,
-            limit,
-            &from_day,
-            &to_day,
-            &mode,
-            &app_id,
-            &src_lang,
+            &query, offset, limit, &from_day, &to_day, &mode, &app_id, &src_lang,
         )
         .await
         .map_err(|e| format!("History: {e}"))
@@ -129,6 +122,16 @@ async fn delete_all_history() -> Result<(), String> {
         .map_err(|e| format!("DeleteAll: {e}"))
 }
 
+/// Dictation totals for `day` or `week` (`Stats`).
+#[tauri::command]
+async fn history_stats(range: String) -> Result<HistoryStats, String> {
+    daemon_proxy()
+        .await?
+        .stats(&range)
+        .await
+        .map_err(|e| format!("Stats: {e}"))
+}
+
 /// Load `~/.config/narad/config.toml` (defaults if missing). FR-HIS-9.
 #[tauri::command]
 fn load_config() -> Result<DashboardConfig, String> {
@@ -145,10 +148,7 @@ struct SessionStatus {
 #[tauri::command]
 async fn session_status() -> Result<SessionStatus, String> {
     let proxy = daemon_proxy().await?;
-    let paused = proxy
-        .paused()
-        .await
-        .map_err(|e| format!("Paused: {e}"))?;
+    let paused = proxy.paused().await.map_err(|e| format!("Paused: {e}"))?;
     let mode = proxy.mode().await.map_err(|e| format!("Mode: {e}"))?;
     Ok(SessionStatus { paused, mode })
 }
@@ -173,6 +173,7 @@ pub fn run() {
             delete_entries,
             export_history,
             delete_all_history,
+            history_stats,
             load_config,
             save_config,
             session_status

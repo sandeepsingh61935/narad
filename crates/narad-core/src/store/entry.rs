@@ -72,4 +72,6 @@ pub struct HistoryEntry {
     pub pinned: bool,
     /// `dictation` for a normal utterance. `retranscribe` for a replay row.
     pub kind: String,
+    /// Tag names in the order `set_tags` kept them. Empty until then.
+    pub tags: Vec<String>,
 }

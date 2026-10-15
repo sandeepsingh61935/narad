@@ -1,4 +1,4 @@
-//! SQLite + FTS5 history store (FR-HIS-1, FR-HIS-3, FR-HIS-7).
+//! SQLite + FTS5 history store (FR-HIS-1, FR-HIS-3, FR-HIS-6, FR-HIS-7).
 //!
 //! Entry primary keys are `i64` values from SQLite `INTEGER PRIMARY KEY AUTOINCREMENT`
 //! (the stable `rowid` for FTS5 external-content sync).
@@ -108,42 +108,53 @@ impl HistoryStore {
 
     /// Fetch a single entry by primary key.
     pub fn get(&self, id: i64) -> Result<Option<HistoryEntry>, StoreError> {
-        let mut stmt = self.conn.prepare(
-            r"
-            SELECT
-                id, created_at, duration_ms, mode, src_lang, dst_lang,
-                asr_model, mt_model, llm_model, app_id,
-                raw_text, final_text, insert_status, cleanup_flagged,
-                audio_path, pinned, kind
-            FROM entries
-            WHERE id = ?1
-            ",
-        )?;
-        let mut rows = stmt.query_map(params![id], row_to_entry)?;
-        match rows.next() {
-            Some(Ok(entry)) => Ok(Some(entry)),
-            Some(Err(e)) => Err(StoreError::from(e)),
+        let entry = {
+            let mut stmt = self.conn.prepare(
+                r"
+                SELECT
+                    id, created_at, duration_ms, mode, src_lang, dst_lang,
+                    asr_model, mt_model, llm_model, app_id,
+                    raw_text, final_text, insert_status, cleanup_flagged,
+                    audio_path, pinned, kind
+                FROM entries
+                WHERE id = ?1
+                ",
+            )?;
+            let mut rows = stmt.query_map(params![id], row_to_entry)?;
+            match rows.next() {
+                Some(Ok(entry)) => Some(entry),
+                Some(Err(e)) => return Err(StoreError::from(e)),
+                None => None,
+            }
+        };
+        match entry {
+            Some(mut entry) => {
+                entry.tags = tags_for(&self.conn, entry.id)?;
+                Ok(Some(entry))
+            }
             None => Ok(None),
         }
     }
 
     /// List entries newest-first.
     pub fn list(&self, offset: u32, limit: u32) -> Result<Vec<HistoryEntry>, StoreError> {
-        let mut stmt = self.conn.prepare(
-            r"
-            SELECT
-                id, created_at, duration_ms, mode, src_lang, dst_lang,
-                asr_model, mt_model, llm_model, app_id,
-                raw_text, final_text, insert_status, cleanup_flagged,
-                audio_path, pinned, kind
-            FROM entries
-            ORDER BY created_at DESC, id DESC
-            LIMIT ?1 OFFSET ?2
-            ",
-        )?;
-        let rows = stmt.query_map(params![limit, offset], row_to_entry)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        let entries = {
+            let mut stmt = self.conn.prepare(
+                r"
+                SELECT
+                    id, created_at, duration_ms, mode, src_lang, dst_lang,
+                    asr_model, mt_model, llm_model, app_id,
+                    raw_text, final_text, insert_status, cleanup_flagged,
+                    audio_path, pinned, kind
+                FROM entries
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?1 OFFSET ?2
+                ",
+            )?;
+            let rows = stmt.query_map(params![limit, offset], row_to_entry)?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        with_tags(&self.conn, entries)
     }
 
     /// Full-text search over `raw_text` and `final_text` (FTS5).
@@ -153,23 +164,25 @@ impl HistoryStore {
         offset: u32,
         limit: u32,
     ) -> Result<Vec<HistoryEntry>, StoreError> {
-        let mut stmt = self.conn.prepare(
-            r"
-            SELECT
-                e.id, e.created_at, e.duration_ms, e.mode, e.src_lang, e.dst_lang,
-                e.asr_model, e.mt_model, e.llm_model, e.app_id,
-                e.raw_text, e.final_text, e.insert_status, e.cleanup_flagged,
-                e.audio_path, e.pinned, e.kind
-            FROM entries e
-            INNER JOIN entries_fts ON entries_fts.rowid = e.id
-            WHERE entries_fts MATCH ?1
-            ORDER BY e.created_at DESC, e.id DESC
-            LIMIT ?2 OFFSET ?3
-            ",
-        )?;
-        let rows = stmt.query_map(params![query, limit, offset], row_to_entry)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        let entries = {
+            let mut stmt = self.conn.prepare(
+                r"
+                SELECT
+                    e.id, e.created_at, e.duration_ms, e.mode, e.src_lang, e.dst_lang,
+                    e.asr_model, e.mt_model, e.llm_model, e.app_id,
+                    e.raw_text, e.final_text, e.insert_status, e.cleanup_flagged,
+                    e.audio_path, e.pinned, e.kind
+                FROM entries e
+                INNER JOIN entries_fts ON entries_fts.rowid = e.id
+                WHERE entries_fts MATCH ?1
+                ORDER BY e.created_at DESC, e.id DESC
+                LIMIT ?2 OFFSET ?3
+                ",
+            )?;
+            let rows = stmt.query_map(params![query, limit, offset], row_to_entry)?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        with_tags(&self.conn, entries)
     }
 
     /// List or full-text search, narrowed by `filter` (FR-HIS-3).
@@ -238,10 +251,12 @@ impl HistoryStore {
                 ],
             )
         };
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(params_owned), row_to_entry)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        let entries = {
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(params_owned), row_to_entry)?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        with_tags(&self.conn, entries)
     }
 
     /// Record the retained WAV path for an existing row.
@@ -253,6 +268,44 @@ impl HistoryStore {
         if changed == 0 {
             return Err(StoreError::Missing(id));
         }
+        Ok(())
+    }
+
+    /// Set `pinned` on one row. A missing id is an error and changes nothing.
+    pub fn set_pinned(&mut self, id: i64, pinned: bool) -> Result<(), StoreError> {
+        ensure_entry(&self.conn, id)?;
+        self.conn.execute(
+            "UPDATE entries SET pinned = ?1 WHERE id = ?2",
+            params![pinned as i32, id],
+        )?;
+        Ok(())
+    }
+
+    /// Replace one entry's tags. Trims names, drops blanks and exact duplicates.
+    ///
+    /// Comparison is case-sensitive. Order is the first kept name. A missing id
+    /// is an error and writes no tag rows.
+    pub fn set_tags(&mut self, id: i64, names: &[&str]) -> Result<(), StoreError> {
+        let kept = kept_tag_names(names);
+        let tx = self.conn.transaction()?;
+        ensure_entry(&tx, id)?;
+        tx.execute("DELETE FROM entry_tags WHERE entry_id = ?1", params![id])?;
+        for name in &kept {
+            tx.execute(
+                "INSERT INTO tags (name) VALUES (?1) ON CONFLICT(name) DO NOTHING",
+                params![name],
+            )?;
+            let tag_id: i64 = tx.query_row(
+                "SELECT id FROM tags WHERE name = ?1",
+                params![name],
+                |row| row.get(0),
+            )?;
+            tx.execute(
+                "INSERT INTO entry_tags (entry_id, tag_id) VALUES (?1, ?2)",
+                params![id, tag_id],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -399,7 +452,58 @@ fn row_to_entry(row: &Row) -> Result<HistoryEntry, rusqlite::Error> {
         audio_path: row.get(14)?,
         pinned: row.get::<_, i32>(15)? != 0,
         kind: row.get(16)?,
+        tags: Vec::new(),
     })
+}
+
+fn ensure_entry(conn: &Connection, id: i64) -> Result<(), StoreError> {
+    match conn.query_row("SELECT 1 FROM entries WHERE id = ?1", params![id], |_| {
+        Ok(())
+    }) {
+        Ok(()) => Ok(()),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Err(StoreError::Missing(id)),
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// Trim, drop blanks, drop a later exact duplicate. `A` and `a` both stay.
+fn kept_tag_names(names: &[&str]) -> Vec<String> {
+    let mut kept = Vec::new();
+    for name in names {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if kept.iter().any(|existing: &String| existing == trimmed) {
+            continue;
+        }
+        kept.push(trimmed.to_string());
+    }
+    kept
+}
+
+fn tags_for(conn: &Connection, entry_id: i64) -> Result<Vec<String>, StoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT t.name
+         FROM entry_tags et
+         JOIN tags t ON t.id = et.tag_id
+         WHERE et.entry_id = ?1
+         ORDER BY et.rowid",
+    )?;
+    let names = stmt
+        .query_map(params![entry_id], |row| row.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(names)
+}
+
+fn with_tags(
+    conn: &Connection,
+    mut entries: Vec<HistoryEntry>,
+) -> Result<Vec<HistoryEntry>, StoreError> {
+    for entry in &mut entries {
+        entry.tags = tags_for(conn, entry.id)?;
+    }
+    Ok(entries)
 }
 
 fn migrate(conn: &Connection) -> Result<(), StoreError> {
@@ -448,6 +552,19 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
             INSERT INTO entries_fts(rowid, raw_text, final_text)
             VALUES (new.id, new.raw_text, new.final_text);
         END;
+
+        CREATE TABLE IF NOT EXISTS tags (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS entry_tags (
+            entry_id INTEGER NOT NULL,
+            tag_id INTEGER NOT NULL,
+            PRIMARY KEY (entry_id, tag_id),
+            FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE,
+            FOREIGN KEY (tag_id) REFERENCES tags(id)
+        );
         ",
     )?;
     ensure_kind_column(conn)?;
@@ -962,5 +1079,97 @@ mod tests {
         let row = store.get(1).expect("get").expect("row");
         assert_eq!(row.kind, "dictation");
         assert_eq!(row.final_text, "final");
+    }
+
+    #[test]
+    fn set_pinned_then_get_returns_true_and_a_missing_id_is_an_error() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        let id = store.insert(&sample_new("hello", "Hello")).expect("insert");
+        let before = store.get(id).expect("get").expect("row");
+        assert!(!before.pinned);
+        assert_eq!(before.tags, [] as [&str; 0]);
+
+        store.set_pinned(id, true).expect("pin");
+        assert!(store.get(id).expect("get").expect("row").pinned);
+
+        let err = store.set_pinned(41, true).expect_err("missing");
+        assert!(matches!(err, StoreError::Missing(41)));
+        assert!(store.get(41).expect("get").is_none());
+    }
+
+    #[test]
+    fn set_tags_trims_drops_empty_and_keeps_case_sensitive_order() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        let id = store
+            .insert(&sample_new("hello world", "Hello, world."))
+            .expect("insert");
+
+        store.set_tags(id, &[" a ", "", "a", "A"]).expect("tags");
+
+        assert_eq!(store.get(id).expect("get").expect("row").tags, ["a", "A"]);
+        assert_eq!(store.list(0, 10).expect("list")[0].tags, ["a", "A"]);
+        assert_eq!(
+            store.search("hello", 0, 10).expect("search")[0].tags,
+            ["a", "A"]
+        );
+        assert_eq!(
+            store
+                .find("", &HistoryFilter::default(), 0, 10)
+                .expect("find")[0]
+                .tags,
+            ["a", "A"]
+        );
+    }
+
+    #[test]
+    fn set_tags_replaces_the_previous_names() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        let id = store.insert(&sample_new("hello", "Hello")).expect("insert");
+        store.set_tags(id, &["old"]).expect("first");
+        store.set_tags(id, &["new"]).expect("second");
+        let tags = store.get(id).expect("get").expect("row").tags;
+        assert_eq!(tags, ["new"]);
+    }
+
+    #[test]
+    fn set_tags_on_a_missing_row_writes_no_tag_rows() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        let err = store.set_tags(4, &["kept"]).expect_err("missing");
+        assert!(matches!(err, StoreError::Missing(4)));
+        let tags: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM tags", [], |row| row.get(0))
+            .expect("count tags");
+        let links: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM entry_tags", [], |row| row.get(0))
+            .expect("count links");
+        assert_eq!(tags, 0);
+        assert_eq!(links, 0);
+    }
+
+    #[test]
+    fn deleting_an_entry_drops_its_tags_and_keeps_a_shared_name() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        let first = store.insert(&sample_new("one", "One")).expect("first");
+        thread::sleep(Duration::from_millis(2));
+        let second = store.insert(&sample_new("two", "Two")).expect("second");
+        store
+            .set_tags(first, &["shared", "only-a"])
+            .expect("tags a");
+        store.set_tags(second, &["shared"]).expect("tags b");
+
+        store.delete(&[first]).expect("delete");
+
+        assert!(store.get(first).expect("get").is_none());
+        assert_eq!(
+            store.get(second).expect("get").expect("row").tags,
+            ["shared"]
+        );
     }
 }

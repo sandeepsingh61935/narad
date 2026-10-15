@@ -1,4 +1,4 @@
-//! SQLite + FTS5 history store (FR-HIS-1, FR-HIS-3, FR-HIS-6, FR-HIS-7).
+//! SQLite + FTS5 history store (FR-HIS-1, FR-HIS-3, FR-HIS-6, FR-HIS-7, FR-HIS-8).
 //!
 //! Entry primary keys are `i64` values from SQLite `INTEGER PRIMARY KEY AUTOINCREMENT`
 //! (the stable `rowid` for FTS5 external-content sync).
@@ -32,6 +32,15 @@ pub enum StoreError {
     Missing(i64),
     #[error("unknown export format: {0}")]
     UnknownFormat(String),
+}
+
+/// Dictation totals for one inclusive-exclusive millisecond range (FR-HIS-8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HistoryStats {
+    pub words: u64,
+    pub utterances: u64,
+    pub speaking_wpm: u64,
+    pub time_saved_ms: i64,
 }
 
 /// How many rows a retention pass changed (FR-HIS-7).
@@ -185,6 +194,48 @@ impl HistoryStore {
             rows.collect::<Result<Vec<_>, _>>()?
         };
         with_tags(&self.conn, entries)
+    }
+
+    /// Dictation rows with `created_at` in `[from_ms, to_ms)`.
+    ///
+    /// Words are whitespace tokens of `final_text`. `file` and `retranscribe` are excluded.
+    /// Speaking WPM is `words * 60000 / duration_ms`, or 0 when the duration sum is 0.
+    /// Time saved is `words * 1500 - duration_ms` when that is positive, otherwise 0.
+    pub fn stats(&self, from_ms: i64, to_ms: i64) -> Result<HistoryStats, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT final_text, duration_ms FROM entries
+             WHERE kind = 'dictation'
+               AND created_at >= ?1
+               AND created_at < ?2",
+        )?;
+        let rows = stmt.query_map(params![from_ms, to_ms], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut words = 0u64;
+        let mut utterances = 0u64;
+        let mut duration_ms = 0u64;
+        for row in rows {
+            let (text, duration) = row?;
+            words += u64::try_from(text.split_whitespace().count()).unwrap_or(u64::MAX);
+            utterances += 1;
+            if duration > 0 {
+                duration_ms += duration as u64;
+            }
+        }
+        let speaking_wpm = if duration_ms == 0 {
+            0
+        } else {
+            words.saturating_mul(60_000) / duration_ms
+        };
+        let typing_ms = words.saturating_mul(1_500);
+        let time_saved_ms =
+            i64::try_from(typing_ms.saturating_sub(duration_ms)).unwrap_or(i64::MAX);
+        Ok(HistoryStats {
+            words,
+            utterances,
+            speaking_wpm,
+            time_saved_ms,
+        })
     }
 
     /// List or full-text search, narrowed by `filter` (FR-HIS-3).
@@ -1428,5 +1479,87 @@ mod tests {
         assert!(err.to_string().contains("no history row 99"));
         let doc = store.export(&[id], "txt").expect("export");
         assert!(doc.contains("kept final"));
+    }
+
+    fn insert_at(
+        store: &mut HistoryStore,
+        final_text: &str,
+        duration_ms: u32,
+        kind: &str,
+        status: InsertStatus,
+        created_at: i64,
+    ) {
+        let mut entry = sample_new("raw raw raw raw raw", final_text);
+        entry.duration_ms = duration_ms;
+        entry.kind = kind.into();
+        entry.insert_status = status;
+        let id = store.insert(&entry).expect("insert");
+        set_created_at(store, id, created_at);
+    }
+
+    #[test]
+    fn stats_counts_dictation_words_inside_the_millisecond_range() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut store = HistoryStore::open(file.path()).expect("open");
+        insert_at(
+            &mut store,
+            "one two",
+            30_000,
+            "dictation",
+            InsertStatus::Success,
+            0,
+        );
+        insert_at(
+            &mut store,
+            "three",
+            30_000,
+            "dictation",
+            InsertStatus::Skipped,
+            1,
+        );
+        insert_at(
+            &mut store,
+            "nope extra",
+            30_000,
+            "retranscribe",
+            InsertStatus::Success,
+            2,
+        );
+        insert_at(
+            &mut store,
+            "nope file",
+            30_000,
+            "file",
+            InsertStatus::Success,
+            3,
+        );
+        insert_at(
+            &mut store,
+            "outside words",
+            30_000,
+            "dictation",
+            InsertStatus::Success,
+            100_000,
+        );
+
+        let stats = store.stats(0, 100_000).expect("stats");
+        assert_eq!(stats.words, 3);
+        assert_eq!(stats.utterances, 2);
+        assert_eq!(stats.speaking_wpm, 3);
+        assert_eq!(stats.time_saved_ms, 0);
+
+        insert_at(
+            &mut store,
+            "a b c d",
+            0,
+            "dictation",
+            InsertStatus::Success,
+            200_000,
+        );
+        let again = store.stats(200_000, 300_000).expect("zero duration");
+        assert_eq!(again.words, 4);
+        assert_eq!(again.utterances, 1);
+        assert_eq!(again.speaking_wpm, 0);
+        assert_eq!(again.time_saved_ms, 6_000);
     }
 }

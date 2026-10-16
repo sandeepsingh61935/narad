@@ -354,7 +354,7 @@
                     <button
                       type="button"
                       class="min-h-[36px] px-3.5 py-1.5 rounded-lg text-error hover:bg-error/10 border border-error/30 font-body-muted text-body-muted transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
-                      disabled={deletingModelId === pack.id || installingModelId !== null}
+                      disabled={!loaded || saving || installingModelId !== null || deletingModelId !== null}
                       onclick={() => handleRemove(pack)}
                     >
                       {deletingModelId === pack.id ? "Deleting…" : "Delete"}
@@ -364,7 +364,7 @@
                   <button
                     type="button"
                     class="min-h-[36px] px-3.5 py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-container border border-outline-variant/30 text-on-surface font-body-muted text-body-muted transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={installingModelId === pack.id || deletingModelId !== null}
+                    disabled={!loaded || saving || installingModelId !== null || deletingModelId !== null}
                     onclick={() => handleInstall(pack)}
                   >
                     {installingModelId === pack.id ? "Downloading…" : "Download"}

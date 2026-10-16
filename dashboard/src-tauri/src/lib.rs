@@ -237,8 +237,26 @@ async fn get_installed_models() -> Result<Vec<String>, String> {
     Ok(installed)
 }
 
+const ALLOWED_MODEL_IDS: &[&str] = &[
+    "parakeet-ctc-110m-int8",
+    "parakeet-tdt-0.6b-int8",
+    "moonshine-base-en-int8",
+    "whisper-small-en",
+];
+
+fn validate_model_id(id: &str) -> Result<(), String> {
+    if id.contains('/') || id.contains('\\') || id.contains("..") {
+        return Err(format!("Invalid model ID '{id}': path traversal not permitted"));
+    }
+    if !ALLOWED_MODEL_IDS.contains(&id) {
+        return Err(format!("Unknown model pack '{id}'"));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn install_model(id: String) -> Result<(), String> {
+    validate_model_id(&id)?;
     let dir = get_models_asr_dir().ok_or_else(|| "Could not resolve data directory".to_string())?;
     let pack_dir = dir.join(&id);
     std::fs::create_dir_all(&pack_dir).map_err(|e| format!("create_dir: {e}"))?;
@@ -256,8 +274,14 @@ async fn install_model(id: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn remove_model(id: String) -> Result<(), String> {
+    validate_model_id(&id)?;
     if id == "parakeet-ctc-110m-int8" {
         return Err("Cannot remove default model parakeet-ctc-110m-int8".into());
+    }
+    if let Ok(config) = config::load_config() {
+        if config.models.asr_english == id {
+            return Err(format!("Cannot remove active model {id}. Switch active model first."));
+        }
     }
     let dir = get_models_asr_dir().ok_or_else(|| "Could not resolve data directory".to_string())?;
     let pack_dir = dir.join(&id);

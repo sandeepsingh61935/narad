@@ -225,9 +225,7 @@ async fn main() -> Result<()> {
                 println!("Recommended for this machine: parakeet-ctc-110m-int8 (fits NFR-P-2 budget < 500 ms)");
             }
             ModelsAction::Install { id } => {
-                if !CATALOG_MODELS.iter().any(|m| m.id == id) {
-                    bail!("Unknown model pack '{id}'. Use 'narad models list' to view available packs.");
-                }
+                validate_model_id(&id)?;
                 if is_model_installed(&id) {
                     println!("Model {id} is already installed");
                     return Ok(());
@@ -275,6 +273,7 @@ async fn main() -> Result<()> {
                 println!("Installed {id} (verified SHA-256)");
             }
             ModelsAction::Remove { id } => {
+                validate_model_id(&id)?;
                 if id == DEFAULT_ASR_ID {
                     bail!("Cannot remove default model {DEFAULT_ASR_ID}");
                 }
@@ -456,6 +455,16 @@ const CATALOG_MODELS: &[CliModelInfo] = &[
     },
 ];
 
+fn validate_model_id(id: &str) -> Result<()> {
+    if id.contains('/') || id.contains('\\') || id.contains("..") {
+        bail!("Invalid model ID '{id}': path traversal not permitted");
+    }
+    if !CATALOG_MODELS.iter().any(|m| m.id == id) {
+        bail!("Unknown model pack '{id}'. Use 'narad models list' to view available packs.");
+    }
+    Ok(())
+}
+
 fn get_models_asr_dir() -> Result<std::path::PathBuf> {
     let base = std::env::var("XDG_DATA_HOME")
         .ok()
@@ -628,5 +637,15 @@ mod tests {
             } => assert_eq!(id, "parakeet-tdt-0.6b-int8"),
             other => panic!("expected models remove, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn validate_model_id_rejects_path_traversal_and_unknown() {
+        assert!(validate_model_id("../etc/passwd").is_err());
+        assert!(validate_model_id("foo/bar").is_err());
+        assert!(validate_model_id("foo\\bar").is_err());
+        assert!(validate_model_id("unknown-pack").is_err());
+        assert!(validate_model_id("parakeet-ctc-110m-int8").is_ok());
+        assert!(validate_model_id("parakeet-tdt-0.6b-int8").is_ok());
     }
 }

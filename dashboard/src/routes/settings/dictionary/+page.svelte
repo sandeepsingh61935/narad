@@ -112,7 +112,7 @@
       <div class="flex items-center justify-between px-2">
         <h2 class="font-headline-md text-headline-md text-on-surface">Vocabulary</h2>
         <button
-          class="px-3 py-1 rounded-lg bg-surface-container-high text-on-surface font-body-muted text-body-muted"
+          class="px-3 py-1.5 min-h-[36px] rounded-lg bg-surface-container-high hover:bg-surface-bright text-on-surface font-body-muted text-body-muted border border-outline-variant/30 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
           type="button"
           disabled={!loaded}
           onclick={() => addPhrase("vocabulary")}
@@ -124,7 +124,7 @@
         {#each config.vocabulary as _, index (index)}
           <div class="p-4 flex items-center gap-3">
             <input
-              class="flex-1 bg-surface-container-high text-on-surface px-3 py-1.5 rounded-lg"
+              class="flex-1 min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg border border-outline-variant/30 placeholder:text-on-surface-variant/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50"
               type="text"
               aria-label={`Vocabulary spoken ${index + 1}`}
               placeholder="Spoken"
@@ -133,7 +133,7 @@
               onblur={commit}
             />
             <input
-              class="flex-1 bg-surface-container-high text-on-surface px-3 py-1.5 rounded-lg"
+              class="flex-1 min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg border border-outline-variant/30 placeholder:text-on-surface-variant/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50"
               type="text"
               aria-label={`Vocabulary written ${index + 1}`}
               placeholder="Written"
@@ -142,7 +142,7 @@
               onblur={commit}
             />
             <button
-              class="px-3 py-1 rounded-lg bg-surface-container-high text-on-surface"
+              class="px-3 py-1.5 min-h-[36px] rounded-lg bg-surface-container-high hover:bg-surface-bright text-on-surface font-body-muted text-body-muted border border-outline-variant/30 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
               type="button"
               aria-label={`Remove vocabulary ${index + 1}`}
               onclick={() => removePhrase("vocabulary", index)}
@@ -160,7 +160,7 @@
       <div class="flex items-center justify-between px-2">
         <h2 class="font-headline-md text-headline-md text-on-surface">Replacements</h2>
         <button
-          class="px-3 py-1 rounded-lg bg-surface-container-high text-on-surface font-body-muted text-body-muted"
+          class="px-3 py-1.5 min-h-[36px] rounded-lg bg-surface-container-high hover:bg-surface-bright text-on-surface font-body-muted text-body-muted border border-outline-variant/30 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
           type="button"
           disabled={!loaded}
           onclick={() => addPhrase("replacements")}
@@ -172,7 +172,7 @@
         {#each config.replacements as _, index (index)}
           <div class="p-4 flex items-center gap-3">
             <input
-              class="flex-1 bg-surface-container-high text-on-surface px-3 py-1.5 rounded-lg"
+              class="flex-1 min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg border border-outline-variant/30 placeholder:text-on-surface-variant/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50"
               type="text"
               aria-label={`Replacement spoken ${index + 1}`}
               placeholder="Spoken"
@@ -181,7 +181,7 @@
               onblur={commit}
             />
             <input
-              class="flex-1 bg-surface-container-high text-on-surface px-3 py-1.5 rounded-lg"
+              class="flex-1 min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg border border-outline-variant/30 placeholder:text-on-surface-variant/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50"
               type="text"
               aria-label={`Replacement written ${index + 1}`}
               placeholder="Written"
@@ -190,7 +190,7 @@
               onblur={commit}
             />
             <button
-              class="px-3 py-1 rounded-lg bg-surface-container-high text-on-surface"
+              class="px-3 py-1.5 min-h-[36px] rounded-lg bg-surface-container-high hover:bg-surface-bright text-on-surface font-body-muted text-body-muted border border-outline-variant/30 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
               type="button"
               aria-label={`Remove replacement ${index + 1}`}
               onclick={() => removePhrase("replacements", index)}

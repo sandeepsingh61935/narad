@@ -222,7 +222,7 @@
           <div class="shrink-0">
             <button
               type="button"
-              class="min-h-[36px] px-3.5 py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-bright text-on-surface font-body-muted text-body-muted border border-outline-variant/30 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
+              class="min-h-[36px] px-4 py-2 rounded-lg text-sm font-medium bg-primary text-on-primary hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2 cursor-pointer"
               disabled={benchmarking}
               onclick={handleRunBenchmark}
             >
@@ -275,7 +275,7 @@
                       {formatBenchmarkLatency(bench.warmDecodeMs, bench.clipDurationSecs)}
                     </span>
                   {/if}
-                  {#if isModelRecommended(pack.id, benchmarks)}
+                  {#if benchmarks.length > 0 && isModelRecommended(pack.id, benchmarks)}
                     <span
                       class="px-2 py-0.5 rounded text-xs font-medium bg-primary/10 text-primary border border-primary/20"
                     >

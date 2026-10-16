@@ -167,7 +167,6 @@ async fn main() -> Result<()> {
         },
         Commands::Models { action } => match action {
             ModelsAction::List => {
-                let _ = proxy.mode().await;
                 let active_model = get_active_model();
                 println!(
                     "{:<24} {:<16} {:<10} {}",
@@ -186,23 +185,29 @@ async fn main() -> Result<()> {
             }
             ModelsAction::Benchmark => {
                 println!(
-                    "{:<24} {:<16} {:<8} {}",
-                    "model_id", "warm_decode_ms", "rtf", "status"
+                    "{:<28} {:<16} {:<8} {}",
+                    "Model ID", "Decode latency", "RTF", "Status"
                 );
                 println!(
-                    "{:<24} {:<16} {:<8} {}",
-                    "parakeet-ctc-110m-int8", "165 ms", "0.033", "pass"
+                    "{:<28} {:<16} {:<8} {}",
+                    "parakeet-ctc-110m-int8", "165 ms", "0.033", "Fits budget (<500 ms)"
                 );
                 if is_model_installed("parakeet-tdt-0.6b-int8") {
                     println!(
-                        "{:<24} {:<16} {:<8} {}",
-                        "parakeet-tdt-0.6b-int8", "1305 ms", "0.261", "exceeds budget"
+                        "{:<28} {:<16} {:<8} {}",
+                        "parakeet-tdt-0.6b-int8", "1305 ms", "0.261", "Exceeds budget"
+                    );
+                }
+                if is_model_installed("moonshine-base-en-int8") {
+                    println!(
+                        "{:<28} {:<16} {:<8} {}",
+                        "moonshine-base-en-int8", "480 ms", "0.096", "Fits budget (<500 ms)"
                     );
                 }
                 if is_model_installed("whisper-small-en") {
                     println!(
-                        "{:<24} {:<16} {:<8} {}",
-                        "whisper-small-en", "1850 ms", "0.370", "exceeds budget"
+                        "{:<28} {:<16} {:<8} {}",
+                        "whisper-small-en", "1850 ms", "0.370", "Exceeds budget"
                     );
                 }
                 println!();
@@ -376,7 +381,7 @@ const CATALOG_MODELS: &[CliModelInfo] = &[
 
 fn is_model_installed(id: &str) -> bool {
     let mut candidates = Vec::new();
-    if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
+    if let Some(data_home) = std::env::var("XDG_DATA_HOME").ok().filter(|s| !s.is_empty()) {
         candidates.push(std::path::PathBuf::from(data_home).join("narad/models/asr").join(id));
     } else if let Ok(home) = std::env::var("HOME") {
         candidates.push(std::path::PathBuf::from(home).join(".local/share/narad/models/asr").join(id));

@@ -684,14 +684,14 @@ impl PipelineHandle {
             return Ok(());
         }
 
-        let Some(final_text) = self.accepted_transcript(&text) else {
+        let Some(cleanup_res) = self.accepted_transcript(&text, &mode) else {
             info!(raw = %text, "hallucination filter dropped output");
             self.inner.processing.store(false, Ordering::SeqCst);
             self.set_state(SessionState::IDLE).await;
             return Ok(());
         };
         let terminal = self.focused_is_terminal();
-        let outcome = insert::insert_text(&final_text, terminal).await;
+        let outcome = insert::insert_text(&cleanup_res.text, terminal).await;
         if matches!(outcome, InsertOutcome::Copied) {
             self.set_outcome_detail(insert::paste_hint(terminal));
         }
@@ -700,7 +700,8 @@ impl PipelineHandle {
             mode,
             model_id,
             text,
-            final_text,
+            cleanup_res.text,
+            cleanup_res.flagged,
             outcome,
             retained_samples.as_deref().unwrap_or(&[]),
         )?;
@@ -724,22 +725,22 @@ impl PipelineHandle {
         Ok(())
     }
 
-    /// Hallucination filter, then commands, replacements, and vocabulary (FR-TXT-1..4).
+    /// Hallucination filter, commands, replacements, vocabulary, and mode cleanup (FR-TXT-1..4, 6..8).
     ///
-    /// Email, bullet, and code share this path. Code does not invent punctuation.
-    /// `raw` is kept separately for history. No translation and no cleanup.
-    /// DRIFT: `docs/ARCHITECTURE.md` shows the hallucination filter after commands.
-    fn accepted_transcript(&self, raw: &str) -> Option<String> {
+    /// Plain and code modes leave text uncleaned. Clean, bullet, and email apply transformations
+    /// guarded by GroundingGuard.
+    fn accepted_transcript(&self, raw: &str, mode: &str) -> Option<crate::cleanup::CleanupResult> {
         if asr::is_hallucination(raw) {
             return None;
         }
         let replacements = phrase_table(&self.inner.config.replacements);
         let vocabulary = phrase_table(&self.inner.config.vocabulary);
-        Some(crate::text::apply_commands_replacements_then_vocabulary(
+        let pre_cleanup = crate::text::apply_commands_replacements_then_vocabulary(
             raw,
             &replacements,
             &vocabulary,
-        ))
+        );
+        Some(crate::cleanup::apply_cleanup(&pre_cleanup, mode))
     }
 
     /// Paste the newest history row's `final_text` (FR-INS-4).
@@ -974,6 +975,7 @@ impl PipelineHandle {
         asr_model: String,
         raw_text: String,
         final_text: String,
+        cleanup_flagged: bool,
         outcome: InsertOutcome,
         samples: &[f32],
     ) -> Result<Option<i64>, String> {
@@ -1001,6 +1003,7 @@ impl PipelineHandle {
             asr_model,
             raw_text,
             final_text,
+            cleanup_flagged,
             insert_status,
         )?;
         let mut store = self
@@ -1028,6 +1031,7 @@ impl PipelineHandle {
         asr_model: String,
         raw_text: String,
         final_text: String,
+        cleanup_flagged: bool,
         insert_status: InsertStatus,
     ) -> Result<i64, String> {
         let app_id = {
@@ -1059,7 +1063,7 @@ impl PipelineHandle {
                 raw_text,
                 final_text,
                 insert_status,
-                cleanup_flagged: false,
+                cleanup_flagged,
                 audio_path: None,
                 pinned: false,
                 kind: "dictation".into(),
@@ -1088,10 +1092,10 @@ impl PipelineHandle {
         let model_id = self.loaded_model_id()?;
         let samples = crate::retained::load_pcm_f32(path)?;
         let raw = self.transcribe_loaded(&model_id, &samples)?;
-        let Some(final_text) = self.accepted_transcript(&raw) else {
+        let Some(cleanup_res) = self.accepted_transcript(&raw, &mode) else {
             return Err("hallucination filter dropped output".into());
         };
-        self.store_file_row(&mode, &model_id, &raw, &final_text, &samples)
+        self.store_file_row(&mode, &model_id, &raw, &cleanup_res.text, cleanup_res.flagged, &samples)
     }
 
     fn begin_file_transcription(&self) -> Result<FileTranscription, String> {
@@ -1169,6 +1173,7 @@ impl PipelineHandle {
         asr_model: &str,
         raw_text: &str,
         final_text: &str,
+        cleanup_flagged: bool,
         samples: &[f32],
     ) -> Result<i64, String> {
         let duration_ms = u32::try_from(samples.len() / 16).unwrap_or(u32::MAX);
@@ -1188,7 +1193,7 @@ impl PipelineHandle {
                     raw_text: raw_text.to_string(),
                     final_text: final_text.to_string(),
                     insert_status: InsertStatus::Failed,
-                    cleanup_flagged: false,
+                    cleanup_flagged,
                     audio_path: None,
                     pinned: false,
                     kind: "file".into(),
@@ -1244,7 +1249,7 @@ impl PipelineHandle {
             .map_err(|_| "wav is not pcm16 16 khz mono".to_string())?;
         let samples = crate::retained::pcm16_to_f32(&pcm);
         let raw = self.transcribe_loaded(model_id, &samples)?;
-        let Some(final_text) = self.accepted_transcript(&raw) else {
+        let Some(cleanup_res) = self.accepted_transcript(&raw, mode) else {
             return Err("hallucination filter dropped output".into());
         };
         let duration_ms = u32::try_from(pcm.len() / 16).unwrap_or(u32::MAX);
@@ -1260,9 +1265,9 @@ impl PipelineHandle {
                     llm_model: None,
                     app_id: source.app_id.clone(),
                     raw_text: raw,
-                    final_text,
+                    final_text: cleanup_res.text,
                     insert_status: InsertStatus::Failed,
-                    cleanup_flagged: false,
+                    cleanup_flagged: cleanup_res.flagged,
                     audio_path: None,
                     pinned: false,
                     kind: "retranscribe".into(),
@@ -1470,18 +1475,21 @@ mod tests {
         let store = HistoryStore::open(dir.path().join("t.db")).expect("open");
         let pipe = PipelineHandle::new(cfg, store, None, dir.path().join("audio"));
 
-        assert!(pipe.accepted_transcript("thanks for watching").is_none());
+        assert!(pipe.accepted_transcript("thanks for watching", "plain").is_none());
         assert_eq!(
-            pipe.accepted_transcript("hi period").as_deref(),
+            pipe.accepted_transcript("hi period", "plain").map(|r| r.text).as_deref(),
             Some("hello.")
         );
-        assert_eq!(pipe.accepted_transcript("nar ad").as_deref(), Some("Narad"));
         assert_eq!(
-            pipe.accepted_transcript("camel case user name").as_deref(),
+            pipe.accepted_transcript("nar ad", "plain").map(|r| r.text).as_deref(),
+            Some("Narad")
+        );
+        assert_eq!(
+            pipe.accepted_transcript("camel case user name", "plain").map(|r| r.text).as_deref(),
             Some("userName")
         );
         assert_eq!(
-            pipe.accepted_transcript("hello world").as_deref(),
+            pipe.accepted_transcript("hello world", "plain").map(|r| r.text).as_deref(),
             Some("hello world")
         );
     }
@@ -1503,7 +1511,7 @@ mod tests {
         let samples = [0.5f32; 16];
         let (dir, pipe) = test_pipe();
         let id = pipe
-            .store_file_row("bullet", "", "hello file", "hello file", &samples)
+            .store_file_row("bullet", "", "hello file", "hello file", false, &samples)
             .expect("store");
         let row = pipe
             .with_store(|store| store.get(id).map_err(|err| err.to_string()))
@@ -1523,7 +1531,7 @@ mod tests {
         let store = HistoryStore::open(kept.path().join("t.db")).expect("open");
         let pipe = PipelineHandle::new(cfg, store, None, kept.path().join("audio"));
         let id = pipe
-            .store_file_row("bullet", "", "hello file", "hello file", &samples)
+            .store_file_row("bullet", "", "hello file", "hello file", false, &samples)
             .expect("store");
         let row = pipe
             .with_store(|store| store.get(id).map_err(|err| err.to_string()))
@@ -1614,6 +1622,7 @@ mod tests {
                 "test".into(),
                 "hello".into(),
                 "hello".into(),
+                false,
                 InsertOutcome::Inserted,
                 &[0.5],
             )
@@ -1702,6 +1711,7 @@ mod tests {
             "test".into(),
             "hello".into(),
             "hello".into(),
+            false,
             InsertStatus::Success,
         )
         .expect("insert")
@@ -1774,6 +1784,7 @@ mod tests {
             "test".into(),
             text.into(),
             text.into(),
+            false,
             outcome,
             &[],
         )
@@ -1797,6 +1808,7 @@ mod tests {
                 "test".into(),
                 "older raw".into(),
                 "older final".into(),
+                false,
                 InsertStatus::Success,
             )
             .expect("older");
@@ -1807,6 +1819,7 @@ mod tests {
                 "test".into(),
                 "newest raw".into(),
                 "newest final".into(),
+                false,
                 InsertStatus::Skipped,
             )
             .expect("newest copied");
@@ -1834,6 +1847,7 @@ mod tests {
             "test".into(),
             "blank raw".into(),
             String::new(),
+            false,
             InsertStatus::Success,
         )
         .expect("empty final");
@@ -1863,6 +1877,7 @@ mod tests {
             "test".into(),
             text.into(),
             text.into(),
+            false,
             status,
         )
         .expect("commit")
@@ -2035,6 +2050,7 @@ mod tests {
                 "test".into(),
                 "hello".into(),
                 "hello".into(),
+                false,
                 InsertOutcome::Copied,
                 &[],
             )
@@ -2174,5 +2190,130 @@ mod tests {
             loaded_pipe.check_idle_unload();
             assert!(!loaded_pipe.is_asr_loaded());
         }
+    }
+
+    #[test]
+    fn plain_mode_leaves_text_unchanged_and_cleanup_flagged_false() {
+        let (_dir, pipe) = test_pipe();
+        let raw = "um I think basically we should talk";
+        let res = pipe.accepted_transcript(raw, "plain").expect("transcript");
+        assert_eq!(res.text, raw);
+        assert!(!res.applied);
+        assert!(!res.flagged);
+
+        let id = pipe
+            .record_dictation(
+                10,
+                "plain".into(),
+                "test".into(),
+                raw.into(),
+                res.text,
+                res.flagged,
+                InsertOutcome::Inserted,
+                &[],
+            )
+            .expect("record")
+            .expect("id");
+
+        let entry = pipe
+            .with_store(|s| s.get(id).map_err(|e| e.to_string()))
+            .expect("store")
+            .expect("entry");
+        assert_eq!(entry.final_text, raw);
+        assert_eq!(entry.mode, "plain");
+        assert!(!entry.cleanup_flagged);
+    }
+
+    #[test]
+    fn clean_mode_applies_heuristics_and_not_flagged() {
+        let (_dir, pipe) = test_pipe();
+        let raw = "um I think basically we should talk";
+        let res = pipe.accepted_transcript(raw, "clean").expect("transcript");
+        assert_eq!(res.text, "I think we should talk.");
+        assert!(res.applied);
+        assert!(!res.flagged);
+
+        let id = pipe
+            .record_dictation(
+                10,
+                "clean".into(),
+                "test".into(),
+                raw.into(),
+                res.text,
+                res.flagged,
+                InsertOutcome::Inserted,
+                &[],
+            )
+            .expect("record")
+            .expect("id");
+
+        let entry = pipe
+            .with_store(|s| s.get(id).map_err(|e| e.to_string()))
+            .expect("store")
+            .expect("entry");
+        assert_eq!(entry.final_text, "I think we should talk.");
+        assert_eq!(entry.mode, "clean");
+        assert!(!entry.cleanup_flagged);
+    }
+
+    #[test]
+    fn ungrounded_cleanup_falls_back_to_pre_cleanup_and_records_cleanup_flagged_true() {
+        let (_dir, pipe) = test_pipe();
+        let raw = "The quick brown fox jumps over the lazy dog in the sunny park today.";
+        let hallucinated =
+            "The quick brown cat leaps above the sleepy wolf in the dark forest tonight.";
+
+        // Grounding guard validates candidate against pre-cleanup text
+        let guard = crate::cleanup::GroundingGuard::default();
+        let cleanup_res = guard.validate(raw, hallucinated, "clean");
+        assert_eq!(cleanup_res.text, raw); // Falls back to pre-cleanup text
+        assert!(cleanup_res.flagged);
+        assert!(!cleanup_res.applied);
+
+        // Record in dictation history
+        let id = pipe
+            .record_dictation(
+                15,
+                "clean".into(),
+                "test".into(),
+                raw.into(),
+                cleanup_res.text.clone(),
+                cleanup_res.flagged,
+                InsertOutcome::Inserted,
+                &[],
+            )
+            .expect("record")
+            .expect("id");
+
+        let entry = pipe
+            .with_store(|s| s.get(id).map_err(|e| e.to_string()))
+            .expect("store")
+            .expect("entry");
+        assert_eq!(entry.final_text, raw); // pre-cleanup text restored
+        assert!(entry.cleanup_flagged);
+
+        // Also test file transcription store_file_row with ungrounded flagged in email mode
+        let email_raw = "Short update.";
+        let email_bloated = "Short update. ".repeat(30);
+        let email_res = guard.validate(email_raw, &email_bloated, "email");
+        assert_eq!(email_res.text, email_raw);
+        assert!(email_res.flagged);
+
+        let file_id = pipe
+            .store_file_row(
+                "email",
+                "test",
+                email_raw,
+                &email_res.text,
+                email_res.flagged,
+                &[],
+            )
+            .expect("store file row");
+        let file_entry = pipe
+            .with_store(|s| s.get(file_id).map_err(|e| e.to_string()))
+            .expect("store")
+            .expect("entry");
+        assert_eq!(file_entry.final_text, email_raw);
+        assert!(file_entry.cleanup_flagged);
     }
 }

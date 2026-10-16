@@ -217,47 +217,73 @@ pub fn apply_guard(raw: &str, cleaned: &str, mode: &str) -> CleanupResult {
     GroundingGuard::default().validate(raw, cleaned, mode)
 }
 
-/// Strip filler phrases and filler words from raw text.
+/// Collapse adjacent orphaned commas, spaces before commas, and orphaned punctuation.
+fn collapse_orphaned_punctuation(text: &str) -> String {
+    let mut s = text.to_string();
+    // Collapse spaces before commas: " ," -> ","
+    while s.contains(" ,") {
+        s = s.replace(" ,", ",");
+    }
+    // Collapse adjacent commas (with or without spaces in between)
+    while s.contains(",,") || s.contains(", ,") || s.contains(",  ,") {
+        s = s.replace(", ,", ",");
+        s = s.replace(",  ,", ",");
+        s = s.replace(",,", ",");
+    }
+    // Collapse comma followed directly or with space by sentence punctuation
+    s = s.replace(",.", ".");
+    s = s.replace(", .", ".");
+    s = s.replace(",!", "!");
+    s = s.replace(", !", "!");
+    s = s.replace(",?", "?");
+    s = s.replace(", ?", "?");
+
+    // Trim leading/trailing orphan commas and whitespace
+    let trimmed = s.trim();
+    let trimmed = trimmed
+        .trim_start_matches(|c: char| c == ',' || c.is_whitespace())
+        .trim_end_matches(|c: char| c == ',' || c.is_whitespace());
+    trimmed.to_string()
+}
+
+/// Strip filler phrases and filler words from raw text using safe token window matching.
 fn strip_fillers(raw: &str) -> String {
-    let multi_fillers = ["you know", "i mean"];
-    let mut text = raw.to_string();
-    for phrase in &multi_fillers {
-        let lower = text.to_lowercase();
-        let mut idx = 0;
-        let mut result = String::new();
-        while let Some(pos) = lower[idx..].find(phrase) {
-            let actual_pos = idx + pos;
-            let before_ok = actual_pos == 0
-                || text.as_bytes()[actual_pos - 1].is_ascii_whitespace()
-                || text.as_bytes()[actual_pos - 1] == b','
-                || text.as_bytes()[actual_pos - 1] == b'.';
-            let end_pos = actual_pos + phrase.len();
-            let after_ok = end_pos == text.len()
-                || text.as_bytes()[end_pos].is_ascii_whitespace()
-                || text.as_bytes()[end_pos] == b','
-                || text.as_bytes()[end_pos] == b'.';
-            if before_ok && after_ok {
-                result.push_str(&text[idx..actual_pos]);
-                idx = end_pos;
-            } else {
-                result.push_str(&text[idx..end_pos]);
-                idx = end_pos;
-            }
-        }
-        result.push_str(&text[idx..]);
-        text = result;
+    let tokens: Vec<&str> = raw.split_whitespace().collect();
+    if tokens.is_empty() {
+        return String::new();
     }
 
     let word_fillers = ["um", "uh", "er", "ah", "basically"];
-    let mut tokens: Vec<&str> = text.split_whitespace().collect();
-    tokens.retain(|tok| {
-        let core = tok
+    let mut filtered_tokens: Vec<&str> = Vec::with_capacity(tokens.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        let core0 = tokens[i]
             .trim_matches(|c: char| !c.is_alphanumeric())
             .to_lowercase();
-        !word_fillers.contains(&core.as_str())
-    });
 
-    tokens.join(" ")
+        // Check 2-token window for multi-word fillers: "you know", "i mean"
+        if i + 1 < tokens.len() {
+            let core1 = tokens[i + 1]
+                .trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase();
+            if (core0 == "you" && core1 == "know") || (core0 == "i" && core1 == "mean") {
+                i += 2;
+                continue;
+            }
+        }
+
+        // Check 1-token filler
+        if word_fillers.contains(&core0.as_str()) {
+            i += 1;
+            continue;
+        }
+
+        filtered_tokens.push(tokens[i]);
+        i += 1;
+    }
+
+    let joined = filtered_tokens.join(" ");
+    collapse_orphaned_punctuation(&joined)
 }
 
 /// Remove consecutive duplicate words.
@@ -278,26 +304,34 @@ fn remove_repetitions(text: &str) -> String {
 }
 
 /// Standardizes capitalization and ensures sentence-ending punctuation.
+///
+/// Guard: require `.` to be followed by whitespace or end of string before capitalizing
+/// the next character, preventing `narad.org` -> `narad.Org` or `main.rs` -> `main.Rs`.
 fn standardize_sentence(text: &str) -> String {
     let text = text.trim();
     if text.is_empty() {
         return String::new();
     }
 
-    let mut chars = text.chars();
-    let first = chars.next().unwrap();
+    let mut chars_iter = text.chars();
+    let first = chars_iter.next().unwrap();
     let mut result = String::new();
     result.extend(first.to_uppercase());
-    result.push_str(chars.as_str());
+    result.push_str(chars_iter.as_str());
 
+    let char_vec: Vec<char> = result.chars().collect();
     let mut final_text = String::new();
     let mut cap_next = false;
-    for c in result.chars() {
+    for (i, &c) in char_vec.iter().enumerate() {
         if cap_next && c.is_alphabetic() {
             final_text.extend(c.to_uppercase());
             cap_next = false;
         } else {
-            if c == '.' || c == '!' || c == '?' {
+            if c == '.' {
+                if i + 1 == char_vec.len() || char_vec[i + 1].is_whitespace() {
+                    cap_next = true;
+                }
+            } else if c == '!' || c == '?' {
                 cap_next = true;
             } else if !c.is_whitespace() {
                 cap_next = false;
@@ -386,10 +420,50 @@ pub fn email_text(raw: &str) -> String {
         return String::new();
     }
 
-    let has_greeting = body.starts_with("Hi,") || body.starts_with("Hello,") || body.starts_with("Dear ");
-    let has_signoff = body.ends_with("Best,\nSender")
-        || body.ends_with("Best regards,")
-        || body.ends_with("Sincerely,");
+    let greeting_keywords = ["hi", "hello", "dear"];
+    let first_token = body
+        .split_whitespace()
+        .next()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+        .unwrap_or_default();
+    let has_greeting = greeting_keywords.contains(&first_token.as_str());
+
+    let signoff_keywords = ["best", "regards", "sincerely", "cheers"];
+    let lines: Vec<&str> = body.lines().filter(|l| !l.trim().is_empty()).collect();
+    let has_signoff = if let Some(&last_line) = lines.last() {
+        let last_tokens: Vec<String> = last_line
+            .split_whitespace()
+            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+            .filter(|w| !w.is_empty())
+            .collect();
+        if last_tokens
+            .iter()
+            .rev()
+            .take(3)
+            .any(|w| signoff_keywords.contains(&w.as_str()))
+        {
+            true
+        } else if last_tokens.as_slice() == ["sender"] {
+            if let Some(&prev_line) = lines.iter().rev().nth(1) {
+                let prev_tokens: Vec<String> = prev_line
+                    .split_whitespace()
+                    .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+                    .filter(|w| !w.is_empty())
+                    .collect();
+                prev_tokens
+                    .iter()
+                    .rev()
+                    .take(3)
+                    .any(|w| signoff_keywords.contains(&w.as_str()))
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
 
     match (has_greeting, has_signoff) {
         (true, true) => body,
@@ -564,5 +638,66 @@ mod tests {
         };
         assert!(novel_err.to_string().starts_with("Novel word ratio exceeds threshold"));
     }
+
+    #[test]
+    fn safe_unicode_and_filler_window_matching_removes_fillers_and_collapses_punctuation() {
+        // Multi-word fillers with safe Unicode
+        let raw = "Grüße, you know, die Welt";
+        let res = clean_text(raw);
+        assert_eq!(res, "Grüße, die Welt.");
+
+        // Leading filler
+        let leading = "You know, we should test this";
+        let res_leading = clean_text(leading);
+        assert_eq!(res_leading, "We should test this.");
+
+        // Trailing filler and period handling
+        let trailing = "We should go, you know.";
+        let res_trailing = clean_text(trailing);
+        assert_eq!(res_trailing, "We should go.");
+
+        // Multiple fillers and collapsing adjacent commas
+        let multi = "we should, you know , basically talk";
+        let res_multi = clean_text(multi);
+        assert_eq!(res_multi, "We should, talk.");
+
+        // "i mean" multi-word filler
+        let imean = "I mean, we are ready";
+        let res_imean = clean_text(imean);
+        assert_eq!(res_imean, "We are ready.");
+    }
+
+    #[test]
+    fn standardize_sentence_period_guard_prevents_capitalizing_domains_and_extensions() {
+        let domain = "Visit narad.org for updates.";
+        assert_eq!(clean_text(domain), "Visit narad.org for updates.");
+
+        let file_ext = "Edit main.rs and lib.rs carefully.";
+        assert_eq!(clean_text(file_ext), "Edit main.rs and lib.rs carefully.");
+
+        let sentence = "First sentence. Second sentence.";
+        assert_eq!(clean_text(sentence), "First sentence. Second sentence.");
+    }
+
+    #[test]
+    fn email_greeting_and_signoff_refinements() {
+        // Greeting without comma
+        let greeting_raw = "hello team the meeting is rescheduled";
+        let res_greeting = email_text(greeting_raw);
+        assert!(res_greeting.starts_with("Hello team the meeting is rescheduled"));
+        assert!(!res_greeting.starts_with("Hi,\n\nHello"));
+        assert!(res_greeting.ends_with("\n\nBest,\nSender"));
+
+        // Signoff with cheers
+        let signoff_raw = "The meeting is rescheduled. Cheers.";
+        let res_signoff = email_text(signoff_raw);
+        assert_eq!(res_signoff, "Hi,\n\nThe meeting is rescheduled. Cheers.");
+
+        // Both greeting and regards
+        let both_raw = "Dear Alice, the meeting is at two. Best regards.";
+        let res_both = email_text(both_raw);
+        assert_eq!(res_both, "Dear Alice, the meeting is at two. Best regards.");
+    }
 }
+
 

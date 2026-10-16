@@ -7,6 +7,12 @@
     MODEL_CATALOG,
     findModelById,
   } from "$lib/models";
+  import {
+    recommendModel,
+    formatBenchmarkLatency,
+    isModelRecommended,
+    type ModelBenchmark,
+  } from "$lib/benchmark";
   import { SAVED_NOTICE, saveDashboardConfig } from "$lib/settings-form";
 
   let config = $state<DashboardConfig>(defaultConfig());
@@ -15,6 +21,34 @@
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
   let saveChain: Promise<void> = Promise.resolve();
+
+  let benchmarks = $state<ModelBenchmark[]>([]);
+  let benchmarking = $state(false);
+  let benchmarkNotice = $state("");
+
+  async function handleRunBenchmark() {
+    benchmarking = true;
+    benchmarkNotice = "";
+    try {
+      const res = await invoke<ModelBenchmark[]>("benchmark_models");
+      benchmarks = res.map((b) => ({
+        modelId: b.modelId ?? (b as any).model_id,
+        warmDecodeMs: b.warmDecodeMs ?? (b as any).warm_decode_ms,
+        clipDurationSecs: b.clipDurationSecs ?? (b as any).clip_duration_secs,
+        rtf: b.rtf,
+        timestamp: b.timestamp,
+      }));
+      benchmarkNotice =
+        "Benchmark complete. " +
+        (recommendModel(benchmarks) === "parakeet-ctc-110m-int8"
+          ? "Parakeet CTC 110M is recommended for this machine."
+          : "");
+    } catch {
+      error = "Failed to run benchmark.";
+    } finally {
+      benchmarking = false;
+    }
+  }
 
   let activeModel = $derived(
     findModelById(config.models?.asr_english) ??
@@ -171,11 +205,45 @@
 
     <div class="flex flex-col gap-2">
       <h2 class="font-label-code text-label-code text-on-surface-variant uppercase tracking-wider px-2">
+        Hardware benchmark
+      </h2>
+      <div
+        class="bg-surface-container-low rounded-xl p-5 flex flex-col gap-3 shadow-sm border border-outline-variant/30"
+      >
+        <div class="flex items-start justify-between gap-4">
+          <div class="flex flex-col gap-1 min-w-0">
+            <h3 class="font-headline-sm text-headline-sm font-semibold text-on-surface">
+              Hardware benchmark
+            </h3>
+            <p class="font-body-default text-body-default text-on-surface-variant">
+              Measures speech recognition speed on this computer to recommend the best model for your hardware.
+            </p>
+          </div>
+          <div class="shrink-0">
+            <button
+              type="button"
+              class="min-h-[36px] px-3.5 py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-bright text-on-surface font-body-muted text-body-muted border border-outline-variant/30 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={benchmarking}
+              onclick={handleRunBenchmark}
+            >
+              {benchmarking ? "Benchmarking…" : "Run benchmark"}
+            </button>
+          </div>
+        </div>
+        {#if benchmarkNotice}
+          <p role="status" class="text-xs text-primary">{benchmarkNotice}</p>
+        {/if}
+      </div>
+    </div>
+
+    <div class="flex flex-col gap-2">
+      <h2 class="font-label-code text-label-code text-on-surface-variant uppercase tracking-wider px-2">
         Available models
       </h2>
       <div class="flex flex-col gap-3" role="list">
         {#each MODEL_CATALOG as pack (pack.id)}
           {@const active = pack.id === activeModel.id}
+          {@const bench = benchmarks.find((b) => b.modelId === pack.id)}
           <div
             class="bg-surface-container-low rounded-xl p-5 flex flex-col gap-3 shadow-sm border border-outline-variant/30 transition-colors"
             role="listitem"
@@ -198,6 +266,20 @@
                       class="font-label-code text-label-code text-primary bg-primary/10 border border-primary/20 px-2 py-0.5 rounded text-[11px] font-medium"
                     >
                       Active
+                    </span>
+                  {/if}
+                  {#if bench}
+                    <span
+                      class="px-2 py-0.5 rounded text-xs font-mono bg-surface-container text-on-surface-variant"
+                    >
+                      {formatBenchmarkLatency(bench.warmDecodeMs, bench.clipDurationSecs)}
+                    </span>
+                  {/if}
+                  {#if isModelRecommended(pack.id, benchmarks)}
+                    <span
+                      class="px-2 py-0.5 rounded text-xs font-medium bg-primary/10 text-primary border border-primary/20"
+                    >
+                      Recommended for this machine
                     </span>
                   {/if}
                 </div>

@@ -6,7 +6,7 @@ import {
   isModelRecommended,
   type ModelBenchmark,
 } from './benchmark.ts';
-import { DEFAULT_SPEECH_MODEL_ID } from './models.ts';
+import { DEFAULT_SPEECH_MODEL_ID, MODEL_CATALOG } from './models.ts';
 
 test('recommendModel returns default speech pack when benchmarks empty or null', () => {
   assert.equal(recommendModel([]), DEFAULT_SPEECH_MODEL_ID);
@@ -69,3 +69,28 @@ test('formatBenchmarkLatency produces honest sentence case latency string', () =
   assert.equal(formatBenchmarkLatency(-10, 5.0), '');
   assert.equal(formatBenchmarkLatency(500, 0), '');
 });
+
+test('formatBenchmarkLatency returns empty string on NaN', () => {
+  assert.equal(formatBenchmarkLatency(NaN, 5.0), '');
+  assert.equal(formatBenchmarkLatency(165, NaN), '');
+  assert.equal(formatBenchmarkLatency(Infinity, 5.0), '');
+  assert.equal(formatBenchmarkLatency(165, -Infinity), '');
+});
+
+test('benchmark integration with catalog models', () => {
+  const benchmarks: ModelBenchmark[] = MODEL_CATALOG.map((m) => ({
+    modelId: m.id,
+    warmDecodeMs: m.id === DEFAULT_SPEECH_MODEL_ID ? 165 : 1200,
+    clipDurationSecs: 5,
+    rtf: m.id === DEFAULT_SPEECH_MODEL_ID ? 0.033 : 0.24,
+    timestamp: Date.now(),
+  }));
+  assert.equal(recommendModel(benchmarks), DEFAULT_SPEECH_MODEL_ID);
+  assert.equal(isModelRecommended(DEFAULT_SPEECH_MODEL_ID, benchmarks), true);
+  for (const m of MODEL_CATALOG) {
+    if (m.id !== DEFAULT_SPEECH_MODEL_ID) {
+      assert.equal(isModelRecommended(m.id, benchmarks), false);
+    }
+  }
+});
+

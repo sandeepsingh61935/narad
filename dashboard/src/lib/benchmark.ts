@@ -15,7 +15,7 @@ export interface ModelBenchmark {
  * 1. If benchmarks is empty, returns DEFAULT_SPEECH_MODEL_ID ("parakeet-ctc-110m-int8").
  * 2. Only considers models whose warmDecodeMs is within NFR-P-2 budget (<= 500 ms for a 5s clip, or rtf <= 0.1).
  * 3. If multiple models are compliant, prefers the most accurate compliant model (or DEFAULT_SPEECH_MODEL_ID if tied/preferred).
- * 4. If no model meets the budget, recommends DEFAULT_SPEECH_MODEL_ID as the fastest available fallback.
+ * 4. If no model meets the budget, recommends the fastest measured model as fallback.
  */
 export function recommendModel(benchmarks: ModelBenchmark[]): string {
   if (!benchmarks || benchmarks.length === 0) {
@@ -41,7 +41,7 @@ export function recommendModel(benchmarks: ModelBenchmark[]): string {
  * Example: "165 ms decode (5.0s audio)"
  */
 export function formatBenchmarkLatency(warmDecodeMs: number, clipDurationSecs: number): string {
-  if (warmDecodeMs <= 0 || clipDurationSecs <= 0) {
+  if (!Number.isFinite(warmDecodeMs) || !Number.isFinite(clipDurationSecs) || warmDecodeMs <= 0 || clipDurationSecs <= 0) {
     return "";
   }
   return `${Math.round(warmDecodeMs)} ms decode (${clipDurationSecs.toFixed(1)}s audio)`;

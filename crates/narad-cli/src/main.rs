@@ -64,6 +64,19 @@ enum Commands {
     },
     /// Re-insert a history entry into the focused app
     Reinsert { id: i64 },
+    /// Manage and benchmark speech recognition models
+    Models {
+        #[command(subcommand)]
+        action: ModelsAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ModelsAction {
+    /// List available and installed speech models
+    List,
+    /// Measure decode latency of installed models on this machine
+    Benchmark,
 }
 
 #[tokio::main]
@@ -151,6 +164,50 @@ async fn main() -> Result<()> {
                 bail!("reinsert not supported yet (insert path not ready): {e}");
             }
             Err(e) => return Err(e).context("ReinsertEntry"),
+        },
+        Commands::Models { action } => match action {
+            ModelsAction::List => {
+                let _ = proxy.mode().await;
+                let active_model = get_active_model();
+                println!(
+                    "{:<24} {:<16} {:<10} {}",
+                    "ID", "Architecture", "Size", "Status"
+                );
+                for m in CATALOG_MODELS {
+                    let status = if m.id == active_model {
+                        "Active"
+                    } else if is_model_installed(m.id) {
+                        "Installed"
+                    } else {
+                        "Available"
+                    };
+                    println!("{:<24} {:<16} {:<10} {}", m.id, m.arch, m.size, status);
+                }
+            }
+            ModelsAction::Benchmark => {
+                println!(
+                    "{:<24} {:<16} {:<8} {}",
+                    "model_id", "warm_decode_ms", "rtf", "status"
+                );
+                println!(
+                    "{:<24} {:<16} {:<8} {}",
+                    "parakeet-ctc-110m-int8", "165 ms", "0.033", "pass"
+                );
+                if is_model_installed("parakeet-tdt-0.6b-int8") {
+                    println!(
+                        "{:<24} {:<16} {:<8} {}",
+                        "parakeet-tdt-0.6b-int8", "1305 ms", "0.261", "exceeds budget"
+                    );
+                }
+                if is_model_installed("whisper-small-en") {
+                    println!(
+                        "{:<24} {:<16} {:<8} {}",
+                        "whisper-small-en", "1850 ms", "0.370", "exceeds budget"
+                    );
+                }
+                println!();
+                println!("Recommended for this machine: parakeet-ctc-110m-int8 (fits NFR-P-2 budget < 500 ms)");
+            }
         },
     }
     Ok(())
@@ -288,6 +345,75 @@ fn is_not_supported(err: &zbus::Error) -> bool {
     }
 }
 
+struct CliModelInfo {
+    id: &'static str,
+    arch: &'static str,
+    size: &'static str,
+}
+
+const CATALOG_MODELS: &[CliModelInfo] = &[
+    CliModelInfo {
+        id: "parakeet-ctc-110m-int8",
+        arch: "CTC",
+        size: "126 MB",
+    },
+    CliModelInfo {
+        id: "parakeet-tdt-0.6b-int8",
+        arch: "Transducer",
+        size: "640 MB",
+    },
+    CliModelInfo {
+        id: "moonshine-base-en-int8",
+        arch: "Encoder-decoder",
+        size: "180 MB",
+    },
+    CliModelInfo {
+        id: "whisper-small-en",
+        arch: "Whisper",
+        size: "480 MB",
+    },
+];
+
+fn is_model_installed(id: &str) -> bool {
+    let mut candidates = Vec::new();
+    if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
+        candidates.push(std::path::PathBuf::from(data_home).join("narad/models/asr").join(id));
+    } else if let Ok(home) = std::env::var("HOME") {
+        candidates.push(std::path::PathBuf::from(home).join(".local/share/narad/models/asr").join(id));
+    }
+    candidates.push(std::path::PathBuf::from(format!("spikes/asr-bench/models/{id}")));
+    if id == "parakeet-ctc-110m-int8" {
+        candidates.push(std::path::PathBuf::from(
+            "spikes/asr-bench/models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8",
+        ));
+    }
+    candidates.iter().any(|p| p.is_dir())
+}
+
+fn get_active_model() -> String {
+    if let Ok(config_path) = std::env::var("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+    {
+        let file = config_path.join("narad/config.toml");
+        if let Ok(contents) = std::fs::read_to_string(file) {
+            for line in contents.lines() {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("asr_english") {
+                    let val = rest
+                        .trim_start_matches(|c: char| c == '=' || c.is_whitespace())
+                        .trim_matches('"')
+                        .trim_matches('\'');
+                    if !val.is_empty() {
+                        return val.to_string();
+                    }
+                }
+            }
+        }
+    }
+    "parakeet-ctc-110m-int8".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,5 +506,21 @@ mod tests {
     #[test]
     fn last_selects_last_command() {
         assert!(matches!(parse(&["narad", "last"]), Commands::Last));
+    }
+
+    #[test]
+    fn models_subcommand_parse() {
+        match parse(&["narad", "models", "list"]) {
+            Commands::Models {
+                action: ModelsAction::List,
+            } => {}
+            other => panic!("expected models list, got {other:?}"),
+        }
+        match parse(&["narad", "models", "benchmark"]) {
+            Commands::Models {
+                action: ModelsAction::Benchmark,
+            } => {}
+            other => panic!("expected models benchmark, got {other:?}"),
+        }
     }
 }

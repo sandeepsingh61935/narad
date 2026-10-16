@@ -90,6 +90,7 @@ struct PipelineInner {
     state: Mutex<SessionRuntime>,
     store: Mutex<HistoryStore>,
     asr: Mutex<Option<AsrEngine>>,
+    last_activity: Mutex<Instant>,
     conn: OnceLock<Connection>,
     /// Prevent overlapping stop/process tasks.
     processing: AtomicBool,
@@ -139,6 +140,7 @@ impl PipelineHandle {
                 }),
                 store: Mutex::new(store),
                 asr: Mutex::new(asr),
+                last_activity: Mutex::new(Instant::now()),
                 conn: OnceLock::new(),
                 processing: AtomicBool::new(false),
                 transcribing: AtomicBool::new(false),
@@ -627,8 +629,26 @@ impl PipelineHandle {
             .then(|| trimmed.clone());
         // Run decode on a blocking pool; lock only inside the worker (Standards #5).
         let asr_slot = Arc::clone(&self.inner);
+        let target_model_id = model_id.clone();
         let transcribed = tokio::task::spawn_blocking(move || {
-            let asr_guard = asr_slot.asr.lock().map_err(|e| format!("asr lock: {e}"))?;
+            let mut asr_guard = asr_slot.asr.lock().map_err(|e| format!("asr lock: {e}"))?;
+            let needs_reload = match asr_guard.as_ref() {
+                Some(engine) => engine.model_id != target_model_id,
+                None => true,
+            };
+            if needs_reload {
+                match AsrEngine::load(&target_model_id) {
+                    Ok(engine) => {
+                        *asr_guard = Some(engine);
+                    }
+                    Err(e) => {
+                        warn!(error = %e, target_model_id = %target_model_id, "failed to load ASR model");
+                    }
+                }
+            }
+            if let Ok(mut last) = asr_slot.last_activity.lock() {
+                *last = Instant::now();
+            }
             match asr_guard.as_ref() {
                 Some(engine) => engine
                     .transcribe(&trimmed, audio::TARGET_SAMPLE_RATE)
@@ -1086,7 +1106,15 @@ impl PipelineHandle {
         })
     }
 
-    fn loaded_model_id(&self) -> Result<String, String> {
+    pub fn is_asr_loaded(&self) -> bool {
+        self.inner
+            .asr
+            .lock()
+            .map(|guard| guard.is_some())
+            .unwrap_or(false)
+    }
+
+    pub fn loaded_model_id(&self) -> Result<String, String> {
         let guard = self
             .inner
             .asr
@@ -1095,6 +1123,38 @@ impl PipelineHandle {
         match guard.as_ref() {
             Some(engine) => Ok(engine.model_id.clone()),
             None => Err("model is not loaded".into()),
+        }
+    }
+
+    /// Check and unload idle ASR model (FR-MDL-5).
+    pub fn check_idle_unload(&self) {
+        let Some(mins) = self.inner.config.models.idle_unload_minutes else {
+            return;
+        };
+        if mins == 0 {
+            return;
+        }
+        let threshold = Duration::from_secs(mins as u64 * 60);
+        let elapsed = self
+            .inner
+            .last_activity
+            .lock()
+            .map(|t| t.elapsed())
+            .unwrap_or(Duration::ZERO);
+        if elapsed >= threshold {
+            if let Ok(mut asr) = self.inner.asr.lock() {
+                if asr.is_some() {
+                    info!(mins, "unloading idle ASR model (FR-MDL-5)");
+                    *asr = None;
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn set_last_activity(&self, when: Instant) {
+        if let Ok(mut last) = self.inner.last_activity.lock() {
+            *last = when;
         }
     }
 
@@ -2062,5 +2122,49 @@ mod tests {
 
         let mut off = SilenceWatch::new(configured_timeout(0), t0);
         assert!(!off.observe(t0 + Duration::from_secs(30), &quiet_frame(), rate, false));
+    }
+
+    #[test]
+    fn idle_unloading_configuration_and_behavior() {
+        let (dir, pipe) = test_pipe();
+        // Default: idle_unload_minutes is None, should not unload
+        assert_eq!(pipe.config().models.idle_unload_minutes, None);
+        pipe.check_idle_unload();
+
+        // Configure idle_unload_minutes = Some(5)
+        let mut cfg = NaradConfig::default();
+        cfg.models.idle_unload_minutes = Some(5);
+        let store = HistoryStore::open(dir.path().join("t2.db")).expect("open");
+        let pipe = PipelineHandle::new(cfg.clone(), store, None, dir.path().join("audio2"));
+
+        // If not loaded, check_idle_unload does not fail
+        pipe.check_idle_unload();
+        assert!(!pipe.is_asr_loaded());
+
+        // When activity is fresh, check_idle_unload does not unload
+        pipe.set_last_activity(Instant::now());
+        pipe.check_idle_unload();
+
+        // When activity elapsed >= 5 mins, check_idle_unload triggers unload
+        pipe.set_last_activity(Instant::now() - Duration::from_secs(301));
+        pipe.check_idle_unload();
+        assert!(!pipe.is_asr_loaded());
+
+        // When engine is loaded, verify unload transition
+        if let Some(engine) = asr::try_load(asr::DEFAULT_ASR_ID) {
+            let store = HistoryStore::open(dir.path().join("t3.db")).expect("open");
+            let loaded_pipe = PipelineHandle::new(cfg, store, Some(engine), dir.path().join("audio3"));
+            assert!(loaded_pipe.is_asr_loaded());
+
+            // Fresh activity: still loaded
+            loaded_pipe.set_last_activity(Instant::now());
+            loaded_pipe.check_idle_unload();
+            assert!(loaded_pipe.is_asr_loaded());
+
+            // Expired activity (5 mins elapsed): unloaded
+            loaded_pipe.set_last_activity(Instant::now() - Duration::from_secs(301));
+            loaded_pipe.check_idle_unload();
+            assert!(!loaded_pipe.is_asr_loaded());
+        }
     }
 }

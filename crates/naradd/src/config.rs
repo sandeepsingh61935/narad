@@ -116,18 +116,27 @@ impl Default for GeneralConfig {
     }
 }
 
+fn default_asr_english() -> String {
+    "parakeet-ctc-110m-int8".to_string()
+}
+
 /// Installed / active model packs (FR-MDL-6; REQUIREMENTS §8 decision #1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelsConfig {
     /// Default English ASR pack id under `~/.local/share/narad/models/asr/<id>/`.
+    #[serde(default = "default_asr_english")]
     pub asr_english: String,
+    /// Unload speech model after N minutes of inactivity (FR-MDL-5). None = keep loaded.
+    #[serde(default)]
+    pub idle_unload_minutes: Option<u32>,
 }
 
 impl Default for ModelsConfig {
     fn default() -> Self {
         Self {
-            asr_english: "parakeet-ctc-110m-int8".to_string(),
+            asr_english: default_asr_english(),
+            idle_unload_minutes: None,
         }
     }
 }
@@ -214,6 +223,7 @@ mod tests {
         assert!(!cfg.audio.noise_suppression);
         assert_eq!(cfg.general.active_mode, "plain");
         assert_eq!(cfg.models.asr_english, "parakeet-ctc-110m-int8");
+        assert_eq!(cfg.models.idle_unload_minutes, None);
         assert!(!cfg.history.retain_audio);
         assert_eq!(cfg.history.text_retention_days, None);
         assert_eq!(cfg.history.audio_retention_days, None);
@@ -256,6 +266,7 @@ active_mode = "email"
 
 [models]
 asr_english = "whisper-small-en"
+idle_unload_minutes = 10
 "#,
         )
         .expect("write fixture");
@@ -269,6 +280,7 @@ asr_english = "whisper-small-en"
         assert_eq!(cfg.audio.max_duration_secs, 120);
         assert_eq!(cfg.general.active_mode, "email");
         assert_eq!(cfg.models.asr_english, "whisper-small-en");
+        assert_eq!(cfg.models.idle_unload_minutes, Some(10));
     }
 
     #[test]
@@ -298,6 +310,7 @@ asr_english = "whisper-small-en"
         assert_eq!(cfg.activation.paste_last_hotkey, "Ctrl+Alt+V");
         assert_eq!(cfg.activation.hold_tap_threshold_ms, 250);
         assert_eq!(cfg.models.asr_english, "parakeet-ctc-110m-int8");
+        assert_eq!(cfg.models.idle_unload_minutes, None);
         assert!(!cfg.history.retain_audio);
         assert_eq!(cfg.history.text_retention_days, None);
         assert_eq!(cfg.history.audio_retention_days, None);

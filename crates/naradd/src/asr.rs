@@ -4,19 +4,63 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use sherpa_onnx::{
-    OfflineNemoEncDecCtcModelConfig, OfflineRecognizer, OfflineRecognizerConfig,
+    OfflineMoonshineModelConfig, OfflineNemoEncDecCtcModelConfig, OfflineRecognizer,
+    OfflineRecognizerConfig, OfflineTransducerModelConfig, OfflineWhisperModelConfig,
 };
 use tracing::{debug, info, warn};
 
 /// Default pack id (REQUIREMENTS §8 decision #1).
 pub const DEFAULT_ASR_ID: &str = "parakeet-ctc-110m-int8";
 
+/// Supported Phase 3 ASR model architectures (FR-ASR-3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsrArchitecture {
+    Transducer,
+    Moonshine,
+    Whisper,
+    Ctc,
+}
+
+pub fn detect_architecture(dir: &Path) -> AsrArchitecture {
+    if dir.join("joiner.int8.onnx").is_file() || dir.join("joiner.onnx").is_file() {
+        AsrArchitecture::Transducer
+    } else if dir.join("preprocess.onnx").is_file()
+        || dir.join("encode.int8.onnx").is_file()
+        || dir.join("encode.onnx").is_file()
+    {
+        AsrArchitecture::Moonshine
+    } else if has_whisper_files(dir) {
+        AsrArchitecture::Whisper
+    } else {
+        AsrArchitecture::Ctc
+    }
+}
+
+fn has_whisper_files(dir: &Path) -> bool {
+    if dir.join("small.en-decoder").is_file()
+        || dir.join("small.en-decoder.int8.onnx").is_file()
+        || dir.join("small.en-decoder.onnx").is_file()
+    {
+        return true;
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let s = name.to_string_lossy();
+            if s.contains("small.en-decoder") || s.contains("whisper") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// No pack in this phase has a hotword path. Parakeet CTC stays post-correction only (FR-TXT-2).
 pub fn supports_vocabulary_bias(_model_id: &str) -> bool {
     false
 }
 
-/// Warm-loaded English CTC recogniser.
+/// Warm-loaded English ASR recogniser.
 pub struct AsrEngine {
     recognizer: OfflineRecognizer,
     pub model_id: String,
@@ -34,16 +78,110 @@ impl AsrEngine {
             "loading ASR model"
         );
 
-        let onnx = find_file(&model_dir, &["model.int8.onnx", "model.onnx"])?;
-        let tokens = find_file(&model_dir, &["tokens.txt"])?;
-
+        let arch = detect_architecture(&model_dir);
         let mut config = OfflineRecognizerConfig::default();
         config.model_config.num_threads = default_threads();
         config.model_config.provider = Some("cpu".into());
-        config.model_config.tokens = Some(tokens.display().to_string());
-        config.model_config.nemo_ctc = OfflineNemoEncDecCtcModelConfig {
-            model: Some(onnx.display().to_string()),
-        };
+
+        match arch {
+            AsrArchitecture::Transducer => {
+                let encoder = find_file(&model_dir, &["encoder.int8.onnx", "encoder.onnx"])?;
+                let decoder = find_file(&model_dir, &["decoder.int8.onnx", "decoder.onnx"])?;
+                let joiner = find_file(&model_dir, &["joiner.int8.onnx", "joiner.onnx"])?;
+                let tokens = find_file(&model_dir, &["tokens.txt"])?;
+                config.model_config.tokens = Some(tokens.display().to_string());
+                config.model_config.transducer = OfflineTransducerModelConfig {
+                    encoder: Some(encoder.display().to_string()),
+                    decoder: Some(decoder.display().to_string()),
+                    joiner: Some(joiner.display().to_string()),
+                };
+            }
+            AsrArchitecture::Moonshine => {
+                let preprocessor =
+                    find_file(&model_dir, &["preprocess.onnx", "preprocessor.onnx"])?;
+                let encoder = find_file(
+                    &model_dir,
+                    &[
+                        "encode.int8.onnx",
+                        "encode.onnx",
+                        "encoder.int8.onnx",
+                        "encoder.onnx",
+                    ],
+                )?;
+                let uncached_decoder = find_file(
+                    &model_dir,
+                    &[
+                        "uncached_decode.int8.onnx",
+                        "uncached_decode.onnx",
+                        "uncached_decoder.int8.onnx",
+                        "uncached_decoder.onnx",
+                    ],
+                )?;
+                let cached_decoder = find_file(
+                    &model_dir,
+                    &[
+                        "cached_decode.int8.onnx",
+                        "cached_decode.onnx",
+                        "cached_decoder.int8.onnx",
+                        "cached_decoder.onnx",
+                    ],
+                )?;
+                let tokens = find_file(&model_dir, &["tokens.txt"])?;
+                config.model_config.tokens = Some(tokens.display().to_string());
+                config.model_config.moonshine = OfflineMoonshineModelConfig {
+                    preprocessor: Some(preprocessor.display().to_string()),
+                    encoder: Some(encoder.display().to_string()),
+                    uncached_decoder: Some(uncached_decoder.display().to_string()),
+                    cached_decoder: Some(cached_decoder.display().to_string()),
+                    merged_decoder: None,
+                };
+            }
+            AsrArchitecture::Whisper => {
+                let encoder = find_file_with_filter(
+                    &model_dir,
+                    &[
+                        "small.en-encoder.int8.onnx",
+                        "small.en-encoder.onnx",
+                        "encoder.int8.onnx",
+                        "encoder.onnx",
+                    ],
+                    |s| s.contains("encoder") && s.ends_with(".onnx"),
+                )?;
+                let decoder = find_file_with_filter(
+                    &model_dir,
+                    &[
+                        "small.en-decoder.int8.onnx",
+                        "small.en-decoder.onnx",
+                        "decoder.int8.onnx",
+                        "decoder.onnx",
+                    ],
+                    |s| s.contains("decoder") && s.ends_with(".onnx"),
+                )?;
+                let tokens = find_file_with_filter(
+                    &model_dir,
+                    &["small.en-tokens.txt", "tokens.txt"],
+                    |s| s.ends_with("tokens.txt"),
+                )?;
+                config.model_config.tokens = Some(tokens.display().to_string());
+                config.model_config.whisper = OfflineWhisperModelConfig {
+                    encoder: Some(encoder.display().to_string()),
+                    decoder: Some(decoder.display().to_string()),
+                    language: Some("en".into()),
+                    task: Some("transcribe".into()),
+                    tail_paddings: 0,
+                    enable_token_timestamps: false,
+                    enable_segment_timestamps: false,
+                };
+            }
+            AsrArchitecture::Ctc => {
+                let onnx = find_file(&model_dir, &["model.int8.onnx", "model.onnx"])?;
+                let tokens = find_file(&model_dir, &["tokens.txt"])?;
+                config.model_config.tokens = Some(tokens.display().to_string());
+                config.model_config.nemo_ctc = OfflineNemoEncDecCtcModelConfig {
+                    model: Some(onnx.display().to_string()),
+                };
+            }
+        }
 
         let recognizer = OfflineRecognizer::create(&config)
             .ok_or_else(|| anyhow!("OfflineRecognizer::create failed for {model_id}"))?;
@@ -109,10 +247,7 @@ pub fn is_hallucination(text: &str) -> bool {
 /// `~/.local/share/narad/models/asr/<id>/`, with spike fallback for local dev.
 pub fn resolve_model_dir(model_id: &str) -> Result<PathBuf> {
     for candidate in candidate_dirs(model_id) {
-        if candidate.is_dir()
-            && (candidate.join("model.int8.onnx").is_file() || candidate.join("model.onnx").is_file())
-            && candidate.join("tokens.txt").is_file()
-        {
+        if pack_looks_complete(&candidate) {
             return Ok(candidate);
         }
     }
@@ -128,22 +263,36 @@ fn candidate_dirs(model_id: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     dirs.push(xdg_asr_dir(model_id));
 
+    let known_spike_names = match model_id {
+        DEFAULT_ASR_ID => {
+            vec!["sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8"]
+        }
+        "parakeet-tdt-0.6b-int8" | "parakeet-tdt-0.6b-v2-int8" => {
+            vec!["sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"]
+        }
+        "moonshine-base-en-int8" => vec!["sherpa-onnx-moonshine-base-en-int8"],
+        "whisper-small-en" | "whisper-small.en" => vec!["sherpa-onnx-whisper-small.en"],
+        _ => vec![],
+    };
+
     // Dev fallback: spike extract dir when running from the workspace.
     if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
         let root = PathBuf::from(manifest)
             .join("../..")
             .join("spikes/asr-bench/models");
-        if model_id == DEFAULT_ASR_ID || model_id == "parakeet-ctc-110m-int8" {
-            dirs.push(
-                root.join("sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8"),
-            );
+        for name in &known_spike_names {
+            dirs.push(root.join(name));
         }
+        dirs.push(root.join(format!("sherpa-onnx-{model_id}")));
         dirs.push(root.join(model_id));
     }
 
     // Relative to cwd (cargo run from repo root).
+    for name in &known_spike_names {
+        dirs.push(PathBuf::from(format!("spikes/asr-bench/models/{name}")));
+    }
     dirs.push(PathBuf::from(format!(
-        "spikes/asr-bench/models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8"
+        "spikes/asr-bench/models/sherpa-onnx-{model_id}"
     )));
     dirs.push(PathBuf::from(format!(
         "spikes/asr-bench/models/{model_id}"
@@ -242,10 +391,99 @@ pub fn ensure_default_pack_installed(model_id: &str) {
     }
 }
 
-fn pack_looks_complete(dir: &Path) -> bool {
-    dir.is_dir()
-        && (dir.join("model.int8.onnx").is_file() || dir.join("model.onnx").is_file())
-        && dir.join("tokens.txt").is_file()
+fn find_file_with_filter<F>(dir: &Path, exact: &[&str], filter: F) -> Result<PathBuf>
+where
+    F: Fn(&str) -> bool,
+{
+    for name in exact {
+        let p = dir.join(name);
+        if p.is_file() {
+            return Ok(p);
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let mut matches = Vec::new();
+        for entry in entries.flatten() {
+            if let Ok(ft) = entry.file_type() {
+                if ft.is_file() {
+                    let name = entry.file_name();
+                    let s = name.to_string_lossy();
+                    if filter(&s) {
+                        matches.push(entry.path());
+                    }
+                }
+            }
+        }
+        matches.sort();
+        if let Some(first) = matches.into_iter().next() {
+            return Ok(first);
+        }
+    }
+    Err(anyhow!("no matching file found in {}", dir.display()))
+}
+
+pub fn pack_looks_complete(dir: &Path) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    match detect_architecture(dir) {
+        AsrArchitecture::Transducer => {
+            (dir.join("joiner.int8.onnx").is_file() || dir.join("joiner.onnx").is_file())
+                && (dir.join("encoder.int8.onnx").is_file() || dir.join("encoder.onnx").is_file())
+                && (dir.join("decoder.int8.onnx").is_file() || dir.join("decoder.onnx").is_file())
+                && dir.join("tokens.txt").is_file()
+        }
+        AsrArchitecture::Moonshine => {
+            (dir.join("preprocess.onnx").is_file() || dir.join("preprocessor.onnx").is_file())
+                && (dir.join("encode.int8.onnx").is_file()
+                    || dir.join("encode.onnx").is_file()
+                    || dir.join("encoder.int8.onnx").is_file()
+                    || dir.join("encoder.onnx").is_file())
+                && (dir.join("uncached_decode.int8.onnx").is_file()
+                    || dir.join("uncached_decode.onnx").is_file()
+                    || dir.join("uncached_decoder.int8.onnx").is_file()
+                    || dir.join("uncached_decoder.onnx").is_file())
+                && (dir.join("cached_decode.int8.onnx").is_file()
+                    || dir.join("cached_decode.onnx").is_file()
+                    || dir.join("cached_decoder.int8.onnx").is_file()
+                    || dir.join("cached_decoder.onnx").is_file())
+                && dir.join("tokens.txt").is_file()
+        }
+        AsrArchitecture::Whisper => {
+            find_file_with_filter(
+                dir,
+                &[
+                    "small.en-encoder.int8.onnx",
+                    "small.en-encoder.onnx",
+                    "encoder.int8.onnx",
+                    "encoder.onnx",
+                ],
+                |s| s.contains("encoder") && s.ends_with(".onnx"),
+            )
+            .is_ok()
+                && find_file_with_filter(
+                    dir,
+                    &[
+                        "small.en-decoder.int8.onnx",
+                        "small.en-decoder.onnx",
+                        "decoder.int8.onnx",
+                        "decoder.onnx",
+                    ],
+                    |s| s.contains("decoder") && s.ends_with(".onnx"),
+                )
+                .is_ok()
+                && find_file_with_filter(
+                    dir,
+                    &["small.en-tokens.txt", "tokens.txt"],
+                    |s| s.ends_with("tokens.txt"),
+                )
+                .is_ok()
+        }
+        AsrArchitecture::Ctc => {
+            (dir.join("model.int8.onnx").is_file() || dir.join("model.onnx").is_file())
+                && dir.join("tokens.txt").is_file()
+        }
+    }
 }
 
 fn find_spike_pack(model_id: &str) -> Option<PathBuf> {
@@ -259,15 +497,30 @@ fn find_spike_pack(model_id: &str) -> Option<PathBuf> {
 
 fn spike_source_dirs(model_id: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    let spike_name = "sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8";
+    let known_spike_names = match model_id {
+        DEFAULT_ASR_ID => {
+            vec!["sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8"]
+        }
+        "parakeet-tdt-0.6b-int8" | "parakeet-tdt-0.6b-v2-int8" => {
+            vec!["sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"]
+        }
+        "moonshine-base-en-int8" => vec!["sherpa-onnx-moonshine-base-en-int8"],
+        "whisper-small-en" | "whisper-small.en" => vec!["sherpa-onnx-whisper-small.en"],
+        _ => vec![],
+    };
+
     if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
         let root = PathBuf::from(manifest).join("../..").join("spikes/asr-bench/models");
-        if model_id == DEFAULT_ASR_ID || model_id == "parakeet-ctc-110m-int8" {
-            dirs.push(root.join(spike_name));
+        for name in &known_spike_names {
+            dirs.push(root.join(name));
         }
+        dirs.push(root.join(format!("sherpa-onnx-{model_id}")));
         dirs.push(root.join(model_id));
     }
-    dirs.push(PathBuf::from(format!("spikes/asr-bench/models/{spike_name}")));
+    for name in &known_spike_names {
+        dirs.push(PathBuf::from(format!("spikes/asr-bench/models/{name}")));
+    }
+    dirs.push(PathBuf::from(format!("spikes/asr-bench/models/sherpa-onnx-{model_id}")));
     dirs.push(PathBuf::from(format!("spikes/asr-bench/models/{model_id}")));
     dirs
 }
@@ -352,5 +605,49 @@ mod tests {
         }
         let dir = result.unwrap();
         assert!(dir.join("tokens.txt").is_file());
+    }
+
+    #[test]
+    fn detect_architecture_and_pack_completeness() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().expect("tempdir");
+
+        // Transducer
+        let td_dir = dir.path().join("td");
+        std::fs::create_dir_all(&td_dir).unwrap();
+        std::fs::write(td_dir.join("joiner.int8.onnx"), b"").unwrap();
+        std::fs::write(td_dir.join("encoder.int8.onnx"), b"").unwrap();
+        std::fs::write(td_dir.join("decoder.int8.onnx"), b"").unwrap();
+        std::fs::write(td_dir.join("tokens.txt"), b"").unwrap();
+        assert_eq!(detect_architecture(&td_dir), AsrArchitecture::Transducer);
+        assert!(pack_looks_complete(&td_dir));
+
+        // Moonshine
+        let ms_dir = dir.path().join("ms");
+        std::fs::create_dir_all(&ms_dir).unwrap();
+        std::fs::write(ms_dir.join("preprocess.onnx"), b"").unwrap();
+        std::fs::write(ms_dir.join("encode.int8.onnx"), b"").unwrap();
+        std::fs::write(ms_dir.join("uncached_decode.int8.onnx"), b"").unwrap();
+        std::fs::write(ms_dir.join("cached_decode.int8.onnx"), b"").unwrap();
+        std::fs::write(ms_dir.join("tokens.txt"), b"").unwrap();
+        assert_eq!(detect_architecture(&ms_dir), AsrArchitecture::Moonshine);
+        assert!(pack_looks_complete(&ms_dir));
+
+        // Whisper
+        let wh_dir = dir.path().join("wh");
+        std::fs::create_dir_all(&wh_dir).unwrap();
+        std::fs::write(wh_dir.join("small.en-decoder.int8.onnx"), b"").unwrap();
+        std::fs::write(wh_dir.join("small.en-encoder.int8.onnx"), b"").unwrap();
+        std::fs::write(wh_dir.join("small.en-tokens.txt"), b"").unwrap();
+        assert_eq!(detect_architecture(&wh_dir), AsrArchitecture::Whisper);
+        assert!(pack_looks_complete(&wh_dir));
+
+        // CTC
+        let ctc_dir = dir.path().join("ctc");
+        std::fs::create_dir_all(&ctc_dir).unwrap();
+        std::fs::write(ctc_dir.join("model.int8.onnx"), b"").unwrap();
+        std::fs::write(ctc_dir.join("tokens.txt"), b"").unwrap();
+        assert_eq!(detect_architecture(&ctc_dir), AsrArchitecture::Ctc);
+        assert!(pack_looks_complete(&ctc_dir));
     }
 }

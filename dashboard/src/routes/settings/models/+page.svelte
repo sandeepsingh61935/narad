@@ -106,6 +106,7 @@
   }
 
   async function handleInstall(pack: (typeof MODEL_CATALOG)[number]) {
+    if (!loaded || saving || installingModelId !== null || deletingModelId !== null) return;
     installingModelId = pack.id;
     error = null;
     notice = null;
@@ -121,6 +122,7 @@
   }
 
   async function handleRemove(pack: (typeof MODEL_CATALOG)[number]) {
+    if (!loaded || saving || installingModelId !== null || deletingModelId !== null) return;
     deletingModelId = pack.id;
     error = null;
     notice = null;
@@ -344,7 +346,7 @@
                 {:else if installedModels.includes(pack.id)}
                   <button
                     type="button"
-                    class="min-h-[36px] px-3.5 py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-bright text-on-surface font-body-muted text-body-muted border border-outline-variant/30 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
+                    class="min-h-[36px] px-3 py-1.5 rounded-lg text-sm font-medium bg-surface-container-high hover:bg-surface-container text-on-surface border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     disabled={!loaded || saving || installingModelId !== null || deletingModelId !== null}
                     onclick={() => setActive(pack.id)}
                   >
@@ -353,7 +355,7 @@
                   {#if canDeleteModel(pack.id, pack.id === DEFAULT_SPEECH_MODEL_ID, pack.id === activeModel.id)}
                     <button
                       type="button"
-                      class="min-h-[36px] px-3.5 py-1.5 rounded-lg text-error hover:bg-error/10 border border-error/30 font-body-muted text-body-muted transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
+                      class="min-h-[36px] px-3 py-1.5 rounded-lg text-sm font-medium text-error hover:bg-error/10 border border-error/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                       disabled={!loaded || saving || installingModelId !== null || deletingModelId !== null}
                       onclick={() => handleRemove(pack)}
                     >
@@ -363,7 +365,7 @@
                 {:else}
                   <button
                     type="button"
-                    class="min-h-[36px] px-3.5 py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-container border border-outline-variant/30 text-on-surface font-body-muted text-body-muted transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
+                    class="min-h-[36px] px-3 py-1.5 rounded-lg text-sm font-medium bg-surface-container-high hover:bg-surface-container text-on-surface border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
                     disabled={!loaded || saving || installingModelId !== null || deletingModelId !== null}
                     onclick={() => handleInstall(pack)}
                   >

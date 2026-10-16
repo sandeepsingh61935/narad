@@ -278,10 +278,12 @@ async fn remove_model(id: String) -> Result<(), String> {
     if id == "parakeet-ctc-110m-int8" {
         return Err("Cannot remove default model parakeet-ctc-110m-int8".into());
     }
-    if let Ok(config) = config::load_config() {
-        if config.models.asr_english == id {
-            return Err(format!("Cannot remove active model {id}. Switch active model first."));
-        }
+    let active = match config::load_config() {
+        Ok(cfg) => cfg.models.asr_english,
+        Err(_) => "parakeet-ctc-110m-int8".to_string(),
+    };
+    if id == active {
+        return Err(format!("Cannot remove active model {id}. Switch active model first."));
     }
     let dir = get_models_asr_dir().ok_or_else(|| "Could not resolve data directory".to_string())?;
     let pack_dir = dir.join(&id);

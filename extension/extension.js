@@ -843,7 +843,7 @@ export default class NaradExtension extends Extension {
             this._anchorIcon.icon_name = 'audio-input-microphone-symbolic';
             this._setAnchorChild(this._anchorIcon);
             this._pill.visible = true;
-            this._pillPrimary.text = this._mode || DEFAULT_MODE;
+            this._pillPrimary.text = `${this._mode || DEFAULT_MODE} · EN`;
             this._pillSep1.visible = true;
             this._pillSecondary.visible = true;
             this._pillSecondary.style_class = 'narad-hud-text-muted';
@@ -868,6 +868,10 @@ export default class NaradExtension extends Extension {
             this._pillIcon.icon_name = 'emblem-synchronizing-symbolic';
             this._pillIcon.visible = true;
             this._pillPrimary.text = 'Transcribing…';
+            this._pillSep1.visible = true;
+            this._pillSecondary.visible = true;
+            this._pillSecondary.style_class = 'narad-hud-text-muted';
+            this._pillSecondary.text = `${this._mode || DEFAULT_MODE} · EN`;
             break;
 
         case 'inserted':

@@ -75,3 +75,15 @@ test("processing anchor state does not rely on color alone", () => {
   assert.match(procBlock, /emblem-synchronizing-symbolic/);
   assert.match(procBlock, /_setAnchorChild\(this\._anchorIcon\)/);
 });
+
+test("companion HUD displays mode and language pair during listening and processing (FR-DOT-5)", () => {
+  assert.match(
+    extensionSource,
+    /this\._pillPrimary\.text\s*=\s*`\$\{this\._mode\s*\|\|\s*DEFAULT_MODE\}\s*·\s*EN`/,
+  );
+  assert.match(
+    extensionSource,
+    /this\._pillSecondary\.text\s*=\s*`\$\{this\._mode\s*\|\|\s*DEFAULT_MODE\}\s*·\s*EN`/,
+  );
+});
+

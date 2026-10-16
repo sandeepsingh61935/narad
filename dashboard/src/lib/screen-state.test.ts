@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { firstDroppedPath, type HistoryEntry } from "./history.ts";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const pageSource = readFileSync(join(here, "../routes/+page.svelte"), "utf8");
 import {
   deleteAllConfirmed,
   exportIds,
@@ -362,5 +368,16 @@ test("HUD line reflects history paused state", () => {
       paused: true,
     },
   );
+});
+
+test("history entry detail displays ungrounded cleanup indicator when flagged", () => {
+  assert.equal(pageSource.includes("cleanup_flagged"), true);
+  assert.equal(
+    pageSource.includes("Ungrounded cleanup (restored pre-cleanup text)"),
+    true,
+  );
+  assert.equal(pageSource.includes("Grounding"), true);
+  assert.equal(pageSource.includes("acoustic"), false);
+  assert.equal(pageSource.includes("telemetry"), false);
 });
 

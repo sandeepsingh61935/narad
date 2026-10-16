@@ -1086,7 +1086,12 @@
                 <span class="material-symbols-outlined text-[20px]">mic</span>
               </div>
               <div class="flex flex-col min-w-0">
-                <span class="font-headline-md text-[13px] text-on-surface font-semibold truncate">{appLabel(selectedEntry.app_id)}</span>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="font-headline-md text-[13px] text-on-surface font-semibold truncate">{appLabel(selectedEntry.app_id)}</span>
+                  {#if selectedEntry.cleanup_flagged}
+                    <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30">Ungrounded cleanup (restored pre-cleanup text)</span>
+                  {/if}
+                </div>
                 <div class="flex items-center gap-1.5 flex-wrap font-label-code text-label-code text-[11px] text-on-surface-variant">
                   <span class="material-symbols-outlined text-[13px] text-primary">schedule</span>
                   <span>{formatTime(selectedEntry.created_at)}</span>
@@ -1212,10 +1217,19 @@
               </div>
             </div>
             <div class="flex flex-col rounded-xl bg-surface-container border border-outline-variant/30 overflow-hidden divide-y divide-outline-variant/20">
+              {#if selectedEntry.cleanup_flagged}
+                <div class="px-space-md py-2.5 flex items-center justify-between text-on-surface gap-space-md">
+                  <div class="flex items-center gap-2">
+                    <span class="material-symbols-outlined text-[16px] text-amber-400">warning</span>
+                    <span class="font-body-default text-[13px]">Grounding</span>
+                  </div>
+                  <span class="font-label-code text-label-code text-amber-400">Ungrounded cleanup (restored pre-cleanup text)</span>
+                </div>
+              {/if}
               <div class="px-space-md py-2.5 flex items-center justify-between text-on-surface gap-space-md">
                 <div class="flex items-center gap-2">
                   <span class="material-symbols-outlined text-[16px] text-on-surface-variant">memory</span>
-                  <span class="font-body-default text-[13px]">Acoustic Model</span>
+                  <span class="font-body-default text-[13px]">Speech model</span>
                 </div>
                 <span class="font-label-code text-label-code text-primary bg-primary-container/15 px-2 py-0.5 rounded border border-primary-container/30">{selectedEntry.asr_model}</span>
               </div>

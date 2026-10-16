@@ -246,16 +246,18 @@ fn collapse_orphaned_punctuation(text: &str) -> String {
     trimmed.to_string()
 }
 
-/// Strip filler phrases and filler words from raw text using safe token window matching.
-fn strip_fillers(raw: &str) -> String {
+/// Strip filler phrases and filler words from a single line using safe token window matching.
+fn strip_fillers_line(raw: &str) -> String {
     let tokens: Vec<&str> = raw.split_whitespace().collect();
     if tokens.is_empty() {
         return String::new();
     }
 
     let word_fillers = ["um", "uh", "er", "ah", "basically"];
+    let signoff_keywords = ["best", "regards", "sincerely", "cheers", "thanks"];
     let mut filtered_tokens: Vec<&str> = Vec::with_capacity(tokens.len());
     let mut i = 0;
+    let mut any_removed = false;
     while i < tokens.len() {
         let core0 = tokens[i]
             .trim_matches(|c: char| !c.is_alphanumeric())
@@ -267,6 +269,7 @@ fn strip_fillers(raw: &str) -> String {
                 .trim_matches(|c: char| !c.is_alphanumeric())
                 .to_lowercase();
             if (core0 == "you" && core1 == "know") || (core0 == "i" && core1 == "mean") {
+                any_removed = true;
                 i += 2;
                 continue;
             }
@@ -274,6 +277,7 @@ fn strip_fillers(raw: &str) -> String {
 
         // Check 1-token filler
         if word_fillers.contains(&core0.as_str()) {
+            any_removed = true;
             i += 1;
             continue;
         }
@@ -282,12 +286,36 @@ fn strip_fillers(raw: &str) -> String {
         i += 1;
     }
 
+    if !any_removed {
+        return raw.trim().to_string();
+    }
+
     let joined = filtered_tokens.join(" ");
-    collapse_orphaned_punctuation(&joined)
+    let mut collapsed = collapse_orphaned_punctuation(&joined);
+
+    // If the line ended with a signoff followed by comma, preserve the comma
+    if let Some(last_tok) = filtered_tokens.last() {
+        let core = last_tok.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+        if signoff_keywords.contains(&core.as_str()) && raw.trim_end().ends_with(',') && !collapsed.ends_with(',') {
+            collapsed.push(',');
+        }
+    }
+
+    collapsed
 }
 
-/// Remove consecutive duplicate words.
-fn remove_repetitions(text: &str) -> String {
+/// Strip filler phrases and filler words from raw text using safe token window matching.
+fn strip_fillers(raw: &str) -> String {
+    if raw.contains('\n') {
+        let lines: Vec<String> = raw.lines().map(strip_fillers_line).collect();
+        lines.join("\n")
+    } else {
+        strip_fillers_line(raw)
+    }
+}
+
+/// Remove consecutive duplicate words from a single line.
+fn remove_repetitions_line(text: &str) -> String {
     let tokens: Vec<&str> = text.split_whitespace().collect();
     let mut result: Vec<&str> = Vec::new();
     for tok in tokens {
@@ -301,6 +329,16 @@ fn remove_repetitions(text: &str) -> String {
         result.push(tok);
     }
     result.join(" ")
+}
+
+/// Remove consecutive duplicate words.
+fn remove_repetitions(text: &str) -> String {
+    if text.contains('\n') {
+        let lines: Vec<String> = text.lines().map(remove_repetitions_line).collect();
+        lines.join("\n")
+    } else {
+        remove_repetitions_line(text)
+    }
 }
 
 /// Standardizes capitalization and ensures sentence-ending punctuation.
@@ -328,19 +366,24 @@ fn standardize_sentence(text: &str) -> String {
             cap_next = false;
         } else {
             if c == '.' {
-                if i + 1 == char_vec.len() || char_vec[i + 1].is_whitespace() {
+                let mut next_i = i + 1;
+                while next_i < char_vec.len() && matches!(char_vec[next_i], '"' | '\'' | ')' | ']') {
+                    next_i += 1;
+                }
+                if next_i == char_vec.len() || char_vec[next_i].is_whitespace() {
                     cap_next = true;
                 }
             } else if c == '!' || c == '?' {
                 cap_next = true;
-            } else if !c.is_whitespace() {
+            } else if !c.is_whitespace() && !matches!(c, '"' | '\'' | ')' | ']') {
                 cap_next = false;
             }
             final_text.push(c);
         }
     }
 
-    if !final_text.ends_with('.') && !final_text.ends_with('!') && !final_text.ends_with('?') {
+    let trimmed_punct = final_text.trim_end_matches(|c: char| matches!(c, '"' | '\'' | ')' | ']'));
+    if !trimmed_punct.ends_with('.') && !trimmed_punct.ends_with('!') && !trimmed_punct.ends_with('?') {
         final_text.push('.');
     }
 
@@ -415,7 +458,7 @@ pub fn bullet_text(raw: &str) -> String {
 
 /// Email mode heuristics: structures into greeting, body, and sign-off.
 pub fn email_text(raw: &str) -> String {
-    let body = clean_text(raw);
+    let mut body = clean_text(raw);
     if body.is_empty() {
         return String::new();
     }
@@ -430,6 +473,7 @@ pub fn email_text(raw: &str) -> String {
 
     let signoff_keywords = ["best", "regards", "sincerely", "cheers"];
     let lines: Vec<&str> = body.lines().filter(|l| !l.trim().is_empty()).collect();
+    let mut is_personal_name_final = false;
     let has_signoff = if let Some(&last_line) = lines.last() {
         let last_tokens: Vec<String> = last_line
             .split_whitespace()
@@ -443,18 +487,24 @@ pub fn email_text(raw: &str) -> String {
             .any(|w| signoff_keywords.contains(&w.as_str()))
         {
             true
-        } else if last_tokens.as_slice() == ["sender"] {
+        } else if (1..=2).contains(&last_tokens.len()) {
             if let Some(&prev_line) = lines.iter().rev().nth(1) {
                 let prev_tokens: Vec<String> = prev_line
                     .split_whitespace()
                     .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
                     .filter(|w| !w.is_empty())
                     .collect();
-                prev_tokens
+                if prev_tokens
                     .iter()
                     .rev()
                     .take(3)
                     .any(|w| signoff_keywords.contains(&w.as_str()))
+                {
+                    is_personal_name_final = true;
+                    true
+                } else {
+                    false
+                }
             } else {
                 false
             }
@@ -464,6 +514,10 @@ pub fn email_text(raw: &str) -> String {
     } else {
         false
     };
+
+    if has_signoff && is_personal_name_final && !raw.trim_end().ends_with('.') && body.ends_with('.') {
+        body.pop();
+    }
 
     match (has_greeting, has_signoff) {
         (true, true) => body,
@@ -697,6 +751,36 @@ mod tests {
         let both_raw = "Dear Alice, the meeting is at two. Best regards.";
         let res_both = email_text(both_raw);
         assert_eq!(res_both, "Dear Alice, the meeting is at two. Best regards.");
+    }
+
+    #[test]
+    fn standardize_sentence_closing_quotes_and_brackets() {
+        let quotes = "He said, \"hello.\" we agreed.";
+        assert_eq!(clean_text(quotes), "He said, \"hello.\" We agreed.");
+
+        let parens = "He noted (see docs.) we proceeded.";
+        assert_eq!(clean_text(parens), "He noted (see docs.) We proceeded.");
+
+        let single_quote = "He said, 'done.' next step.";
+        assert_eq!(clean_text(single_quote), "He said, 'done.' Next step.");
+
+        let brackets = "Reference [see item.] next item.";
+        assert_eq!(clean_text(brackets), "Reference [see item.] Next item.");
+    }
+
+    #[test]
+    fn email_signoff_accepts_personal_name_on_final_line() {
+        let two_token = "The report is ready.\n\nBest regards,\nJane Doe";
+        let res_two = email_text(two_token);
+        assert_eq!(res_two, "Hi,\n\nThe report is ready.\n\nBest regards,\nJane Doe");
+
+        let single_token = "The report is ready.\n\nCheers,\nAlex";
+        let res_single = email_text(single_token);
+        assert_eq!(res_single, "Hi,\n\nThe report is ready.\n\nCheers,\nAlex");
+
+        let with_greeting = "Hi team,\n\nThe report is ready.\n\nSincerely,\nAlice Smith";
+        let res_with_greeting = email_text(with_greeting);
+        assert_eq!(res_with_greeting, "Hi team,\n\nThe report is ready.\n\nSincerely,\nAlice Smith");
     }
 }
 

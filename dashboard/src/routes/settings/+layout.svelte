@@ -18,6 +18,7 @@
     { label: "General", icon: "tune", href: null },
     { label: "Hotkeys", icon: "keyboard", href: "/settings", badge: "Wayland" },
     { label: "Audio", icon: "mic", href: "/settings/audio" },
+    { label: "Models", icon: "memory", href: "/settings/models" },
     { label: "Modes", icon: "auto_fix_high", href: "/settings/modes" },
     { label: "Dictionary", icon: "spellcheck", href: "/settings/dictionary" },
     { label: "App profiles", icon: "tab", href: null },

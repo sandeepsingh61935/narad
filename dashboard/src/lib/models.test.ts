@@ -1,11 +1,24 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   DEFAULT_SPEECH_MODEL_ID,
   MODEL_CATALOG,
   findModelById,
   isModelActive,
 } from "./models.ts";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const layoutSource = readFileSync(
+  join(here, "../routes/settings/+layout.svelte"),
+  "utf8"
+);
+const pageSource = readFileSync(
+  join(here, "../routes/settings/models/+page.svelte"),
+  "utf8"
+);
 
 test("catalog defines default speech pack matching Decision #1", () => {
   assert.equal(DEFAULT_SPEECH_MODEL_ID, "parakeet-ctc-110m-int8");
@@ -41,3 +54,21 @@ test("isModelActive correctly compares with config", () => {
   assert.equal(isModelActive("whisper-small-en", config), false);
   assert.equal(isModelActive("", config), false);
 });
+
+test("settings layout links to /settings/models", () => {
+  assert.match(layoutSource, /\/settings\/models/);
+  assert.match(layoutSource, /Models/);
+});
+
+test("models page lists active model, catalog, and sentence case copy", () => {
+  assert.match(pageSource, /Active model/);
+  assert.match(pageSource, /MODEL_CATALOG/);
+  assert.match(pageSource, /saveDashboardConfig/);
+  assert.match(pageSource, /Set active/);
+  // Zero forbidden jargon
+  assert.equal(pageSource.includes("telemetry"), false);
+  assert.equal(pageSource.includes("acoustic"), false);
+  assert.equal(pageSource.includes("CUDA"), false);
+  assert.equal(pageSource.includes("TensorRT"), false);
+});
+

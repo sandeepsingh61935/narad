@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { defaultConfig, type DashboardConfig } from "$lib/config";
   import { SAVED_NOTICE, saveDashboardConfig } from "$lib/settings-form";
+  import { validateAudioConfig } from "$lib/audio-settings";
 
   let config = $state<DashboardConfig>(defaultConfig());
   let silence = $state("2");
@@ -11,13 +12,6 @@
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
   let saveChain: Promise<void> = Promise.resolve();
-
-  function wholeSeconds(raw: string): number | undefined {
-    const trimmed = raw.trim();
-    if (trimmed === "") return 0;
-    if (!/^\d+$/.test(trimmed)) return undefined;
-    return Number(trimmed);
-  }
 
   function showSeconds(next: DashboardConfig) {
     silence = String(next.audio.auto_stop_silence_secs);
@@ -38,10 +32,13 @@
 
   function commit() {
     if (!loaded) return;
-    const autoStop = wholeSeconds(silence);
-    const maxDuration = wholeSeconds(cap);
-    if (autoStop === undefined || maxDuration === undefined) {
-      error = "Silence stop and the duration cap must be whole seconds. 0 turns that limit off.";
+    const validated = validateAudioConfig({
+      silenceRaw: silence,
+      capRaw: cap,
+      inputTarget: config.audio.input_target,
+    });
+    if (!validated.ok) {
+      error = validated.error;
       notice = null;
       return;
     }
@@ -49,10 +46,9 @@
       ...config,
       audio: {
         ...config.audio,
-        auto_stop_silence_secs: autoStop,
-        max_duration_secs: maxDuration,
-        input_target: config.audio.input_target,
-        noise_suppression: config.audio.noise_suppression,
+        auto_stop_silence_secs: validated.silenceSecs,
+        max_duration_secs: validated.capSecs,
+        input_target: validated.inputTarget,
       },
     };
     error = null;
@@ -119,19 +115,62 @@
       <div class="h-px bg-surface-container-high w-full"></div>
       <div class="p-4 flex items-center justify-between gap-4">
         <div class="flex flex-col min-w-0">
+          <span class="font-body-default text-body-default text-on-surface">Sound cues</span>
+          <span class="font-body-muted text-body-muted text-on-surface-variant">
+            Play audio cues on dictation start, stop, cancel, and error.
+          </span>
+        </div>
+        <button
+          id="sounds-enabled"
+          aria-checked={config.audio.sounds_enabled}
+          aria-label="Sound cues"
+          class="w-11 h-6 {config.audio.sounds_enabled ? 'bg-primary-container' : 'bg-surface-container-highest'} rounded-full relative p-0.5 transition-colors cursor-pointer flex items-center shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-container"
+          role="switch"
+          type="button"
+          disabled={!loaded}
+          onclick={() => {
+            config.audio.sounds_enabled = !config.audio.sounds_enabled;
+            commit();
+          }}
+        >
+          <span
+            class="w-5 h-5 {config.audio.sounds_enabled ? 'bg-on-primary-container translate-x-5' : 'bg-outline translate-x-0'} rounded-full shadow transition-transform flex items-center justify-center"
+          >
+            {#if config.audio.sounds_enabled}
+              <span class="material-symbols-outlined text-[12px] text-primary" aria-hidden="true">check</span>
+            {/if}
+          </span>
+        </button>
+      </div>
+      <div class="h-px bg-surface-container-high w-full"></div>
+      <div class="p-4 flex items-center justify-between gap-4">
+        <div class="flex flex-col min-w-0">
           <span class="font-body-default text-body-default text-on-surface">Noise suppression</span>
           <span class="font-body-muted text-body-muted text-on-surface-variant">
             RNNoise before VAD and ASR. Off until you turn it on.
           </span>
         </div>
-        <input
+        <button
           id="noise-suppression"
+          aria-checked={config.audio.noise_suppression}
           aria-label="Noise suppression"
-          type="checkbox"
-          bind:checked={config.audio.noise_suppression}
+          class="w-11 h-6 {config.audio.noise_suppression ? 'bg-primary-container' : 'bg-surface-container-highest'} rounded-full relative p-0.5 transition-colors cursor-pointer flex items-center shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-container"
+          role="switch"
+          type="button"
           disabled={!loaded}
-          onchange={commit}
-        />
+          onclick={() => {
+            config.audio.noise_suppression = !config.audio.noise_suppression;
+            commit();
+          }}
+        >
+          <span
+            class="w-5 h-5 {config.audio.noise_suppression ? 'bg-on-primary-container translate-x-5' : 'bg-outline translate-x-0'} rounded-full shadow transition-transform flex items-center justify-center"
+          >
+            {#if config.audio.noise_suppression}
+              <span class="material-symbols-outlined text-[12px] text-primary" aria-hidden="true">check</span>
+            {/if}
+          </span>
+        </button>
       </div>
       <div class="h-px bg-surface-container-high w-full"></div>
       <div class="p-4 flex items-center justify-between gap-4">

@@ -275,7 +275,8 @@ test("the modes page lists the four modes and privacy drops the mock copy", () =
   assert.ok(audio.includes("noise_suppression"));
   assert.ok(audio.includes("auto_stop_silence_secs"));
   assert.ok(audio.includes("max_duration_secs"));
-  assert.equal(audio.includes("sounds_enabled"), false);
+  assert.ok(audio.includes("sounds_enabled"));
+
 
   const dictionary = readFileSync(join(here, "../routes/dictionary/+page.svelte"), "utf8");
   assert.ok(dictionary.includes("vocabulary"));

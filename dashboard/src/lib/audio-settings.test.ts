@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { parseAudioSeconds, validateAudioConfig } from "./audio-settings.ts";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const pageSource = readFileSync(join(here, "../routes/settings/audio/+page.svelte"), "utf8");
+
 
 test("parseAudioSeconds parses non-negative integers and allows 0 for off", () => {
   assert.equal(parseAudioSeconds("2"), 2);
@@ -36,3 +43,11 @@ test("validateAudioConfig validates complete audio draft", () => {
     assert.match(invalid.error, /whole seconds/i);
   }
 });
+
+test("audio page includes sound cues toggle and Quiet Precision switches", () => {
+  assert.match(pageSource, /Sound cues/);
+  assert.match(pageSource, /sounds_enabled/);
+  assert.match(pageSource, /validateAudioConfig/);
+  assert.match(pageSource, /role="switch"/);
+});
+

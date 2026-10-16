@@ -9,6 +9,8 @@
     validateMode,
     previewSampleTransform,
     DEFAULT_SAMPLE_SPEECH,
+    getDuplicateName,
+    getDuplicateId,
     type ModeDefinition,
   } from "$lib/modes";
 
@@ -17,6 +19,7 @@
   let config = $state<DashboardConfig>(defaultConfig());
   let loaded = $state(false);
   let saving = $state(false);
+  let activeSaves = 0;
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
   let saveChain: Promise<void> = Promise.resolve();
@@ -59,6 +62,7 @@
     }
     const toSave = config;
     error = null;
+    activeSaves++;
     saving = true;
     saveChain = saveChain
       .then(
@@ -66,7 +70,8 @@
         () => persist(toSave),
       )
       .finally(() => {
-        saving = false;
+        activeSaves--;
+        saving = activeSaves > 0;
       });
   }
 
@@ -88,41 +93,6 @@
       config.general.active_mode = modeId;
       commit();
     }
-  }
-
-  function getDuplicateName(sourceName: string, existingNames: string[]): string {
-    const numberedMatch = sourceName.match(/^(.*?)\s+copy\s+(\d+)$/i);
-    const copyMatch = sourceName.match(/^(.*?)\s+copy$/i);
-
-    let base = sourceName;
-    let nextNum = 1;
-
-    if (numberedMatch) {
-      base = numberedMatch[1];
-      nextNum = parseInt(numberedMatch[2], 10) + 1;
-    } else if (copyMatch) {
-      base = copyMatch[1];
-      nextNum = 2;
-    }
-
-    let candidate = nextNum === 1 ? `${base} copy` : `${base} copy ${nextNum}`;
-    const lowerExisting = existingNames.map((n) => n.toLowerCase());
-    while (lowerExisting.includes(candidate.toLowerCase())) {
-      nextNum++;
-      candidate = `${base} copy ${nextNum}`;
-    }
-    return candidate;
-  }
-
-  function getDuplicateId(sourceId: string, existingIds: string[]): string {
-    const baseId = sourceId.replace(/-copy(?:-\d+)?$/, "");
-    let idCounter = 1;
-    let candidateId = `${baseId}-copy`;
-    while (existingIds.includes(candidateId)) {
-      idCounter++;
-      candidateId = `${baseId}-copy-${idCounter}`;
-    }
-    return candidateId;
   }
 
   function handleDuplicate(source: ModeDefinition) {
@@ -347,7 +317,7 @@
               class="min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
               type="text"
               bind:value={selectedMode.name}
-              disabled={!loaded || saving}
+              disabled={!loaded}
               onblur={commit}
               onchange={commit}
             />
@@ -361,7 +331,7 @@
               class="min-h-[36px] bg-surface-container-high text-on-surface font-mono text-body-default px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
               type="text"
               bind:value={selectedMode.spoken_prefix}
-              disabled={!loaded || saving}
+              disabled={!loaded}
               onblur={commit}
               onchange={commit}
             />
@@ -378,7 +348,7 @@
               class="min-h-[36px] bg-surface-container-high text-on-surface font-mono text-body-default px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
               type="text"
               bind:value={selectedMode.hotkey}
-              disabled={!loaded || saving}
+              disabled={!loaded}
               onblur={commit}
               onchange={commit}
             />
@@ -392,7 +362,7 @@
               class="min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
               type="text"
               bind:value={selectedMode.description}
-              disabled={!loaded || saving}
+              disabled={!loaded}
               onblur={commit}
               onchange={commit}
             />
@@ -435,7 +405,7 @@
             rows="3"
             class="w-full min-h-[80px] bg-surface-container-high text-on-surface font-mono text-sm px-3 py-2 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed resize-y"
             bind:value={selectedMode.prompt}
-            disabled={!loaded || saving || !selectedMode.cleanup}
+            disabled={!loaded || !selectedMode.cleanup}
             onblur={commit}
             onchange={commit}
             placeholder="Cleanup prompt instructions..."
@@ -462,7 +432,7 @@
               class="min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-sm px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
               type="text"
               bind:value={sampleText}
-              disabled={!loaded || saving}
+              disabled={!loaded}
             />
           </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">

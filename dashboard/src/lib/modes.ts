@@ -119,3 +119,45 @@ export function previewSampleTransform(rawSample: string, mode: ModeDefinition):
   return { before, after: cleaned };
 }
 
+/**
+ * Generate a disambiguated display name when duplicating a mode,
+ * preventing 'copy copy' accumulation.
+ */
+export function getDuplicateName(sourceName: string, existingNames: string[]): string {
+  const numberedMatch = sourceName.match(/^(.*?)\s+copy\s+(\d+)$/i);
+  const copyMatch = sourceName.match(/^(.*?)\s+copy$/i);
+
+  let base = sourceName;
+  let nextNum = 1;
+
+  if (numberedMatch) {
+    base = numberedMatch[1];
+    nextNum = parseInt(numberedMatch[2], 10) + 1;
+  } else if (copyMatch) {
+    base = copyMatch[1];
+    nextNum = 2;
+  }
+
+  let candidate = nextNum === 1 ? `${base} copy` : `${base} copy ${nextNum}`;
+  const lowerExisting = existingNames.map((n) => n.toLowerCase());
+  while (lowerExisting.includes(candidate.toLowerCase())) {
+    nextNum++;
+    candidate = `${base} copy ${nextNum}`;
+  }
+  return candidate;
+}
+
+/**
+ * Generate a unique slug ID when duplicating a mode.
+ */
+export function getDuplicateId(sourceId: string, existingIds: string[]): string {
+  const baseId = sourceId.replace(/-copy(?:-\d+)?$/, "");
+  let idCounter = 1;
+  let candidateId = `${baseId}-copy`;
+  while (existingIds.includes(candidateId)) {
+    idCounter++;
+    candidateId = `${baseId}-copy-${idCounter}`;
+  }
+  return candidateId;
+}
+

@@ -9,6 +9,8 @@ import {
   validateMode,
   previewSampleTransform,
   DEFAULT_SAMPLE_SPEECH,
+  getDuplicateName,
+  getDuplicateId,
   type ModeDefinition,
 } from './modes.ts';
 
@@ -154,35 +156,15 @@ test('modes page includes sentence case labels and preserves required literals',
   }
 });
 
-test('duplicate name disambiguation pattern prevents copy accumulation', () => {
-  function disambiguate(sourceName: string, existingNames: string[]): string {
-    const numberedMatch = sourceName.match(/^(.*?)\s+copy\s+(\d+)$/i);
-    const copyMatch = sourceName.match(/^(.*?)\s+copy$/i);
+test('getDuplicateName and getDuplicateId prevent accumulation and produce valid slugs', () => {
+  assert.equal(getDuplicateName("Plain", ["Plain"]), "Plain copy");
+  assert.equal(getDuplicateName("Plain copy", ["Plain", "Plain copy"]), "Plain copy 2");
+  assert.equal(getDuplicateName("Plain copy 2", ["Plain", "Plain copy", "Plain copy 2"]), "Plain copy 3");
+  assert.equal(getDuplicateName("Plain", ["Plain", "Plain copy"]), "Plain copy 2");
 
-    let base = sourceName;
-    let nextNum = 1;
-
-    if (numberedMatch) {
-      base = numberedMatch[1];
-      nextNum = parseInt(numberedMatch[2], 10) + 1;
-    } else if (copyMatch) {
-      base = copyMatch[1];
-      nextNum = 2;
-    }
-
-    let candidate = nextNum === 1 ? `${base} copy` : `${base} copy ${nextNum}`;
-    const lowerExisting = existingNames.map((n) => n.toLowerCase());
-    while (lowerExisting.includes(candidate.toLowerCase())) {
-      nextNum++;
-      candidate = `${base} copy ${nextNum}`;
-    }
-    return candidate;
-  }
-
-  assert.equal(disambiguate("Plain", ["Plain"]), "Plain copy");
-  assert.equal(disambiguate("Plain copy", ["Plain", "Plain copy"]), "Plain copy 2");
-  assert.equal(disambiguate("Plain copy 2", ["Plain", "Plain copy", "Plain copy 2"]), "Plain copy 3");
-  assert.equal(disambiguate("Plain", ["Plain", "Plain copy"]), "Plain copy 2");
+  assert.equal(getDuplicateId("plain", ["plain"]), "plain-copy");
+  assert.equal(getDuplicateId("plain", ["plain", "plain-copy"]), "plain-copy-2");
+  assert.equal(getDuplicateId("plain-copy", ["plain", "plain-copy"]), "plain-copy-2");
 });
 
 

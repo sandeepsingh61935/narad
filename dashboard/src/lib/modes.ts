@@ -74,6 +74,8 @@ export function duplicateMode(source: ModeDefinition, newId: string, newName: st
   };
 }
 
+export const DEFAULT_SAMPLE_SPEECH = "um basically I think we should review the schedule. we also need to send the report.";
+
 /**
  * Validate mode definition fields.
  */
@@ -81,8 +83,7 @@ export function validateMode(mode: ModeDefinition): { valid: boolean; error?: st
   if (!mode.id || !mode.id.trim()) {
     return { valid: false, error: "Mode ID cannot be empty." };
   }
-  const slug = mode.id.trim();
-  if (!/^[a-z0-9_-]+$/.test(slug)) {
+  if (!/^[a-z0-9_-]+$/.test(mode.id)) {
     return { valid: false, error: "Mode ID must contain only lowercase letters, numbers, hyphens, and underscores." };
   }
   if (!mode.name || !mode.name.trim()) {
@@ -99,14 +100,6 @@ export function previewSampleTransform(rawSample: string, mode: ModeDefinition):
   if (!mode.cleanup) {
     return { before, after: before };
   }
-  if (mode.id === "clean") {
-    // Remove typical filler words
-    const cleaned = before
-      .replace(/\b(um|uh|you know|basically)\b\s*/gi, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    return { before, after: cleaned };
-  }
   if (mode.id === "bullet") {
     const lines = before.split(/\.\s+/).filter(Boolean);
     const bullets = lines.map(line => `• ${line.replace(/\.$/, "")}`).join("\n");
@@ -118,5 +111,11 @@ export function previewSampleTransform(rawSample: string, mode: ModeDefinition):
       after: `Hi,\n\n${before}\n\nBest,\nSender`,
     };
   }
-  return { before, after: before };
+  // Filler word removal for clean mode and custom cleanup modes
+  const cleaned = before
+    .replace(/\b(um|uh|you know|basically)\b\s*/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return { before, after: cleaned };
 }
+

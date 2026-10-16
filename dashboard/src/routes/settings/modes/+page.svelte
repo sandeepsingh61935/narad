@@ -6,6 +6,7 @@
   import {
     BUILTIN_MODES,
     duplicateMode,
+    validateMode,
     previewSampleTransform,
     DEFAULT_SAMPLE_SPEECH,
     type ModeDefinition,
@@ -15,6 +16,7 @@
 
   let config = $state<DashboardConfig>(defaultConfig());
   let loaded = $state(false);
+  let saving = $state(false);
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
   let saveChain: Promise<void> = Promise.resolve();
@@ -49,12 +51,23 @@
 
   function commit() {
     if (!loaded) return;
+    const validation = validateMode(selectedMode);
+    if (!validation.valid) {
+      error = validation.error ?? "Invalid mode configuration.";
+      notice = null;
+      return;
+    }
     const toSave = config;
     error = null;
-    saveChain = saveChain.then(
-      () => persist(toSave),
-      () => persist(toSave),
-    );
+    saving = true;
+    saveChain = saveChain
+      .then(
+        () => persist(toSave),
+        () => persist(toSave),
+      )
+      .finally(() => {
+        saving = false;
+      });
   }
 
   async function persist(toSave: DashboardConfig) {
@@ -70,20 +83,54 @@
   }
 
   function handleSetActive(modeId: string) {
+    if (!loaded || saving) return;
     if (isMode(modeId)) {
       config.general.active_mode = modeId;
       commit();
     }
   }
 
-  function handleDuplicate(source: ModeDefinition) {
-    let counter = 1;
-    let newId = `${source.id}-copy`;
-    while (modesList.some((m) => m.id === newId)) {
-      counter++;
-      newId = `${source.id}-copy-${counter}`;
+  function getDuplicateName(sourceName: string, existingNames: string[]): string {
+    const numberedMatch = sourceName.match(/^(.*?)\s+copy\s+(\d+)$/i);
+    const copyMatch = sourceName.match(/^(.*?)\s+copy$/i);
+
+    let base = sourceName;
+    let nextNum = 1;
+
+    if (numberedMatch) {
+      base = numberedMatch[1];
+      nextNum = parseInt(numberedMatch[2], 10) + 1;
+    } else if (copyMatch) {
+      base = copyMatch[1];
+      nextNum = 2;
     }
-    const newName = `${source.name} copy`;
+
+    let candidate = nextNum === 1 ? `${base} copy` : `${base} copy ${nextNum}`;
+    const lowerExisting = existingNames.map((n) => n.toLowerCase());
+    while (lowerExisting.includes(candidate.toLowerCase())) {
+      nextNum++;
+      candidate = `${base} copy ${nextNum}`;
+    }
+    return candidate;
+  }
+
+  function getDuplicateId(sourceId: string, existingIds: string[]): string {
+    const baseId = sourceId.replace(/-copy(?:-\d+)?$/, "");
+    let idCounter = 1;
+    let candidateId = `${baseId}-copy`;
+    while (existingIds.includes(candidateId)) {
+      idCounter++;
+      candidateId = `${baseId}-copy-${idCounter}`;
+    }
+    return candidateId;
+  }
+
+  function handleDuplicate(source: ModeDefinition) {
+    if (!loaded || saving) return;
+    const existingIds = modesList.map((m) => m.id);
+    const existingNames = modesList.map((m) => m.name);
+    const newId = getDuplicateId(source.id, existingIds);
+    const newName = getDuplicateName(source.name, existingNames);
     const duplicated = duplicateMode(source, newId, newName);
     modesList = [...modesList, duplicated];
     selectedModeId = duplicated.id;
@@ -91,11 +138,13 @@
   }
 
   function toggleCleanup() {
+    if (!loaded || saving) return;
     selectedMode.cleanup = !selectedMode.cleanup;
     commit();
   }
 
   function removeCustomMode(modeId: string) {
+    if (!loaded || saving) return;
     modesList = modesList.filter((m) => m.id !== modeId);
     if (selectedModeId === modeId) {
       selectedModeId = config.general.active_mode || "plain";
@@ -116,10 +165,10 @@
         Speech processing modes, cleanup prompts, and shortcuts.
       </p>
       {#if error}
-        <p class="font-body-muted text-body-muted text-error" role="alert">{error}</p>
+        <p class="font-body-muted text-body-muted text-error" role="alert" aria-live="assertive">{error}</p>
       {/if}
       {#if notice}
-        <p class="font-body-muted text-body-muted text-on-surface" role="status">{notice}</p>
+        <p class="font-body-muted text-body-muted text-on-surface" role="status" aria-live="polite">{notice}</p>
       {/if}
     </div>
 
@@ -142,7 +191,7 @@
         id="active-mode"
         class="bg-surface-container-high text-on-surface font-body-default text-body-default pl-3 pr-8 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed min-h-[36px]"
         bind:value={config.general.active_mode}
-        disabled={!loaded}
+        disabled={!loaded || saving}
         onchange={commit}
       >
         {#if !isMode(config.general.active_mode)}
@@ -164,12 +213,14 @@
           {@const isActive = mode.id === config.general.active_mode}
           {@const isSelected = mode.id === selectedMode.id}
           <div
-            class="bg-surface-container-low rounded-xl p-5 flex flex-col gap-3 shadow-sm border transition-colors cursor-pointer {isSelected ? 'border-primary ring-1 ring-primary/40' : 'border-outline-variant/30 hover:border-outline-variant'}"
+            class="bg-surface-container-low rounded-xl p-5 flex flex-col gap-3 shadow-sm border transition-colors cursor-pointer min-h-[44px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container {isSelected ? 'border-primary ring-1 ring-primary/40' : 'border-outline-variant/30 hover:border-outline-variant'}"
             role="listitem"
             tabindex="0"
-            onclick={() => (selectedModeId = mode.id)}
+            onclick={() => {
+              if (!saving) selectedModeId = mode.id;
+            }}
             onkeydown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
+              if ((e.key === 'Enter' || e.key === ' ') && !saving) {
                 e.preventDefault();
                 selectedModeId = mode.id;
               }
@@ -216,7 +267,7 @@
                   <button
                     type="button"
                     class="min-h-[36px] px-3 py-1.5 rounded-lg text-sm font-medium bg-surface-container-high hover:bg-surface-container text-on-surface border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
-                    disabled={!loaded}
+                    disabled={!loaded || saving}
                     onclick={(e) => {
                       e.stopPropagation();
                       handleSetActive(mode.id);
@@ -228,7 +279,7 @@
                 <button
                   type="button"
                   class="min-h-[36px] px-3 py-1.5 rounded-lg text-sm font-medium bg-surface-container-high hover:bg-surface-container text-on-surface border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5 cursor-pointer"
-                  disabled={!loaded}
+                  disabled={!loaded || saving}
                   onclick={(e) => {
                     e.stopPropagation();
                     handleDuplicate(mode);
@@ -278,7 +329,7 @@
             <button
               type="button"
               class="min-h-[36px] px-3 py-1.5 rounded-lg text-sm font-medium text-error hover:bg-error/10 border border-error/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
-              disabled={!loaded}
+              disabled={!loaded || saving}
               onclick={() => removeCustomMode(selectedMode.id)}
             >
               Delete preset
@@ -296,8 +347,9 @@
               class="min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
               type="text"
               bind:value={selectedMode.name}
-              disabled={!loaded}
+              disabled={!loaded || saving}
               onblur={commit}
+              onchange={commit}
             />
           </div>
           <div class="flex flex-col gap-1.5">
@@ -309,8 +361,9 @@
               class="min-h-[36px] bg-surface-container-high text-on-surface font-mono text-body-default px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
               type="text"
               bind:value={selectedMode.spoken_prefix}
-              disabled={!loaded}
+              disabled={!loaded || saving}
               onblur={commit}
+              onchange={commit}
             />
           </div>
         </div>
@@ -325,8 +378,9 @@
               class="min-h-[36px] bg-surface-container-high text-on-surface font-mono text-body-default px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
               type="text"
               bind:value={selectedMode.hotkey}
-              disabled={!loaded}
+              disabled={!loaded || saving}
               onblur={commit}
+              onchange={commit}
             />
           </div>
           <div class="flex flex-col gap-1.5">
@@ -338,8 +392,9 @@
               class="min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
               type="text"
               bind:value={selectedMode.description}
-              disabled={!loaded}
+              disabled={!loaded || saving}
               onblur={commit}
+              onchange={commit}
             />
           </div>
         </div>
@@ -355,10 +410,10 @@
             id="cleanup-toggle"
             aria-checked={selectedMode.cleanup}
             aria-label="Cleanup prompts"
-            class="w-11 h-6 {selectedMode.cleanup ? 'bg-primary-container' : 'bg-surface-container-highest'} rounded-full relative p-0.5 transition-colors cursor-pointer flex items-center shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
+            class="w-11 h-6 {selectedMode.cleanup ? 'bg-primary-container' : 'bg-surface-container-highest'} rounded-full relative p-0.5 transition-colors cursor-pointer flex items-center shrink-0 before:absolute before:-inset-2 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
             role="switch"
             type="button"
-            disabled={!loaded}
+            disabled={!loaded || saving}
             onclick={toggleCleanup}
           >
             <span
@@ -378,10 +433,11 @@
           <textarea
             id="cleanup-prompt"
             rows="3"
-            class="w-full bg-surface-container-high text-on-surface font-mono text-sm px-3 py-2 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed resize-y"
+            class="w-full min-h-[80px] bg-surface-container-high text-on-surface font-mono text-sm px-3 py-2 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed resize-y"
             bind:value={selectedMode.prompt}
-            disabled={!loaded || !selectedMode.cleanup}
+            disabled={!loaded || saving || !selectedMode.cleanup}
             onblur={commit}
+            onchange={commit}
             placeholder="Cleanup prompt instructions..."
           ></textarea>
         </div>
@@ -402,9 +458,11 @@
             </label>
             <input
               id="sample-input"
-              class="min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-sm px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
+              aria-label="Sample speech for preview"
+              class="min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-sm px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
               type="text"
               bind:value={sampleText}
+              disabled={!loaded || saving}
             />
           </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -416,7 +474,7 @@
                 {preview.before}
               </p>
             </div>
-            <div class="bg-surface-container-high/60 rounded-lg p-3.5 flex flex-col gap-1.5 border border-primary/25 bg-primary/5">
+            <div class="bg-surface-container-high/60 rounded-lg p-3.5 flex flex-col gap-1.5 border border-primary/25 bg-primary/5" aria-live="polite">
               <span class="font-label-code text-label-code text-primary text-[11px] uppercase tracking-wider font-semibold">
                 After
               </span>

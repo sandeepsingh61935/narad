@@ -137,11 +137,53 @@ test('modes page includes sentence case labels and preserves required literals',
   }
   assert.ok(pageContent.includes("SAVED_NOTICE"));
 
+  // Task 3: validation, accessibility, disabled states, and focus styling
+  assert.ok(pageContent.includes("validateMode"));
+  assert.ok(pageContent.includes('aria-label="Sample speech for preview"'));
+  assert.ok(pageContent.includes('disabled={!loaded || saving}'));
+  assert.ok(pageContent.includes('focus-visible:ring-primary'));
+  assert.ok(pageContent.includes('focus-visible:ring-offset-surface-container'));
+  assert.ok(pageContent.includes('min-h-[36px]'));
+  assert.ok(pageContent.includes('role="alert"'));
+  assert.ok(pageContent.includes('role="status"'));
+
   // Forbidden terms
   const forbidden = ["telemetry", "acoustic", "lexical", "CUDA", "TensorRT", "gsettings"];
   for (const term of forbidden) {
     assert.equal(pageContent.toLowerCase().includes(term.toLowerCase()), false, `Forbidden term found: ${term}`);
   }
 });
+
+test('duplicate name disambiguation pattern prevents copy accumulation', () => {
+  function disambiguate(sourceName: string, existingNames: string[]): string {
+    const numberedMatch = sourceName.match(/^(.*?)\s+copy\s+(\d+)$/i);
+    const copyMatch = sourceName.match(/^(.*?)\s+copy$/i);
+
+    let base = sourceName;
+    let nextNum = 1;
+
+    if (numberedMatch) {
+      base = numberedMatch[1];
+      nextNum = parseInt(numberedMatch[2], 10) + 1;
+    } else if (copyMatch) {
+      base = copyMatch[1];
+      nextNum = 2;
+    }
+
+    let candidate = nextNum === 1 ? `${base} copy` : `${base} copy ${nextNum}`;
+    const lowerExisting = existingNames.map((n) => n.toLowerCase());
+    while (lowerExisting.includes(candidate.toLowerCase())) {
+      nextNum++;
+      candidate = `${base} copy ${nextNum}`;
+    }
+    return candidate;
+  }
+
+  assert.equal(disambiguate("Plain", ["Plain"]), "Plain copy");
+  assert.equal(disambiguate("Plain copy", ["Plain", "Plain copy"]), "Plain copy 2");
+  assert.equal(disambiguate("Plain copy 2", ["Plain", "Plain copy", "Plain copy 2"]), "Plain copy 3");
+  assert.equal(disambiguate("Plain", ["Plain", "Plain copy"]), "Plain copy 2");
+});
+
 
 

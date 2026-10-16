@@ -639,10 +639,12 @@ impl PipelineHandle {
             if needs_reload {
                 match AsrEngine::load(&target_model_id) {
                     Ok(engine) => {
+                        info!(model_id = %target_model_id, "dynamically loaded configured ASR model");
                         *asr_guard = Some(engine);
                     }
                     Err(e) => {
-                        warn!(error = %e, target_model_id = %target_model_id, "failed to load ASR model");
+                        warn!(error = %e, model_id = %target_model_id, "failed to load configured ASR model; clearing resident model");
+                        *asr_guard = None;
                     }
                 }
             }
@@ -2146,7 +2148,10 @@ mod tests {
         pipe.check_idle_unload();
 
         // When activity elapsed >= 5 mins, check_idle_unload triggers unload
-        pipe.set_last_activity(Instant::now() - Duration::from_secs(301));
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(301))
+            .unwrap_or(Instant::now());
+        pipe.set_last_activity(past);
         pipe.check_idle_unload();
         assert!(!pipe.is_asr_loaded());
 
@@ -2162,7 +2167,10 @@ mod tests {
             assert!(loaded_pipe.is_asr_loaded());
 
             // Expired activity (5 mins elapsed): unloaded
-            loaded_pipe.set_last_activity(Instant::now() - Duration::from_secs(301));
+            let past = Instant::now()
+                .checked_sub(Duration::from_secs(301))
+                .unwrap_or(Instant::now());
+            loaded_pipe.set_last_activity(past);
             loaded_pipe.check_idle_unload();
             assert!(!loaded_pipe.is_asr_loaded());
         }

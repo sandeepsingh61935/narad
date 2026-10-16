@@ -25,6 +25,7 @@ pub fn detect_architecture(dir: &Path) -> AsrArchitecture {
     if dir.join("joiner.int8.onnx").is_file() || dir.join("joiner.onnx").is_file() {
         AsrArchitecture::Transducer
     } else if dir.join("preprocess.onnx").is_file()
+        || dir.join("preprocessor.onnx").is_file()
         || dir.join("encode.int8.onnx").is_file()
         || dir.join("encode.onnx").is_file()
     {
@@ -632,6 +633,17 @@ mod tests {
         std::fs::write(ms_dir.join("tokens.txt"), b"").unwrap();
         assert_eq!(detect_architecture(&ms_dir), AsrArchitecture::Moonshine);
         assert!(pack_looks_complete(&ms_dir));
+
+        // Moonshine with preprocessor.onnx
+        let ms2_dir = dir.path().join("ms2");
+        std::fs::create_dir_all(&ms2_dir).unwrap();
+        std::fs::write(ms2_dir.join("preprocessor.onnx"), b"").unwrap();
+        std::fs::write(ms2_dir.join("encode.int8.onnx"), b"").unwrap();
+        std::fs::write(ms2_dir.join("uncached_decode.int8.onnx"), b"").unwrap();
+        std::fs::write(ms2_dir.join("cached_decode.int8.onnx"), b"").unwrap();
+        std::fs::write(ms2_dir.join("tokens.txt"), b"").unwrap();
+        assert_eq!(detect_architecture(&ms2_dir), AsrArchitecture::Moonshine);
+        assert!(pack_looks_complete(&ms2_dir));
 
         // Whisper
         let wh_dir = dir.path().join("wh");

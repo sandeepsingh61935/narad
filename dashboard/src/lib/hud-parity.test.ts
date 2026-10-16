@@ -77,12 +77,20 @@ test("processing anchor state does not rely on color alone", () => {
 });
 
 test("companion HUD displays mode and language pair during listening and processing (FR-DOT-5)", () => {
+  const listenStart = extensionSource.indexOf("case 'listening':");
+  const procStart = extensionSource.indexOf("case 'processing':");
+  const insertedStart = extensionSource.indexOf("case 'inserted':");
+  assert.ok(listenStart >= 0 && procStart > listenStart && insertedStart > procStart);
+
+  const listenBlock = extensionSource.slice(listenStart, procStart);
+  const procBlock = extensionSource.slice(procStart, insertedStart);
+
   assert.match(
-    extensionSource,
+    listenBlock,
     /this\._pillPrimary\.text\s*=\s*`\$\{this\._mode\s*\|\|\s*DEFAULT_MODE\}\s*·\s*EN`/,
   );
   assert.match(
-    extensionSource,
+    procBlock,
     /this\._pillSecondary\.text\s*=\s*`\$\{this\._mode\s*\|\|\s*DEFAULT_MODE\}\s*·\s*EN`/,
   );
 });

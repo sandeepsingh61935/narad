@@ -91,7 +91,7 @@
       {/if}
     </div>
 
-    <div class="bg-surface-container-low rounded-xl overflow-hidden flex flex-col">
+    <div class="bg-surface-container-low rounded-xl overflow-hidden flex flex-col border border-outline-variant/30">
       <div class="p-4 flex items-center justify-between gap-4">
         <div class="flex flex-col min-w-0">
           <label class="font-body-default text-body-default text-on-surface" for="input-target">
@@ -103,7 +103,7 @@
         </div>
         <input
           id="input-target"
-          class="w-56 bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg"
+          class="w-56 min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
           type="text"
           autocomplete="off"
           spellcheck="false"
@@ -124,7 +124,7 @@
           id="sounds-enabled"
           aria-checked={config.audio.sounds_enabled}
           aria-label="Sound cues"
-          class="w-11 h-6 {config.audio.sounds_enabled ? 'bg-primary-container' : 'bg-surface-container-highest'} rounded-full relative p-0.5 transition-colors cursor-pointer flex items-center shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-container"
+          class="w-11 h-6 {config.audio.sounds_enabled ? 'bg-primary-container' : 'bg-surface-container-highest'} rounded-full relative p-0.5 transition-colors cursor-pointer flex items-center shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
           role="switch"
           type="button"
           disabled={!loaded}
@@ -154,7 +154,7 @@
           id="noise-suppression"
           aria-checked={config.audio.noise_suppression}
           aria-label="Noise suppression"
-          class="w-11 h-6 {config.audio.noise_suppression ? 'bg-primary-container' : 'bg-surface-container-highest'} rounded-full relative p-0.5 transition-colors cursor-pointer flex items-center shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-container"
+          class="w-11 h-6 {config.audio.noise_suppression ? 'bg-primary-container' : 'bg-surface-container-highest'} rounded-full relative p-0.5 transition-colors cursor-pointer flex items-center shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
           role="switch"
           type="button"
           disabled={!loaded}
@@ -184,7 +184,7 @@
         </div>
         <input
           id="silence-stop"
-          class="w-24 bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg"
+          class="w-24 min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
           type="text"
           inputmode="numeric"
           autocomplete="off"
@@ -205,7 +205,7 @@
         </div>
         <input
           id="max-duration"
-          class="w-24 bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg"
+          class="w-24 min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-body-default px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
           type="text"
           inputmode="numeric"
           autocomplete="off"

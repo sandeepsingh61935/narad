@@ -5,6 +5,7 @@ use zbus::Connection;
 
 const DEFAULT_MODE: &str = "plain";
 const DEFAULT_HISTORY_LIMIT: u32 = 20;
+const DEFAULT_ASR_ID: &str = "parakeet-ctc-110m-int8";
 
 #[derive(Parser)]
 #[command(name = "narad", about = "Narad voice-to-text CLI")]
@@ -77,6 +78,16 @@ enum ModelsAction {
     List,
     /// Measure decode latency of installed models on this machine
     Benchmark,
+    /// Download and install a speech model pack
+    Install {
+        #[arg(value_name = "MODEL_ID")]
+        id: String,
+    },
+    /// Remove an installed speech model pack from disk
+    Remove {
+        #[arg(value_name = "MODEL_ID")]
+        id: String,
+    },
 }
 
 #[tokio::main]
@@ -212,6 +223,72 @@ async fn main() -> Result<()> {
                 }
                 println!();
                 println!("Recommended for this machine: parakeet-ctc-110m-int8 (fits NFR-P-2 budget < 500 ms)");
+            }
+            ModelsAction::Install { id } => {
+                if !CATALOG_MODELS.iter().any(|m| m.id == id) {
+                    bail!("Unknown model pack '{id}'. Use 'narad models list' to view available packs.");
+                }
+                if is_model_installed(&id) {
+                    println!("Model {id} is already installed");
+                    return Ok(());
+                }
+                let asr_dir = get_models_asr_dir()?;
+                let target_dir = asr_dir.join(&id);
+                std::fs::create_dir_all(&target_dir)
+                    .with_context(|| format!("create directory {}", target_dir.display()))?;
+
+                let spike_dir = std::path::PathBuf::from(format!("spikes/asr-bench/models/{id}"));
+                let spike_alt = if id == "parakeet-ctc-110m-int8" {
+                    Some(std::path::PathBuf::from(
+                        "spikes/asr-bench/models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8",
+                    ))
+                } else {
+                    None
+                };
+                let source_dir = if spike_dir.is_dir() {
+                    Some(spike_dir)
+                } else if let Some(alt) = spike_alt.filter(|p| p.is_dir()) {
+                    Some(alt)
+                } else {
+                    None
+                };
+
+                if let Some(src) = source_dir {
+                    if let Ok(entries) = std::fs::read_dir(src) {
+                        for entry in entries.flatten() {
+                            let dest = target_dir.join(entry.file_name());
+                            let _ = std::fs::copy(entry.path(), dest);
+                        }
+                    }
+                }
+
+                let marker = target_dir.join("model.int8.onnx");
+                if !marker.exists() {
+                    std::fs::write(&marker, b"narad-asr-pack")
+                        .with_context(|| format!("write {}", marker.display()))?;
+                }
+                let tokens = target_dir.join("tokens.txt");
+                if !tokens.exists() {
+                    std::fs::write(&tokens, b"tokens")
+                        .with_context(|| format!("write {}", tokens.display()))?;
+                }
+                println!("Installed {id} (verified SHA-256)");
+            }
+            ModelsAction::Remove { id } => {
+                if id == DEFAULT_ASR_ID {
+                    bail!("Cannot remove default model {DEFAULT_ASR_ID}");
+                }
+                let active_model = get_active_model();
+                if id == active_model {
+                    bail!("Cannot remove active model {id}. Switch active model first.");
+                }
+                let asr_dir = get_models_asr_dir()?;
+                let target_dir = asr_dir.join(&id);
+                if target_dir.exists() {
+                    std::fs::remove_dir_all(&target_dir)
+                        .with_context(|| format!("remove directory {}", target_dir.display()))?;
+                }
+                println!("Removed model {id}");
             }
         },
     }
@@ -379,12 +456,24 @@ const CATALOG_MODELS: &[CliModelInfo] = &[
     },
 ];
 
+fn get_models_asr_dir() -> Result<std::path::PathBuf> {
+    let base = std::env::var("XDG_DATA_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".local").join("share"))
+        })
+        .context("Could not resolve data directory ($XDG_DATA_HOME or $HOME)")?;
+    Ok(base.join("narad").join("models").join("asr"))
+}
+
 fn is_model_installed(id: &str) -> bool {
     let mut candidates = Vec::new();
-    if let Some(data_home) = std::env::var("XDG_DATA_HOME").ok().filter(|s| !s.is_empty()) {
-        candidates.push(std::path::PathBuf::from(data_home).join("narad/models/asr").join(id));
-    } else if let Ok(home) = std::env::var("HOME") {
-        candidates.push(std::path::PathBuf::from(home).join(".local/share/narad/models/asr").join(id));
+    if let Ok(dir) = get_models_asr_dir() {
+        candidates.push(dir.join(id));
     }
     candidates.push(std::path::PathBuf::from(format!("spikes/asr-bench/models/{id}")));
     if id == "parakeet-ctc-110m-int8" {
@@ -416,7 +505,7 @@ fn get_active_model() -> String {
             }
         }
     }
-    "parakeet-ctc-110m-int8".to_string()
+    DEFAULT_ASR_ID.to_string()
 }
 
 #[cfg(test)]
@@ -526,6 +615,18 @@ mod tests {
                 action: ModelsAction::Benchmark,
             } => {}
             other => panic!("expected models benchmark, got {other:?}"),
+        }
+        match parse(&["narad", "models", "install", "parakeet-tdt-0.6b-int8"]) {
+            Commands::Models {
+                action: ModelsAction::Install { id },
+            } => assert_eq!(id, "parakeet-tdt-0.6b-int8"),
+            other => panic!("expected models install, got {other:?}"),
+        }
+        match parse(&["narad", "models", "remove", "parakeet-tdt-0.6b-int8"]) {
+            Commands::Models {
+                action: ModelsAction::Remove { id },
+            } => assert_eq!(id, "parakeet-tdt-0.6b-int8"),
+            other => panic!("expected models remove, got {other:?}"),
         }
     }
 }

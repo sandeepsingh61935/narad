@@ -16,6 +16,8 @@ export function canDeleteModel(modelId: string, isDefault: boolean, isActive: bo
   return true;
 }
 
+const HEX_64_REGEX = /^[0-9a-f]{64}$/;
+
 /**
  * Compare actual hash against expected pinned SHA-256 checksum (NFR-S-5).
  */
@@ -23,7 +25,7 @@ export function verifySha256(expectedHash: string, actualHash: string): boolean 
   if (!expectedHash || !actualHash) return false;
   const exp = expectedHash.trim().toLowerCase();
   const act = actualHash.trim().toLowerCase();
-  if (exp.length !== 64 || act.length !== 64) return false;
+  if (!HEX_64_REGEX.test(exp) || !HEX_64_REGEX.test(act)) return false;
   return exp === act;
 }
 

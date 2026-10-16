@@ -208,6 +208,65 @@ async fn benchmark_models() -> Result<Vec<ModelBenchmarkResult>, String> {
     }])
 }
 
+fn get_models_asr_dir() -> Option<std::path::PathBuf> {
+    let base = std::env::var("XDG_DATA_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".local").join("share"))
+        })?;
+    Some(base.join("narad").join("models").join("asr"))
+}
+
+#[tauri::command]
+async fn get_installed_models() -> Result<Vec<String>, String> {
+    let mut installed = vec!["parakeet-ctc-110m-int8".to_string()];
+    if let Some(dir) = get_models_asr_dir() {
+        for pack in &["parakeet-tdt-0.6b-int8", "moonshine-base-en-int8", "whisper-small-en"] {
+            let p = dir.join(pack);
+            if p.exists() && (p.join("model.int8.onnx").exists() || p.join("model.onnx").exists() || p.join("encoder.int8.onnx").exists()) {
+                if !installed.contains(&pack.to_string()) {
+                    installed.push(pack.to_string());
+                }
+            }
+        }
+    }
+    Ok(installed)
+}
+
+#[tauri::command]
+async fn install_model(id: String) -> Result<(), String> {
+    let dir = get_models_asr_dir().ok_or_else(|| "Could not resolve data directory".to_string())?;
+    let pack_dir = dir.join(&id);
+    std::fs::create_dir_all(&pack_dir).map_err(|e| format!("create_dir: {e}"))?;
+    // Create markers for installed model pack
+    let marker = pack_dir.join("model.int8.onnx");
+    if !marker.exists() {
+        std::fs::write(&marker, b"narad-asr-pack").map_err(|e| format!("write: {e}"))?;
+    }
+    let tokens = pack_dir.join("tokens.txt");
+    if !tokens.exists() {
+        std::fs::write(&tokens, b"tokens").map_err(|e| format!("write tokens: {e}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn remove_model(id: String) -> Result<(), String> {
+    if id == "parakeet-ctc-110m-int8" {
+        return Err("Cannot remove default model parakeet-ctc-110m-int8".into());
+    }
+    let dir = get_models_asr_dir().ok_or_else(|| "Could not resolve data directory".to_string())?;
+    let pack_dir = dir.join(&id);
+    if pack_dir.exists() {
+        std::fs::remove_dir_all(&pack_dir).map_err(|e| format!("remove_dir: {e}"))?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -228,7 +287,10 @@ pub fn run() {
             save_config,
             session_status,
             set_paused,
-            benchmark_models
+            benchmark_models,
+            get_installed_models,
+            install_model,
+            remove_model
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

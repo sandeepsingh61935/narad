@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   canDeleteModel,
   verifySha256,
@@ -32,3 +35,39 @@ test('formatModelSize formats positive megabytes and handles invalid inputs', ()
   assert.equal(formatModelSize(-10), '');
   assert.equal(formatModelSize(NaN), '');
 });
+
+test('verifySha256 rejects invalid non-hex characters even if 64 chars long', () => {
+  const invalidHex = 'g'.repeat(64);
+  assert.equal(verifySha256(invalidHex, invalidHex), false);
+  const withSpaces = ' ' + 'a'.repeat(63);
+  assert.equal(verifySha256(withSpaces, withSpaces), false);
+  const withPunctuation = 'a'.repeat(63) + '!';
+  assert.equal(verifySha256(withPunctuation, withPunctuation), false);
+});
+
+test('canDeleteModel enforces installation status rules for catalog models', () => {
+  assert.equal(canDeleteModel(DEFAULT_SPEECH_MODEL_ID, false, false), false);
+  assert.equal(canDeleteModel(DEFAULT_SPEECH_MODEL_ID, true, false), false);
+  assert.equal(canDeleteModel('parakeet-tdt-0.6b-int8', false, true), false);
+  assert.equal(canDeleteModel('parakeet-tdt-0.6b-int8', false, false), true);
+  assert.equal(canDeleteModel('moonshine-base-en-int8', false, false), true);
+  assert.equal(canDeleteModel('whisper-small-en', false, false), true);
+});
+
+test('models page wires install, delete, and verification handlers', () => {
+  const pageSource = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '../routes/settings/models/+page.svelte'),
+    'utf8'
+  );
+  assert.match(pageSource, /get_installed_models/);
+  assert.match(pageSource, /install_model/);
+  assert.match(pageSource, /remove_model/);
+  assert.match(pageSource, /canDeleteModel/);
+  assert.match(pageSource, /formatModelSize/);
+  assert.match(pageSource, /Model installed\./);
+  assert.match(pageSource, /Model removed\./);
+  assert.match(pageSource, /Download/);
+  assert.match(pageSource, /Delete/);
+  assert.match(pageSource, /Installed/);
+});
+

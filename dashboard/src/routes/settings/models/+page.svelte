@@ -14,6 +14,7 @@
     type ModelBenchmark,
   } from "$lib/benchmark";
   import { SAVED_NOTICE, saveDashboardConfig } from "$lib/settings-form";
+  import { canDeleteModel, formatModelSize } from "$lib/model-install";
 
   let config = $state<DashboardConfig>(defaultConfig());
   let loaded = $state(false);
@@ -21,6 +22,10 @@
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
   let saveChain: Promise<void> = Promise.resolve();
+
+  let installedModels = $state<string[]>([DEFAULT_SPEECH_MODEL_ID]);
+  let installingModelId = $state<string | null>(null);
+  let deletingModelId = $state<string | null>(null);
 
   let benchmarks = $state<ModelBenchmark[]>([]);
   let benchmarking = $state(false);
@@ -100,8 +105,43 @@
     error = null;
   }
 
+  async function handleInstall(pack: (typeof MODEL_CATALOG)[number]) {
+    installingModelId = pack.id;
+    error = null;
+    notice = null;
+    try {
+      await invoke("install_model", { id: pack.id });
+      installedModels = [...new Set([...installedModels, pack.id])];
+      notice = "Model installed.";
+    } catch {
+      error = "Failed to install model.";
+    } finally {
+      installingModelId = null;
+    }
+  }
+
+  async function handleRemove(pack: (typeof MODEL_CATALOG)[number]) {
+    deletingModelId = pack.id;
+    error = null;
+    notice = null;
+    try {
+      await invoke("remove_model", { id: pack.id });
+      installedModels = installedModels.filter((id) => id !== pack.id);
+      notice = "Model removed.";
+    } catch {
+      error = "Failed to remove model.";
+    } finally {
+      deletingModelId = null;
+    }
+  }
+
   onMount(() => {
     void load();
+    invoke<string[]>("get_installed_models")
+      .then((res) => {
+        if (res && res.length > 0) installedModels = res;
+      })
+      .catch(() => {});
   });
 </script>
 
@@ -188,7 +228,7 @@
           </div>
           <div class="flex items-center gap-2 shrink-0">
             <span class="font-label-code text-label-code text-on-surface-variant text-[12px]">
-              {activeModel.sizeMb} MB
+              {formatModelSize(activeModel.sizeMb)}
             </span>
           </div>
         </div>
@@ -267,6 +307,12 @@
                     >
                       Active
                     </span>
+                  {:else if installedModels.includes(pack.id)}
+                    <span
+                      class="font-label-code text-label-code text-on-surface-variant bg-surface-container-high px-2 py-0.5 rounded text-[11px]"
+                    >
+                      Installed
+                    </span>
                   {/if}
                   {#if bench}
                     <span
@@ -284,10 +330,10 @@
                   {/if}
                 </div>
                 <span class="font-label-code text-label-code text-on-surface-variant text-[12px] mt-0.5">
-                  {pack.id} · {pack.sizeMb} MB
+                  {pack.id} · {formatModelSize(pack.sizeMb)}
                 </span>
               </div>
-              <div class="shrink-0">
+              <div class="shrink-0 flex items-center gap-2">
                 {#if active}
                   <span
                     class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 text-primary font-body-muted text-body-muted border border-primary/20"
@@ -295,14 +341,33 @@
                     <span class="material-symbols-outlined text-[16px]">check</span>
                     Active
                   </span>
-                {:else}
+                {:else if installedModels.includes(pack.id)}
                   <button
                     type="button"
                     class="min-h-[36px] px-3.5 py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-bright text-on-surface font-body-muted text-body-muted border border-outline-variant/30 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={!loaded || saving}
+                    disabled={!loaded || saving || installingModelId !== null || deletingModelId !== null}
                     onclick={() => setActive(pack.id)}
                   >
                     Set active
+                  </button>
+                  {#if canDeleteModel(pack.id, pack.id === DEFAULT_SPEECH_MODEL_ID, pack.id === activeModel.id)}
+                    <button
+                      type="button"
+                      class="min-h-[36px] px-3.5 py-1.5 rounded-lg text-error hover:bg-error/10 border border-error/30 font-body-muted text-body-muted transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={deletingModelId === pack.id || installingModelId !== null}
+                      onclick={() => handleRemove(pack)}
+                    >
+                      {deletingModelId === pack.id ? "Deleting…" : "Delete"}
+                    </button>
+                  {/if}
+                {:else}
+                  <button
+                    type="button"
+                    class="min-h-[36px] px-3.5 py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-container border border-outline-variant/30 text-on-surface font-body-muted text-body-muted transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={installingModelId === pack.id || deletingModelId !== null}
+                    onclick={() => handleInstall(pack)}
+                  >
+                    {installingModelId === pack.id ? "Downloading…" : "Download"}
                   </button>
                 {/if}
               </div>

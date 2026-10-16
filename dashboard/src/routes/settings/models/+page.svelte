@@ -6,12 +6,12 @@
     DEFAULT_SPEECH_MODEL_ID,
     MODEL_CATALOG,
     findModelById,
-    isModelActive,
   } from "$lib/models";
   import { SAVED_NOTICE, saveDashboardConfig } from "$lib/settings-form";
 
   let config = $state<DashboardConfig>(defaultConfig());
   let loaded = $state(false);
+  let saving = $state(false);
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
   let saveChain: Promise<void> = Promise.resolve();
@@ -34,7 +34,7 @@
   }
 
   function setActive(modelId: string) {
-    if (!loaded) return;
+    if (!loaded || saving) return;
     const toSave: DashboardConfig = {
       ...config,
       models: {
@@ -43,10 +43,15 @@
       },
     };
     error = null;
-    saveChain = saveChain.then(
-      () => persist(toSave),
-      () => persist(toSave),
-    );
+    saving = true;
+    saveChain = saveChain
+      .then(
+        () => persist(toSave),
+        () => persist(toSave),
+      )
+      .finally(() => {
+        saving = false;
+      });
   }
 
   async function persist(toSave: DashboardConfig) {
@@ -168,11 +173,12 @@
       <h2 class="font-label-code text-label-code text-on-surface-variant uppercase tracking-wider px-2">
         Available models
       </h2>
-      <div class="flex flex-col gap-3">
+      <div class="flex flex-col gap-3" role="list">
         {#each MODEL_CATALOG as pack (pack.id)}
-          {@const active = isModelActive(pack.id, config)}
+          {@const active = pack.id === activeModel.id}
           <div
             class="bg-surface-container-low rounded-xl p-5 flex flex-col gap-3 shadow-sm border border-outline-variant/30 transition-colors"
+            role="listitem"
           >
             <div class="flex items-start justify-between gap-4">
               <div class="flex flex-col min-w-0">
@@ -211,7 +217,7 @@
                   <button
                     type="button"
                     class="min-h-[36px] px-3.5 py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-bright text-on-surface font-body-muted text-body-muted border border-outline-variant/30 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={!loaded}
+                    disabled={!loaded || saving}
                     onclick={() => setActive(pack.id)}
                   >
                     Set active

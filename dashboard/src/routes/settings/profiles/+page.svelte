@@ -258,7 +258,7 @@
         </div>
 
         <div class="flex items-center justify-between gap-4 pt-2 border-t border-outline-variant/30 flex-wrap">
-          <label class="flex items-center gap-2 text-sm text-on-surface cursor-pointer select-none min-h-[36px]">
+          <label for="new-paste-with-shift" class="flex items-center gap-2 text-sm text-on-surface cursor-pointer select-none min-h-[36px]">
             <input
               type="checkbox"
               id="new-paste-with-shift"

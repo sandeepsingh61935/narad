@@ -3,6 +3,7 @@
 //! Entry primary keys are `i64` values from SQLite `INTEGER PRIMARY KEY AUTOINCREMENT`
 //! (the stable `rowid` for FTS5 external-content sync).
 
+mod document;
 mod entry;
 
 use std::path::Path;
@@ -11,6 +12,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, Row};
 use thiserror::Error;
 
+pub use document::{
+    Document, DocumentChunk, DocumentStatus, DocumentSummary, NewDocumentChunk, SpeakerBlock,
+};
 pub use entry::{HistoryEntry, InsertStatus, NewHistoryEntry};
 
 fn ms_value(ms: Option<i64>) -> rusqlite::types::Value {
@@ -26,6 +30,8 @@ pub enum StoreError {
     Db(#[from] rusqlite::Error),
     #[error("invalid insert_status in database")]
     InvalidInsertStatus,
+    #[error("invalid document_status in database: {0}")]
+    InvalidDocumentStatus(String),
     #[error("system time before Unix epoch")]
     InvalidTimestamp,
     #[error("no history row {0}")]
@@ -66,7 +72,7 @@ pub struct HistoryFilter {
 
 /// History database: `entries` table plus FTS5 virtual table `entries_fts`.
 pub struct HistoryStore {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 impl HistoryStore {
@@ -631,7 +637,7 @@ fn push_json_string(out: &mut String, value: &str) {
     out.push('"');
 }
 
-fn now_millis() -> Result<i64, StoreError> {
+pub(crate) fn now_millis() -> Result<i64, StoreError> {
     let dur = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| StoreError::InvalidTimestamp)?;
@@ -773,6 +779,26 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
             PRIMARY KEY (entry_id, tag_id),
             FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE,
             FOREIGN KEY (tag_id) REFERENCES tags(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active'
+        );
+
+        CREATE TABLE IF NOT EXISTS document_chunks (
+            doc_id INTEGER NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            speaker_label TEXT,
+            text TEXT NOT NULL,
+            start_ms INTEGER NOT NULL,
+            duration_ms INTEGER NOT NULL,
+            PRIMARY KEY (doc_id, chunk_index),
+            FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
         );
         ",
     )?;

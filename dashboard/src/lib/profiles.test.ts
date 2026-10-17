@@ -59,15 +59,20 @@ test("matchAppProfile matches reverse and forward domain suffixes", () => {
   const profiles: AppProfile[] = [
     { app_id: "code", mode: "code" },
     { app_id: "org.gnome.Terminal", mode: "plain", paste_with_shift: true },
+    { app_id: "slack", mode: "email" },
   ];
 
   // Target has domain prefix, profile is short name:
   assert.equal(matchAppProfile(profiles, "com.visualstudio.code")?.app_id, "code");
-  assert.equal(matchAppProfile(profiles, "com.slack.Slack")?.app_id, undefined);
+  assert.equal(matchAppProfile(profiles, "com.slack.Slack")?.app_id, "slack");
+  assert.equal(matchAppProfile(profiles, "COM.SLACK.SLACK")?.app_id, "slack");
+  assert.equal(matchAppProfile(profiles, "  com.slack.Slack  ")?.app_id, "slack");
+  assert.equal(matchAppProfile(profiles, "org.mozilla.firefox")?.app_id, undefined);
 
   // Profile has domain prefix, target is short name:
   assert.equal(matchAppProfile(profiles, "terminal")?.app_id, "org.gnome.Terminal");
   assert.equal(matchAppProfile(profiles, "Terminal")?.app_id, "org.gnome.Terminal");
+  assert.equal(matchAppProfile(profiles, "  terminal  ")?.app_id, "org.gnome.Terminal");
 });
 
 test("validateProfile checks for required and unique app ID", () => {
@@ -92,9 +97,15 @@ test("validateProfile checks for required and unique app ID", () => {
   const dupCase = validateProfile({ app_id: "  CODE  ", mode: "code" }, existing);
   assert.equal(dupCase.valid, false);
 
+  const dupSlack = validateProfile({ app_id: "  Slack  ", mode: "email" }, existing);
+  assert.equal(dupSlack.valid, false);
+
   // Editing existing profile (same app_id as currentAppId) is allowed
   const editSelf = validateProfile({ app_id: "code", mode: "plain" }, existing, "code");
   assert.equal(editSelf.valid, true);
+
+  const editSelfCase = validateProfile({ app_id: "CODE", mode: "plain" }, existing, "code");
+  assert.equal(editSelfCase.valid, true);
 
   // Valid new profile
   const valid = validateProfile({ app_id: "discord", mode: "email" }, existing);
@@ -127,7 +138,11 @@ test("app profiles page exists, wires auto-save, and follows sentence case copy"
 
   // Accessible labels and hit targets
   assert.ok(page.includes("Remove profile for"));
+  assert.ok(page.includes("Default mode for"));
   assert.ok(page.includes("min-h-[36px]"));
+  assert.ok(page.includes("focus-visible:ring-offset-surface"));
+  assert.ok(page.includes('role="status"'));
+  assert.ok(page.includes('aria-live="polite"'));
 
   // Auto-save integration
   assert.ok(page.includes("SAVED_NOTICE"));

@@ -119,12 +119,13 @@
       <p class="font-body-default text-body-default text-on-surface-variant">
         Configure default dictation mode and paste shortcut for specific applications.
       </p>
-      {#if error}
-        <p class="font-body-muted text-body-muted text-error" role="alert" aria-live="assertive">{error}</p>
-      {/if}
-      {#if notice}
-        <p class="font-body-muted text-body-muted text-on-surface" role="status" aria-live="polite">{notice}</p>
-      {/if}
+      <div class="min-h-[1.25rem]">
+        {#if error}
+          <p class="font-body-muted text-body-muted text-error" role="alert" aria-live="assertive">{error}</p>
+        {:else if notice}
+          <p class="font-body-muted text-body-muted text-on-surface" role="status" aria-live="polite">{notice}</p>
+        {/if}
+      </div>
     </div>
 
     <!-- Configured profiles list -->
@@ -152,13 +153,13 @@
               </div>
               <div class="flex items-center gap-3 sm:gap-4 flex-wrap w-full sm:w-auto justify-end">
                 <div class="flex items-center gap-2">
-                  <label class="sr-only" for="mode-{profile.app_id}">Default mode</label>
+                  <label class="sr-only" for="mode-{profile.app_id}">Default mode for {profile.app_id}</label>
                   <select
                     id="mode-{profile.app_id}"
-                    class="bg-surface-container-high text-on-surface font-body-default text-sm pl-3 pr-8 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed min-h-[36px]"
+                    class="bg-surface-container-high text-on-surface font-body-default text-sm pl-3 pr-8 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-50 disabled:cursor-not-allowed min-h-[36px]"
                     bind:value={profile.mode}
                     onchange={commit}
-                    disabled={!loaded || saving}
+                    disabled={!loaded}
                   >
                     {#each modes as mode}
                       <option value={mode}>{mode}</option>
@@ -168,19 +169,20 @@
                 <label class="flex items-center gap-2 text-sm text-on-surface cursor-pointer select-none min-h-[36px]">
                   <input
                     type="checkbox"
-                    class="w-4 h-4 rounded border-outline-variant bg-surface-container-high text-primary focus:ring-primary focus:ring-offset-0 disabled:opacity-50"
+                    aria-label="Ctrl+Shift+V paste for {profile.app_id}"
+                    class="w-4 h-4 rounded border-outline-variant bg-surface-container-high text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-50"
                     checked={profile.paste_with_shift === true}
                     onchange={(e) => {
                       profile.paste_with_shift = (e.currentTarget as HTMLInputElement).checked;
                       commit();
                     }}
-                    disabled={!loaded || saving}
+                    disabled={!loaded}
                   />
                   <span>Ctrl+Shift+V paste</span>
                 </label>
                 <button
                   type="button"
-                  class="min-h-[36px] min-w-[36px] px-3 py-1.5 rounded-lg text-sm font-medium text-error hover:bg-error/10 border border-error/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                  class="min-h-[36px] min-w-[36px] px-3 py-1.5 rounded-lg text-sm font-medium text-error hover:bg-error/10 border border-error/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
                   aria-label="Remove profile for {profile.app_id}"
                   onclick={() => removeProfile(profile.app_id)}
                   disabled={!loaded || saving}
@@ -207,9 +209,10 @@
             {#each POPULAR_APP_SUGGESTIONS as suggestion}
               <button
                 type="button"
-                class="min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-medium bg-surface-container-high hover:bg-surface-container text-on-surface border border-outline-variant/30 transition-colors cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                aria-label="Use suggestion for {suggestion.name}"
+                class="min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-medium bg-surface-container-high hover:bg-surface-container text-on-surface border border-outline-variant/30 transition-colors cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
                 onclick={() => applySuggestion(suggestion)}
-                disabled={!loaded || saving}
+                disabled={!loaded}
               >
                 + {suggestion.name}
               </button>
@@ -224,14 +227,16 @@
             </label>
             <input
               id="new-app-id"
-              class="min-h-[36px] bg-surface-container-high text-on-surface font-mono text-sm px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed placeholder:font-sans placeholder:text-on-surface-variant/60"
+              class="min-h-[36px] bg-surface-container-high text-on-surface font-mono text-sm px-3 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-50 disabled:cursor-not-allowed placeholder:font-sans placeholder:text-on-surface-variant/60"
               type="text"
               placeholder="e.g. code, slack, org.gnome.Terminal"
               bind:value={newAppId}
               disabled={!loaded}
+              aria-invalid={newAppId.trim().length > 0 && !addValidation.valid}
+              aria-describedby={newAppId.trim().length > 0 && !addValidation.valid && addValidation.error ? "app-id-error" : undefined}
             />
             {#if newAppId.trim().length > 0 && !addValidation.valid && addValidation.error}
-              <span class="font-body-muted text-xs text-error">{addValidation.error}</span>
+              <span id="app-id-error" class="font-body-muted text-xs text-error" role="alert">{addValidation.error}</span>
             {/if}
           </div>
 
@@ -241,7 +246,7 @@
             </label>
             <select
               id="new-mode"
-              class="min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-sm pl-3 pr-8 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
+              class="min-h-[36px] bg-surface-container-high text-on-surface font-body-default text-sm pl-3 pr-8 py-1.5 rounded-lg border border-outline-variant/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-50 disabled:cursor-not-allowed"
               bind:value={newMode}
               disabled={!loaded}
             >
@@ -256,7 +261,8 @@
           <label class="flex items-center gap-2 text-sm text-on-surface cursor-pointer select-none min-h-[36px]">
             <input
               type="checkbox"
-              class="w-4 h-4 rounded border-outline-variant bg-surface-container-high text-primary focus:ring-primary focus:ring-offset-0 disabled:opacity-50"
+              id="new-paste-with-shift"
+              class="w-4 h-4 rounded border-outline-variant bg-surface-container-high text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-50"
               bind:checked={newPasteWithShift}
               disabled={!loaded}
             />
@@ -265,7 +271,7 @@
 
           <button
             type="button"
-            class="min-h-[36px] px-4 py-2 rounded-lg text-sm font-medium bg-primary text-on-primary hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+            class="min-h-[36px] px-4 py-2 rounded-lg text-sm font-medium bg-primary text-on-primary hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
             disabled={!loaded || saving || !canAdd}
             onclick={handleAddProfile}
           >

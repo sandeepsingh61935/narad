@@ -14,6 +14,7 @@ mod paths;
 mod pipeline;
 mod retained;
 mod text;
+pub mod wakeword;
 
 use anyhow::{Context, Result};
 use config::{load_or_create, resolve_config_path, NaradConfig};

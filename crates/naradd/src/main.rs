@@ -9,6 +9,7 @@ mod history_days;
 mod hotkeys;
 mod insert;
 mod ipc;
+pub mod longform;
 mod paths;
 mod pipeline;
 mod retained;

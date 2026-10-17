@@ -156,7 +156,8 @@ impl Document {
                         last.text.push_str(trimmed);
                     }
                     let chunk_end = chunk.start_ms.saturating_add(chunk.duration_ms);
-                    last.duration_ms = chunk_end.saturating_sub(last.start_ms);
+                    last.duration_ms =
+                        last.duration_ms.max(chunk_end.saturating_sub(last.start_ms));
                     continue;
                 }
             }
@@ -740,5 +741,38 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn overlapping_chunks_maintain_monotonic_duration_in_speaker_blocks() {
+        let doc = Document {
+            id: 1,
+            title: "Overlapping Test".to_string(),
+            created_at: 1000,
+            updated_at: 1000,
+            duration_ms: 10000,
+            status: DocumentStatus::Active,
+            chunks: vec![
+                DocumentChunk {
+                    chunk_index: 0,
+                    speaker_label: Some("Alice".to_string()),
+                    text: "Part one.".to_string(),
+                    start_ms: 0,
+                    duration_ms: 5000,
+                },
+                DocumentChunk {
+                    chunk_index: 1,
+                    speaker_label: Some("Alice".to_string()),
+                    text: "Part two overlapping.".to_string(),
+                    start_ms: 2000,
+                    duration_ms: 1000,
+                },
+            ],
+        };
+
+        let blocks = doc.speaker_blocks();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].start_ms, 0);
+        assert_eq!(blocks[0].duration_ms, 5000);
     }
 }

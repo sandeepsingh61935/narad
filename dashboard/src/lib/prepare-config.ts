@@ -1,4 +1,4 @@
-import { ACTIVE_MODES, type DashboardConfig, type Replacement } from "./config";
+import { ACTIVE_MODES, type DashboardConfig, type Replacement, type AppProfile } from "./config";
 
 export type PreparedConfig =
   | { ok: true; config: DashboardConfig }
@@ -46,6 +46,30 @@ function cleanPhrases(pairs: Replacement[] | undefined): Replacement[] {
     .filter((pair) => pair.spoken.length > 0);
 }
 
+export function cleanProfiles(profiles: AppProfile[] | undefined): AppProfile[] {
+  if (!Array.isArray(profiles)) return [];
+  const seen = new Set<string>();
+  const cleaned: AppProfile[] = [];
+  for (const p of profiles) {
+    if (!p || typeof p.app_id !== "string") continue;
+    const app_id = p.app_id.trim();
+    if (app_id.length === 0) continue;
+    const lowerKey = app_id.toLowerCase();
+    if (seen.has(lowerKey)) continue;
+    seen.add(lowerKey);
+    const mode = typeof p.mode === "string" ? p.mode.trim() : "plain";
+    const profile: AppProfile = {
+      app_id,
+      mode: mode.length > 0 ? mode : "plain",
+    };
+    if (p.paste_with_shift === true) {
+      profile.paste_with_shift = true;
+    }
+    cleaned.push(profile);
+  }
+  return cleaned;
+}
+
 /** Config that should be passed to `save_config`, or a rejection. */
 export function prepareConfigForSave(config: ConfigDraft): PreparedConfig {
   const hold_tap_threshold_ms = roundedThreshold(config.activation.hold_tap_threshold_ms);
@@ -83,6 +107,7 @@ export function prepareConfigForSave(config: ConfigDraft): PreparedConfig {
       },
       replacements: cleanPhrases(config.replacements),
       vocabulary: cleanPhrases(config.vocabulary),
+      profiles: cleanProfiles(config.profiles),
     },
   };
 }

@@ -18,6 +18,9 @@ pub struct DashboardConfig {
     pub replacements: Vec<Replacement>,
     /// Names and jargon applied after replacements (FR-TXT-2).
     pub vocabulary: Vec<Replacement>,
+    /// Per-app dictation profiles (FR-CTX-2).
+    #[serde(default)]
+    pub profiles: Vec<AppProfile>,
 }
 
 impl Default for DashboardConfig {
@@ -30,8 +33,18 @@ impl Default for DashboardConfig {
             history: HistoryConfig::default(),
             replacements: Vec::new(),
             vocabulary: Vec::new(),
+            profiles: Vec::new(),
         }
     }
+}
+
+/// Dictation profile for a specific application (FR-CTX-2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppProfile {
+    pub app_id: String,
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paste_with_shift: Option<bool>,
 }
 
 /// One user replacement. Matching is case-insensitive and whole-phrase.
@@ -324,5 +337,45 @@ written = "Narad"
         assert!(text.contains("noise_suppression = false"));
         let loaded: DashboardConfig = toml::from_str(&text).expect("parse");
         assert!(!loaded.audio.noise_suppression);
+    }
+
+    #[test]
+    fn default_profiles_is_empty() {
+        let cfg = DashboardConfig::default();
+        assert!(cfg.profiles.is_empty());
+    }
+
+    #[test]
+    fn reserialize_keeps_profiles() {
+        let raw = r#"
+[[profiles]]
+app_id = "code"
+mode = "code"
+paste_with_shift = false
+
+[[profiles]]
+app_id = "org.gnome.Terminal"
+mode = "plain"
+paste_with_shift = true
+
+[activation]
+dictate_hotkey = "Ctrl+Alt+D"
+"#;
+        let cfg: DashboardConfig = toml::from_str(raw).expect("parse");
+        assert_eq!(cfg.profiles.len(), 2);
+        assert_eq!(cfg.profiles[0].app_id, "code");
+        assert_eq!(cfg.profiles[0].mode, "code");
+        assert_eq!(cfg.profiles[0].paste_with_shift, Some(false));
+        assert_eq!(cfg.profiles[1].app_id, "org.gnome.Terminal");
+        assert_eq!(cfg.profiles[1].mode, "plain");
+        assert_eq!(cfg.profiles[1].paste_with_shift, Some(true));
+
+        let text = toml::to_string_pretty(&cfg).expect("serialize");
+        assert!(text.contains("[[profiles]]"));
+        assert!(text.contains("app_id = \"code\""));
+        assert!(text.contains("paste_with_shift = true"));
+
+        let again: DashboardConfig = toml::from_str(&text).expect("reparse");
+        assert_eq!(again.profiles, cfg.profiles);
     }
 }

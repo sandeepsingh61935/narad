@@ -4,6 +4,12 @@ export type Replacement = {
   written: string;
 };
 
+export type AppProfile = {
+  app_id: string;
+  mode: string;
+  paste_with_shift?: boolean;
+};
+
 export type DashboardConfig = {
   activation: {
     dictate_hotkey: string;
@@ -38,6 +44,8 @@ export type DashboardConfig = {
   replacements: Replacement[];
   /** Names and jargon applied after replacements (FR-TXT-2). */
   vocabulary: Replacement[];
+  /** Per-app dictation profiles (FR-CTX-2). */
+  profiles: AppProfile[];
 };
 
 export const ACTIVE_MODES = ["plain", "email", "bullet", "code"] as const;
@@ -72,5 +80,6 @@ export function defaultConfig(): DashboardConfig {
     },
     replacements: [],
     vocabulary: [],
+    profiles: [],
   };
 }

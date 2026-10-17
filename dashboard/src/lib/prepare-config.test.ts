@@ -304,3 +304,23 @@ test("a non-numeric threshold is rejected", () => {
     assert.deepEqual(result, { ok: false, error: THRESHOLD_ERROR });
   }
 });
+
+test("a settings save cleans and deduplicates profiles", () => {
+  const input = defaultConfig();
+  input.profiles = [
+    { app_id: "  code  ", mode: "  code  ", paste_with_shift: false },
+    { app_id: "   ", mode: "plain" },
+    { app_id: "org.gnome.Terminal", mode: "plain", paste_with_shift: true },
+    { app_id: "CODE", mode: "bullet" }, // duplicate, should be dropped
+  ];
+
+  const result = prepareConfigForSave(input);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(result.config.profiles, [
+    { app_id: "code", mode: "code" },
+    { app_id: "org.gnome.Terminal", mode: "plain", paste_with_shift: true },
+  ]);
+});
+

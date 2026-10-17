@@ -21,7 +21,7 @@
     { label: "Models", icon: "memory", href: "/settings/models" },
     { label: "Modes", icon: "auto_fix_high", href: "/settings/modes" },
     { label: "Dictionary", icon: "spellcheck", href: "/settings/dictionary" },
-    { label: "App profiles", icon: "tab", href: null },
+    { label: "App profiles", icon: "tab", href: "/settings/profiles" },
     { label: "Privacy", icon: "verified_user", href: "/settings/privacy" },
     { label: "About", icon: "info", href: null },
   ];

@@ -18,6 +18,30 @@ pub struct NaradConfig {
     pub replacements: Vec<Replacement>,
     /// Post-correction names and jargon (FR-TXT-2). Applied after replacements.
     pub vocabulary: Vec<Replacement>,
+    /// Per-app dictation profiles (FR-CTX-2).
+    #[serde(default)]
+    pub profiles: Vec<AppProfile>,
+}
+
+impl NaradConfig {
+    /// Look up a profile for the given application identifier (FR-CTX-2).
+    ///
+    /// Matches exact identifier (case-insensitive) or domain suffix (e.g. "code" matches "com.visualstudio.code").
+    pub fn find_profile(&self, app_id: &str) -> Option<&AppProfile> {
+        let norm_target = app_id.trim().to_lowercase();
+        if norm_target.is_empty() {
+            return None;
+        }
+        self.profiles.iter().find(|p| {
+            let norm_prof = p.app_id.trim().to_lowercase();
+            if norm_prof.is_empty() {
+                return false;
+            }
+            norm_prof == norm_target
+                || norm_target.split('.').next_back() == Some(norm_prof.as_str())
+                || norm_prof.split('.').next_back() == Some(norm_target.as_str())
+        })
+    }
 }
 
 impl Default for NaradConfig {
@@ -30,8 +54,18 @@ impl Default for NaradConfig {
             history: HistoryConfig::default(),
             replacements: Vec::new(),
             vocabulary: Vec::new(),
+            profiles: Vec::new(),
         }
     }
+}
+
+/// Dictation profile for a specific application (FR-CTX-2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppProfile {
+    pub app_id: String,
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paste_with_shift: Option<bool>,
 }
 
 /// One user replacement. Matching is case-insensitive and whole-phrase.
@@ -229,6 +263,7 @@ mod tests {
         assert_eq!(cfg.history.audio_retention_days, None);
         assert!(cfg.replacements.is_empty());
         assert!(cfg.vocabulary.is_empty());
+        assert!(cfg.profiles.is_empty());
     }
 
     #[test]
@@ -427,4 +462,59 @@ audio_retention_days = 2
         assert_eq!(cfg.history.text_retention_days, Some(4));
         assert_eq!(cfg.history.audio_retention_days, Some(2));
     }
+
+    #[test]
+    fn app_profiles_deserialization_and_matching() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"
+[[profiles]]
+app_id = "code"
+mode = "code"
+paste_with_shift = false
+
+[[profiles]]
+app_id = "org.gnome.Terminal"
+mode = "plain"
+paste_with_shift = true
+
+[[profiles]]
+app_id = "slack"
+mode = "plain"
+"#,
+        )
+        .expect("write fixture");
+
+        let cfg = load(&path).expect("load");
+        assert_eq!(cfg.profiles.len(), 3);
+        assert_eq!(cfg.profiles[0].app_id, "code");
+        assert_eq!(cfg.profiles[0].mode, "code");
+        assert_eq!(cfg.profiles[0].paste_with_shift, Some(false));
+        assert_eq!(cfg.profiles[2].paste_with_shift, None);
+
+        // find_profile matching tests:
+        // Exact match
+        let prof = cfg.find_profile("code").expect("find code");
+        assert_eq!(prof.mode, "code");
+
+        // Target has domain prefix, profile is short name ("code" matches "com.visualstudio.code")
+        let prof = cfg.find_profile("com.visualstudio.code").expect("find vscode");
+        assert_eq!(prof.mode, "code");
+
+        // Case-insensitive & domain suffix matching ("slack" matches "com.slack.Slack")
+        let prof = cfg.find_profile("com.slack.Slack").expect("find slack");
+        assert_eq!(prof.mode, "plain");
+
+        // Profile has domain prefix, target is short name ("terminal" matches "org.gnome.Terminal")
+        let prof = cfg.find_profile("Terminal").expect("find terminal");
+        assert_eq!(prof.mode, "plain");
+        assert_eq!(prof.paste_with_shift, Some(true));
+
+        // Unknown app returns None
+        assert!(cfg.find_profile("unknown.app").is_none());
+        assert!(cfg.find_profile("").is_none());
+    }
 }
+

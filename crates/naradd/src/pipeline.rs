@@ -57,6 +57,8 @@ enum UndoTarget {
 struct SessionRuntime {
     dbus_state: String,
     mode: String,
+    /// User manually called set_mode during the current focus context (FR-CTX-2).
+    manual_mode_override: bool,
     paused: bool,
     hud_visible: bool,
     capture: Option<CaptureHandle>,
@@ -122,6 +124,7 @@ impl PipelineHandle {
                 state: Mutex::new(SessionRuntime {
                     dbus_state: SessionState::IDLE.to_string(),
                     mode: config.general.active_mode.clone(),
+                    manual_mode_override: false,
                     utterance_mode: config.general.active_mode.clone(),
                     paused: false,
                     hud_visible: true,
@@ -270,17 +273,32 @@ impl PipelineHandle {
             .lock()
             .map_err(|e| format!("state lock: {e}"))?;
         st.mode = mode.to_string();
+        st.manual_mode_override = true;
         Ok(())
     }
 
-    /// Cache the focused app id. Empty string clears it (`None`).
+    /// Cache the focused app id and switch mode to matching profile (FR-CTX-2).
+    /// Empty string clears it (`None`).
     pub fn report_focus(&self, app_id: &str) -> Result<(), String> {
         let mut st = self
             .inner
             .state
             .lock()
             .map_err(|e| format!("state lock: {e}"))?;
-        st.focused_app = normalize_app_id(app_id);
+        let norm = normalize_app_id(app_id);
+        if norm != st.focused_app {
+            st.manual_mode_override = false;
+            if let Some(app) = norm.as_deref() {
+                if let Some(prof) = self.inner.config.find_profile(app) {
+                    st.mode = prof.mode.clone();
+                } else {
+                    st.mode = self.inner.config.general.active_mode.clone();
+                }
+            } else {
+                st.mode = self.inner.config.general.active_mode.clone();
+            }
+            st.focused_app = norm;
+        }
         Ok(())
     }
 
@@ -1362,7 +1380,16 @@ impl PipelineHandle {
         self.inner
             .state
             .lock()
-            .map(|st| insert::uses_terminal_paste(st.focused_app.as_deref()))
+            .map(|st| {
+                if let Some(app) = st.focused_app.as_deref() {
+                    if let Some(profile) = self.inner.config.find_profile(app) {
+                        if let Some(paste_with_shift) = profile.paste_with_shift {
+                            return paste_with_shift;
+                        }
+                    }
+                }
+                insert::uses_terminal_paste(st.focused_app.as_deref())
+            })
             .unwrap_or(false)
     }
 }
@@ -2316,4 +2343,108 @@ mod tests {
         assert_eq!(file_entry.final_text, email_raw);
         assert!(file_entry.cleanup_flagged);
     }
+
+    fn test_pipe_with_config(cfg: NaradConfig) -> (TempDir, PipelineHandle) {
+        let dir = TempDir::new().expect("tempdir");
+        let store = HistoryStore::open(dir.path().join("t.db")).expect("open");
+        let pipe = PipelineHandle::new(
+            cfg,
+            store,
+            None,
+            dir.path().join("audio"),
+        );
+        (dir, pipe)
+    }
+
+    #[test]
+    fn focus_mode_switching_and_manual_override() {
+        let mut cfg = NaradConfig::default();
+        cfg.general.active_mode = "plain".to_string();
+        cfg.profiles.push(crate::config::AppProfile {
+            app_id: "code".into(),
+            mode: "code".into(),
+            paste_with_shift: None,
+        });
+        cfg.profiles.push(crate::config::AppProfile {
+            app_id: "slack".into(),
+            mode: "bullet".into(),
+            paste_with_shift: None,
+        });
+
+        let (_dir, pipe) = test_pipe_with_config(cfg);
+        // Initially default mode
+        assert_eq!(pipe.snapshot_props().expect("props").1, "plain");
+
+        // Focus app with profile: automatically switches mode
+        pipe.report_focus("com.visualstudio.code").expect("focus");
+        assert_eq!(pipe.snapshot_props().expect("props").1, "code");
+
+        // Manual set_mode overrides while focused on this app
+        pipe.set_mode("email").expect("set_mode");
+        assert_eq!(pipe.snapshot_props().expect("props").1, "email");
+
+        // Reporting same focus keeps the manual override
+        pipe.report_focus("com.visualstudio.code").expect("focus again");
+        assert_eq!(pipe.snapshot_props().expect("props").1, "email");
+
+        // Switching focus to another app clears manual override and applies that app's profile mode
+        pipe.report_focus("com.slack.Slack").expect("focus slack");
+        assert_eq!(pipe.snapshot_props().expect("props").1, "bullet");
+
+        // Switching focus to app without profile reverts to general.active_mode
+        pipe.report_focus("org.mozilla.firefox").expect("focus firefox");
+        assert_eq!(pipe.snapshot_props().expect("props").1, "plain");
+
+        // Empty focus reverts to general.active_mode
+        pipe.report_focus("com.visualstudio.code").expect("focus code");
+        assert_eq!(pipe.snapshot_props().expect("props").1, "code");
+        pipe.report_focus("").expect("focus empty");
+        assert_eq!(pipe.snapshot_props().expect("props").1, "plain");
+    }
+
+    #[test]
+    fn focused_is_terminal_profile_paste_with_shift_override() {
+        let mut cfg = NaradConfig::default();
+        // App that is NOT in TERMINAL_APPS, but has paste_with_shift = Some(true)
+        cfg.profiles.push(crate::config::AppProfile {
+            app_id: "com.editor.CustomEditor".into(),
+            mode: "plain".into(),
+            paste_with_shift: Some(true),
+        });
+        // App that IS in TERMINAL_APPS (e.g. "org.gnome.Terminal"), but has paste_with_shift = Some(false)
+        cfg.profiles.push(crate::config::AppProfile {
+            app_id: "org.gnome.Terminal".into(),
+            mode: "plain".into(),
+            paste_with_shift: Some(false),
+        });
+        // App with no shift override (None)
+        cfg.profiles.push(crate::config::AppProfile {
+            app_id: "slack".into(),
+            mode: "plain".into(),
+            paste_with_shift: None,
+        });
+
+        let (_dir, pipe) = test_pipe_with_config(cfg);
+
+        // Custom editor -> true even though not in TERMINAL_APPS
+        pipe.report_focus("com.editor.CustomEditor").expect("focus");
+        assert!(pipe.focused_is_terminal());
+
+        // org.gnome.Terminal -> false even though in TERMINAL_APPS
+        pipe.report_focus("org.gnome.Terminal").expect("focus");
+        assert!(!pipe.focused_is_terminal());
+
+        // Slack with None -> fallback to uses_terminal_paste -> false
+        pipe.report_focus("com.slack.Slack").expect("focus");
+        assert!(!pipe.focused_is_terminal());
+
+        // Ptyxis with no profile -> fallback to uses_terminal_paste -> true
+        pipe.report_focus("org.gnome.Ptyxis").expect("focus");
+        assert!(pipe.focused_is_terminal());
+
+        // No focus -> false
+        pipe.report_focus("").expect("focus empty");
+        assert!(!pipe.focused_is_terminal());
+    }
 }
+

@@ -246,6 +246,8 @@ fn collapse_orphaned_punctuation(text: &str) -> String {
     trimmed.to_string()
 }
 
+const SIGNOFF_KEYWORDS: &[&str] = &["best", "regards", "sincerely", "cheers", "thanks"];
+
 /// Strip filler phrases and filler words from a single line using safe token window matching.
 fn strip_fillers_line(raw: &str) -> String {
     let tokens: Vec<&str> = raw.split_whitespace().collect();
@@ -254,7 +256,7 @@ fn strip_fillers_line(raw: &str) -> String {
     }
 
     let word_fillers = ["um", "uh", "er", "ah", "basically"];
-    let signoff_keywords = ["best", "regards", "sincerely", "cheers", "thanks"];
+    let signoff_keywords = SIGNOFF_KEYWORDS;
     let mut filtered_tokens: Vec<&str> = Vec::with_capacity(tokens.len());
     let mut i = 0;
     let mut any_removed = false;
@@ -471,7 +473,7 @@ pub fn email_text(raw: &str) -> String {
         .unwrap_or_default();
     let has_greeting = greeting_keywords.contains(&first_token.as_str());
 
-    let signoff_keywords = ["best", "regards", "sincerely", "cheers"];
+    let signoff_keywords = SIGNOFF_KEYWORDS;
     let lines: Vec<&str> = body.lines().filter(|l| !l.trim().is_empty()).collect();
     let mut is_personal_name_final = false;
     let has_signoff = if let Some(&last_line) = lines.last() {

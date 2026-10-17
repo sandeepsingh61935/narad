@@ -396,6 +396,9 @@ impl PipelineHandle {
         }
     }
 
+    /// Selection command mode stub (FR-INS-6). Full lifecycle wired in Task 2.
+    pub fn request_selection_command(&self) {}
+
     async fn begin_listen(
         &self,
         mode: Option<String>,

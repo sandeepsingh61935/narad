@@ -84,6 +84,11 @@ impl DaemonIpc {
         Ok(())
     }
 
+    async fn selection_command(&self) -> zbus::fdo::Result<()> {
+        self.pipeline.request_selection_command();
+        Ok(())
+    }
+
     async fn history(
         &self,
         query: &str,
@@ -467,5 +472,19 @@ mod tests {
             Ok(())
         })
         .expect("empty");
+    }
+
+    #[tokio::test]
+    async fn selection_command_calls_pipeline() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = HistoryStore::open(dir.path().join("t.db")).expect("open");
+        let pipe = crate::pipeline::PipelineHandle::new(
+            crate::config::NaradConfig::default(),
+            store,
+            None,
+            dir.path().join("audio"),
+        );
+        let ipc = DaemonIpc::new(pipe);
+        ipc.selection_command().await.expect("selection_command");
     }
 }

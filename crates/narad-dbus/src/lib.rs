@@ -4,7 +4,8 @@
 //!
 //! ## Phase 1 surface
 //!
-//! Methods: `Start`, `Stop`, `Cancel`, `Toggle`, `History`, `ReinsertEntry`, `DeleteEntries`,
+//! Methods: `Start`, `Stop`, `Cancel`, `Toggle`, `SelectionCommand` (FR-INS-6),
+//! `History`, `ReinsertEntry`, `DeleteEntries`,
 //! `PasteLast` (FR-INS-4), `UndoLast` (FR-INS-5), `ReportFocus` (FR-CTX-1),
 //! `ReadAudio` and `Retranscribe` (FR-HIS-5), `SetPinned`, `SetTags`,
 //! `Export`, and `DeleteAll` (FR-HIS-6), `Stats` (FR-HIS-8),
@@ -14,7 +15,7 @@
 //!
 //! ## Deferred (Phase 2+)
 //!
-//! Not defined in this crate yet: `SelectionCommand`,
+//! Not defined in this crate yet:
 //! `ListModels`, `SetActiveModel`, `Benchmark`.
 
 pub const SERVICE_NAME: &str = "dev.narad.Daemon";
@@ -75,6 +76,14 @@ mod tests {
     fn report_focus_is_on_the_daemon_proxy() {
         async fn assert_sig(proxy: &DaemonProxy<'_>) {
             let _ = proxy.report_focus("").await;
+        }
+        let _ = assert_sig;
+    }
+
+    #[test]
+    fn selection_command_is_on_the_daemon_proxy() {
+        async fn assert_sig(proxy: &DaemonProxy<'_>) {
+            let _ = proxy.selection_command().await;
         }
         let _ = assert_sig;
     }

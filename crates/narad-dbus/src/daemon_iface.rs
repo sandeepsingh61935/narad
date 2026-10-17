@@ -1,7 +1,8 @@
 //! Client proxy and method signatures for `dev.narad.Daemon` (Phase 1).
 //!
-//! Phase 2+ D-Bus methods still omitted: `SelectionCommand`,
+//! Phase 2+ D-Bus methods still omitted:
 //! `ListModels`, `SetActiveModel`, `Benchmark`.
+//! `SelectionCommand` is included (FR-INS-6).
 //! `Transcribe` is included (FR-ASR-6).
 //! `PasteLast` is included (FR-INS-4).
 //! `UndoLast` is included (FR-INS-5).
@@ -31,6 +32,9 @@ pub trait Daemon {
     async fn cancel(&self) -> zbus::Result<()>;
 
     async fn toggle(&self, mode: &str) -> zbus::Result<()>;
+
+    /// Selection command mode (FR-INS-6): transforms current selection with spoken instruction.
+    async fn selection_command(&self) -> zbus::Result<()>;
 
     /// List or search history. Empty filter strings are omitted (FR-HIS-3).
     ///

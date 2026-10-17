@@ -529,6 +529,295 @@ pub fn email_text(raw: &str) -> String {
     }
 }
 
+/// Extracts spoken mode prefix from raw speech text (FR-ACT-5).
+///
+/// Recognizes prefixes case-insensitively:
+/// - `"plain:"` / `"plain "`
+/// - `"clean:"` / `"clean "`
+/// - `"email:"` / `"email "`
+/// - `"bullet:"` / `"bullet "` / `"bullet list:"` / `"bullet points:"`
+/// - `"code:"` / `"code "`
+///
+/// Returns `Some((mode_name, remainder))` where `remainder` has leading/trailing
+/// punctuation and whitespace trimmed, and `mode_name` is `"plain"`, `"clean"`,
+/// `"email"`, `"bullet"`, or `"code"`.
+/// Returns `None` if no recognized prefix matches.
+pub fn extract_spoken_mode_prefix(text: &str) -> Option<(&'static str, &str)> {
+    let trimmed_start = text.trim_start();
+    let lower = trimmed_start.to_ascii_lowercase();
+
+    const PREFIX_TABLE: &[(&str, &str)] = &[
+        ("bullet points:", "bullet"),
+        ("bullet points ", "bullet"),
+        ("bullet list:", "bullet"),
+        ("bullet list ", "bullet"),
+        ("bullet:", "bullet"),
+        ("bullet ", "bullet"),
+        ("plain:", "plain"),
+        ("plain ", "plain"),
+        ("clean:", "clean"),
+        ("clean ", "clean"),
+        ("email:", "email"),
+        ("email ", "email"),
+        ("code:", "code"),
+        ("code ", "code"),
+    ];
+
+    for &(prefix, mode) in PREFIX_TABLE {
+        if lower.starts_with(prefix) {
+            let rem = &trimmed_start[prefix.len()..];
+            let trimmed_start_rem = rem.trim_start_matches(|c: char| {
+                c.is_whitespace()
+                    || matches!(c, ':' | ',' | ';' | '-' | '.' | '!' | '?' | '•' | '—' | '–')
+            });
+            let trimmed_rem = trimmed_start_rem.trim_end_matches(|c: char| {
+                c.is_whitespace() || matches!(c, ':' | ',' | ';' | '-' | '.' | '!' | '?')
+            });
+            return Some((mode, trimmed_rem));
+        }
+    }
+
+    None
+}
+
+const CONTRACTIONS: &[(&str, &str)] = &[
+    ("aren't", "are not"),
+    ("can't", "cannot"),
+    ("couldn't", "could not"),
+    ("didn't", "did not"),
+    ("doesn't", "does not"),
+    ("don't", "do not"),
+    ("hadn't", "had not"),
+    ("hasn't", "has not"),
+    ("haven't", "have not"),
+    ("he'd", "he would"),
+    ("he'll", "he will"),
+    ("he's", "he is"),
+    ("i'd", "I would"),
+    ("i'll", "I will"),
+    ("i'm", "I am"),
+    ("i've", "I have"),
+    ("isn't", "is not"),
+    ("it'd", "it would"),
+    ("it'll", "it will"),
+    ("it's", "it is"),
+    ("let's", "let us"),
+    ("she'd", "she would"),
+    ("she'll", "she will"),
+    ("she's", "she is"),
+    ("shouldn't", "should not"),
+    ("that's", "that is"),
+    ("there's", "there is"),
+    ("they'd", "they would"),
+    ("they'll", "they will"),
+    ("they're", "they are"),
+    ("they've", "they have"),
+    ("wasn't", "was not"),
+    ("we'd", "we would"),
+    ("we'll", "we will"),
+    ("we're", "we are"),
+    ("we've", "we have"),
+    ("weren't", "were not"),
+    ("what's", "what is"),
+    ("who's", "who is"),
+    ("won't", "will not"),
+    ("wouldn't", "would not"),
+    ("you'd", "you would"),
+    ("you'll", "you will"),
+    ("you're", "you are"),
+    ("you've", "you have"),
+];
+
+fn expand_contractions(text: &str) -> String {
+    let normalized = text.replace('’', "'");
+    let mut tokens: Vec<String> = Vec::new();
+    for raw_tok in normalized.split_whitespace() {
+        let lead_len = raw_tok
+            .chars()
+            .take_while(|&c| c.is_ascii_punctuation() && c != '\'')
+            .map(|c| c.len_utf8())
+            .sum::<usize>();
+        let (lead, rest) = raw_tok.split_at(lead_len);
+
+        let trail_len = rest
+            .chars()
+            .rev()
+            .take_while(|&c| c.is_ascii_punctuation() && c != '\'')
+            .map(|c| c.len_utf8())
+            .sum::<usize>();
+        let (core, trail) = rest.split_at(rest.len() - trail_len);
+
+        let lower_core = core.to_ascii_lowercase();
+        if let Some(&(_, replacement)) = CONTRACTIONS.iter().find(|&&(k, _)| k == lower_core) {
+            let is_capitalized = core.chars().next().map_or(false, |c| c.is_uppercase());
+            let mut rep = replacement.to_string();
+            if is_capitalized {
+                if let Some(first) = rep.chars().next() {
+                    let mut cap = String::new();
+                    cap.extend(first.to_uppercase());
+                    cap.push_str(&rep[first.len_utf8()..]);
+                    rep = cap;
+                }
+            }
+            tokens.push(format!("{lead}{rep}{trail}"));
+        } else {
+            tokens.push(raw_tok.to_string());
+        }
+    }
+    tokens.join(" ")
+}
+
+fn format_formal(text: &str) -> String {
+    let expanded = expand_contractions(text);
+    let without_fillers = strip_fillers(&expanded);
+    standardize_sentence(&without_fillers)
+}
+
+const VERBOSE_PHRASES: &[(&str, &str)] = &[
+    ("at the present time", "now"),
+    ("at this point in time", "now"),
+    ("due to the fact that", "because"),
+    ("for the purpose of", "for"),
+    ("in order to", "to"),
+    ("in the event that", "if"),
+    ("in light of the fact that", "because"),
+    ("it is important to note that", ""),
+    ("it should be noted that", ""),
+    ("needless to say", ""),
+    ("as a matter of fact", ""),
+    ("at the end of the day", ""),
+];
+
+const FLUFF_WORDS: &[&str] = &[
+    "basically",
+    "literally",
+    "actually",
+    "definitely",
+    "really",
+    "very",
+    "quite",
+    "simply",
+];
+
+fn format_concise(text: &str) -> String {
+    let mut s = text.to_string();
+    for &(phrase, replacement) in VERBOSE_PHRASES {
+        let lower = s.to_ascii_lowercase();
+        let mut idx = 0;
+        let mut result = String::new();
+        let mut found = false;
+        while let Some(pos) = lower[idx..].find(phrase) {
+            found = true;
+            let abs_pos = idx + pos;
+            result.push_str(&s[idx..abs_pos]);
+            let orig_slice = &s[abs_pos..abs_pos + phrase.len()];
+            if orig_slice
+                .chars()
+                .next()
+                .map_or(false, |c| c.is_uppercase())
+                && !replacement.is_empty()
+            {
+                let mut cap = String::new();
+                let mut chars = replacement.chars();
+                if let Some(first) = chars.next() {
+                    cap.extend(first.to_uppercase());
+                    cap.push_str(chars.as_str());
+                }
+                result.push_str(&cap);
+            } else {
+                result.push_str(replacement);
+            }
+            idx = abs_pos + phrase.len();
+        }
+        if found {
+            result.push_str(&s[idx..]);
+            s = result;
+        }
+    }
+
+    let without_fillers = strip_fillers(&s);
+    let tokens: Vec<&str> = without_fillers.split_whitespace().collect();
+    let filtered: Vec<&str> = tokens
+        .into_iter()
+        .filter(|tok| {
+            let core = tok
+                .trim_matches(|c: char| !c.is_alphanumeric())
+                .to_ascii_lowercase();
+            !FLUFF_WORDS.contains(&core.as_str())
+        })
+        .collect();
+    let joined = filtered.join(" ");
+    let collapsed = collapse_orphaned_punctuation(&joined);
+    let without_rep = remove_repetitions(&collapsed);
+    standardize_sentence(&without_rep)
+}
+
+fn to_title_case(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut capitalize_next = true;
+    for c in text.chars() {
+        if c.is_alphabetic() {
+            if capitalize_next {
+                result.extend(c.to_uppercase());
+                capitalize_next = false;
+            } else {
+                result.extend(c.to_lowercase());
+            }
+        } else {
+            result.push(c);
+            if c.is_whitespace() || c == '-' || c == '/' || c == '_' {
+                capitalize_next = true;
+            }
+        }
+    }
+    result
+}
+
+fn format_as_code(text: &str, instruction: &str) -> String {
+    if text.starts_with("```") && text.ends_with("```") {
+        return text.to_string();
+    }
+    if text.contains('\n') || instruction.contains("block") {
+        format!("```\n{text}\n```")
+    } else if text.starts_with('`') && text.ends_with('`') {
+        text.to_string()
+    } else {
+        format!("`{text}`")
+    }
+}
+
+/// Dispatches transformation on `selection` based on the intent in `instruction` (FR-INS-6).
+pub fn apply_selection_command(selection: &str, instruction: &str) -> String {
+    let trimmed_sel = selection.trim();
+    if trimmed_sel.is_empty() {
+        return selection.to_string();
+    }
+
+    let inst = instruction.to_ascii_lowercase();
+
+    if inst.contains("formal") || inst.contains("professional") {
+        format_formal(trimmed_sel)
+    } else if inst.contains("shorten") || inst.contains("concise") || inst.contains("summarize") {
+        format_concise(trimmed_sel)
+    } else if inst.contains("bullet") || inst.contains("list") || inst.contains("points") {
+        bullet_text(trimmed_sel)
+    } else if inst.contains("code") || inst.contains("syntax") {
+        format_as_code(trimmed_sel, &inst)
+    } else if inst.contains("email") || inst.contains("letter") {
+        email_text(trimmed_sel)
+    } else if inst.contains("uppercase") || inst.contains("all caps") {
+        trimmed_sel.to_uppercase()
+    } else if inst.contains("lowercase") {
+        trimmed_sel.to_lowercase()
+    } else if inst.contains("title case") || inst.contains("capitalized") {
+        to_title_case(trimmed_sel)
+    } else if inst.contains("clean") || inst.contains("grammar") || inst.contains("fix") {
+        clean_text(trimmed_sel)
+    } else {
+        clean_text(trimmed_sel)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -783,6 +1072,187 @@ mod tests {
         let with_greeting = "Hi team,\n\nThe report is ready.\n\nSincerely,\nAlice Smith";
         let res_with_greeting = email_text(with_greeting);
         assert_eq!(res_with_greeting, "Hi team,\n\nThe report is ready.\n\nSincerely,\nAlice Smith");
+    }
+
+    #[test]
+    fn extract_spoken_mode_prefix_recognizes_all_modes_and_variations() {
+        assert_eq!(
+            extract_spoken_mode_prefix("plain: hello world"),
+            Some(("plain", "hello world"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("plain hello world"),
+            Some(("plain", "hello world"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("clean: don't do that"),
+            Some(("clean", "don't do that"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("clean don't do that"),
+            Some(("clean", "don't do that"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("email: meeting at two"),
+            Some(("email", "meeting at two"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("email meeting at two"),
+            Some(("email", "meeting at two"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("bullet: review the pr"),
+            Some(("bullet", "review the pr"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("bullet review the pr"),
+            Some(("bullet", "review the pr"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("bullet list: step one"),
+            Some(("bullet", "step one"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("bullet list step one"),
+            Some(("bullet", "step one"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("bullet points: item a"),
+            Some(("bullet", "item a"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("bullet points item a"),
+            Some(("bullet", "item a"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("code: fn main() {}"),
+            Some(("code", "fn main() {}"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("code fn main() {}"),
+            Some(("code", "fn main() {}"))
+        );
+    }
+
+    #[test]
+    fn extract_spoken_mode_prefix_case_insensitivity_and_punctuation_trimming() {
+        assert_eq!(
+            extract_spoken_mode_prefix("EMAIL: Hello world"),
+            Some(("email", "Hello world"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("Bullet List: Alpha"),
+            Some(("bullet", "Alpha"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("email: - hello world."),
+            Some(("email", "hello world"))
+        );
+        assert_eq!(
+            extract_spoken_mode_prefix("  clean:  , don't do that!  "),
+            Some(("clean", "don't do that"))
+        );
+        assert_eq!(extract_spoken_mode_prefix("just normal dictation"), None);
+        assert_eq!(extract_spoken_mode_prefix("plaintext without space"), None);
+        assert_eq!(extract_spoken_mode_prefix("emailing someone"), None);
+    }
+
+    #[test]
+    fn apply_selection_command_transforms() {
+        // Formal / Professional
+        let formal = apply_selection_command(
+            "don't do it, won't work, can't stay",
+            "make this formal",
+        );
+        assert_eq!(formal, "Do not do it, will not work, cannot stay.");
+        let prof = apply_selection_command("it's ready", "professional tone");
+        assert_eq!(prof, "It is ready.");
+
+        // Shorten / Concise / Summarize
+        let concise = apply_selection_command(
+            "In order to proceed, we basically really need to test this, you know.",
+            "shorten this",
+        );
+        assert_eq!(concise, "To proceed, we need to test this.");
+        let concise2 = apply_selection_command(
+            "Due to the fact that it is broken, we must fix it.",
+            "make it concise",
+        );
+        assert_eq!(concise2, "Because it is broken, we must fix it.");
+
+        // Bullets / List
+        let bullets = apply_selection_command(
+            "Review code. Run tests. Deploy release.",
+            "make a bullet list",
+        );
+        assert_eq!(
+            bullets,
+            "• Review code.\n• Run tests.\n• Deploy release."
+        );
+
+        // Code / Syntax
+        let code_block = apply_selection_command(
+            "fn main() {\n    println!(\"hello\");\n}",
+            "format as code",
+        );
+        assert_eq!(
+            code_block,
+            "```\nfn main() {\n    println!(\"hello\");\n}\n```"
+        );
+        let code_inline = apply_selection_command("let x = 42;", "format code");
+        assert_eq!(code_inline, "`let x = 42;`");
+        let code_single_block = apply_selection_command("let x = 42;", "format code block");
+        assert_eq!(code_single_block, "```\nlet x = 42;\n```");
+
+        // Email
+        let email = apply_selection_command(
+            "The project is on track for Friday.",
+            "format as email",
+        );
+        assert_eq!(
+            email,
+            "Hi,\n\nThe project is on track for Friday.\n\nBest,\nSender"
+        );
+
+        // Uppercase / All caps
+        assert_eq!(
+            apply_selection_command("hello world", "uppercase"),
+            "HELLO WORLD"
+        );
+        assert_eq!(
+            apply_selection_command("important notice", "make this all caps"),
+            "IMPORTANT NOTICE"
+        );
+
+        // Lowercase
+        assert_eq!(
+            apply_selection_command("HELLO World", "lowercase"),
+            "hello world"
+        );
+
+        // Title case / Capitalized
+        assert_eq!(
+            apply_selection_command("quick brown fox", "title case"),
+            "Quick Brown Fox"
+        );
+        assert_eq!(
+            apply_selection_command("user management service", "capitalized"),
+            "User Management Service"
+        );
+
+        // Clean / Grammar / Fix
+        let clean = apply_selection_command(
+            "um we we need to uh test this you know",
+            "fix grammar",
+        );
+        assert_eq!(clean, "We need to test this.");
+
+        // Default fallback
+        let fallback = apply_selection_command(
+            "um basically hello world",
+            "do something else",
+        );
+        assert_eq!(fallback, "Hello world.");
     }
 }
 

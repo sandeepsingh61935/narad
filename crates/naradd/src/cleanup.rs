@@ -570,9 +570,15 @@ pub fn extract_spoken_mode_prefix(text: &str) -> Option<(&'static str, &str)> {
                 c.is_whitespace()
                     || matches!(c, ':' | ',' | ';' | '-' | '.' | '!' | '?' | '•' | '—' | '–')
             });
-            let trimmed_rem = trimmed_start_rem.trim_end_matches(|c: char| {
-                c.is_whitespace() || matches!(c, ':' | ',' | ';' | '-' | '.' | '!' | '?')
-            });
+            let trimmed_rem = if mode == "code" {
+                trimmed_start_rem.trim_end_matches(|c: char| {
+                    c.is_whitespace() || matches!(c, ':' | ',' | '-' | '.' | '!' | '?')
+                })
+            } else {
+                trimmed_start_rem.trim_end_matches(|c: char| {
+                    c.is_whitespace() || matches!(c, ':' | ',' | ';' | '-' | '.' | '!' | '?')
+                })
+            };
             return Some((mode, trimmed_rem));
         }
     }
@@ -628,7 +634,7 @@ const CONTRACTIONS: &[(&str, &str)] = &[
     ("you've", "you have"),
 ];
 
-fn expand_contractions(text: &str) -> String {
+fn expand_contractions_line(text: &str) -> String {
     let normalized = text.replace('’', "'");
     let mut tokens: Vec<String> = Vec::new();
     for raw_tok in normalized.split_whitespace() {
@@ -667,6 +673,17 @@ fn expand_contractions(text: &str) -> String {
     tokens.join(" ")
 }
 
+fn expand_contractions(text: &str) -> String {
+    if text.contains('\n') {
+        text.lines()
+            .map(expand_contractions_line)
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        expand_contractions_line(text)
+    }
+}
+
 fn format_formal(text: &str) -> String {
     let expanded = expand_contractions(text);
     let without_fillers = strip_fillers(&expanded);
@@ -699,7 +716,10 @@ const FLUFF_WORDS: &[&str] = &[
     "simply",
 ];
 
-fn format_concise(text: &str) -> String {
+fn format_concise_line(text: &str) -> String {
+    if text.trim().is_empty() {
+        return String::new();
+    }
     let mut s = text.to_string();
     for &(phrase, replacement) in VERBOSE_PHRASES {
         let lower = s.to_ascii_lowercase();
@@ -735,7 +755,7 @@ fn format_concise(text: &str) -> String {
         }
     }
 
-    let without_fillers = strip_fillers(&s);
+    let without_fillers = strip_fillers_line(&s);
     let tokens: Vec<&str> = without_fillers.split_whitespace().collect();
     let filtered: Vec<&str> = tokens
         .into_iter()
@@ -748,8 +768,19 @@ fn format_concise(text: &str) -> String {
         .collect();
     let joined = filtered.join(" ");
     let collapsed = collapse_orphaned_punctuation(&joined);
-    let without_rep = remove_repetitions(&collapsed);
+    let without_rep = remove_repetitions_line(&collapsed);
     standardize_sentence(&without_rep)
+}
+
+fn format_concise(text: &str) -> String {
+    if text.contains('\n') {
+        text.lines()
+            .map(format_concise_line)
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        format_concise_line(text)
+    }
 }
 
 fn to_title_case(text: &str) -> String {
@@ -786,6 +817,37 @@ fn format_as_code(text: &str, instruction: &str) -> String {
     }
 }
 
+fn instruction_has_word(instruction: &str, word: &str) -> bool {
+    instruction
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|w| w.eq_ignore_ascii_case(word))
+}
+
+fn instruction_has_phrase(instruction: &str, phrase: &str) -> bool {
+    let inst_lower = instruction.to_ascii_lowercase();
+    let phrase_lower = phrase.to_ascii_lowercase();
+    let mut start = 0;
+    while let Some(pos) = inst_lower[start..].find(&phrase_lower) {
+        let abs_pos = start + pos;
+        let before_ok = abs_pos == 0
+            || !inst_lower[..abs_pos]
+                .chars()
+                .next_back()
+                .map_or(false, |c| c.is_alphanumeric());
+        let end_pos = abs_pos + phrase_lower.len();
+        let after_ok = end_pos == inst_lower.len()
+            || !inst_lower[end_pos..]
+                .chars()
+                .next()
+                .map_or(false, |c| c.is_alphanumeric());
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs_pos + phrase_lower.len();
+    }
+    false
+}
+
 /// Dispatches transformation on `selection` based on the intent in `instruction` (FR-INS-6).
 pub fn apply_selection_command(selection: &str, instruction: &str) -> String {
     let trimmed_sel = selection.trim();
@@ -793,25 +855,37 @@ pub fn apply_selection_command(selection: &str, instruction: &str) -> String {
         return selection.to_string();
     }
 
-    let inst = instruction.to_ascii_lowercase();
-
-    if inst.contains("formal") || inst.contains("professional") {
+    if instruction_has_word(instruction, "formal") || instruction_has_word(instruction, "professional") {
         format_formal(trimmed_sel)
-    } else if inst.contains("shorten") || inst.contains("concise") || inst.contains("summarize") {
+    } else if instruction_has_word(instruction, "shorten")
+        || instruction_has_word(instruction, "concise")
+        || instruction_has_word(instruction, "summarize")
+    {
         format_concise(trimmed_sel)
-    } else if inst.contains("bullet") || inst.contains("list") || inst.contains("points") {
+    } else if instruction_has_word(instruction, "bullet")
+        || instruction_has_word(instruction, "bullets")
+        || instruction_has_word(instruction, "list")
+        || instruction_has_word(instruction, "points")
+    {
         bullet_text(trimmed_sel)
-    } else if inst.contains("code") || inst.contains("syntax") {
-        format_as_code(trimmed_sel, &inst)
-    } else if inst.contains("email") || inst.contains("letter") {
+    } else if instruction_has_word(instruction, "code") || instruction_has_word(instruction, "syntax") {
+        format_as_code(trimmed_sel, instruction)
+    } else if instruction_has_word(instruction, "email") || instruction_has_word(instruction, "letter") {
         email_text(trimmed_sel)
-    } else if inst.contains("uppercase") || inst.contains("all caps") {
+    } else if instruction_has_word(instruction, "uppercase") || instruction_has_phrase(instruction, "all caps") {
         trimmed_sel.to_uppercase()
-    } else if inst.contains("lowercase") {
+    } else if instruction_has_word(instruction, "lowercase") || instruction_has_phrase(instruction, "lower case") {
         trimmed_sel.to_lowercase()
-    } else if inst.contains("title case") || inst.contains("capitalized") {
+    } else if instruction_has_word(instruction, "capitalize")
+        || instruction_has_word(instruction, "capitalized")
+        || instruction_has_phrase(instruction, "title case")
+        || instruction_has_word(instruction, "titlecase")
+    {
         to_title_case(trimmed_sel)
-    } else if inst.contains("clean") || inst.contains("grammar") || inst.contains("fix") {
+    } else if instruction_has_word(instruction, "clean")
+        || instruction_has_word(instruction, "grammar")
+        || instruction_has_word(instruction, "fix")
+    {
         clean_text(trimmed_sel)
     } else {
         clean_text(trimmed_sel)
@@ -1253,6 +1327,53 @@ mod tests {
             "do something else",
         );
         assert_eq!(fallback, "Hello world.");
+    }
+
+    #[test]
+    fn selection_command_avoids_false_positives_and_supports_synonyms() {
+        // "listen" must not trigger bullet list
+        let not_list = apply_selection_command("hello world", "listen to this sentence");
+        assert_ne!(not_list, "• Hello world");
+        assert_eq!(not_list, "Hello world.");
+
+        // "informal" must not trigger format_formal
+        let informal = apply_selection_command("don't do it", "make this informal");
+        assert_ne!(informal, "Do not do it.");
+
+        // "lower case" synonym
+        let lower = apply_selection_command("HELLO WORLD", "make this lower case");
+        assert_eq!(lower, "hello world");
+
+        // "capitalize" synonym
+        let cap = apply_selection_command("hello world", "capitalize this");
+        assert_eq!(cap, "Hello World");
+    }
+
+    #[test]
+    fn selection_command_preserves_newlines_and_paragraphs() {
+        let input = "First paragraph can't wait.\n\nSecond paragraph won't wait.";
+        let formal = apply_selection_command(input, "formal tone");
+        assert_eq!(
+            formal,
+            "First paragraph cannot wait.\n\nSecond paragraph will not wait."
+        );
+
+        let concise = apply_selection_command(
+            "At the present time, we basically agree.\n\nIn order to proceed, we must test.",
+            "make concise",
+        );
+        assert_eq!(
+            concise,
+            "Now, we agree.\n\nTo proceed, we must test."
+        );
+    }
+
+    #[test]
+    fn code_spoken_prefix_preserves_trailing_semicolon() {
+        assert_eq!(
+            extract_spoken_mode_prefix("code: let x = 42;"),
+            Some(("code", "let x = 42;"))
+        );
     }
 }
 

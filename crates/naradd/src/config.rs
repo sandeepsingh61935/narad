@@ -86,6 +86,12 @@ pub struct ActivationConfig {
     /// Delete the last insertion (FR-INS-5). Press only; not hold/tap.
     #[serde(default = "default_undo_last_hotkey")]
     pub undo_last_hotkey: String,
+    /// Selection command hotkey (FR-INS-6).
+    #[serde(default = "default_selection_hotkey")]
+    pub selection_hotkey: String,
+    /// Mode hotkeys enabled (Ctrl+Alt+1..5) (FR-ACT-4).
+    #[serde(default = "default_mode_hotkeys_enabled")]
+    pub mode_hotkeys_enabled: bool,
     /// Press duration at or above this value is treated as hold; below is tap (FR-ACT-1).
     pub hold_tap_threshold_ms: u64,
 }
@@ -94,12 +100,22 @@ fn default_undo_last_hotkey() -> String {
     "Ctrl+Alt+Z".to_string()
 }
 
+fn default_selection_hotkey() -> String {
+    "Ctrl+Alt+R".to_string()
+}
+
+fn default_mode_hotkeys_enabled() -> bool {
+    true
+}
+
 impl Default for ActivationConfig {
     fn default() -> Self {
         Self {
             dictate_hotkey: "Ctrl+Alt+Space".to_string(),
             paste_last_hotkey: "Ctrl+Alt+V".to_string(),
-            undo_last_hotkey: "Ctrl+Alt+Z".to_string(),
+            undo_last_hotkey: default_undo_last_hotkey(),
+            selection_hotkey: default_selection_hotkey(),
+            mode_hotkeys_enabled: default_mode_hotkeys_enabled(),
             hold_tap_threshold_ms: 250,
         }
     }
@@ -249,6 +265,9 @@ mod tests {
         let cfg = NaradConfig::default();
         assert_eq!(cfg.activation.dictate_hotkey, "Ctrl+Alt+Space");
         assert_eq!(cfg.activation.paste_last_hotkey, "Ctrl+Alt+V");
+        assert_eq!(cfg.activation.undo_last_hotkey, "Ctrl+Alt+Z");
+        assert_eq!(cfg.activation.selection_hotkey, "Ctrl+Alt+R");
+        assert!(cfg.activation.mode_hotkeys_enabled);
         assert_eq!(cfg.activation.hold_tap_threshold_ms, 250);
         assert!(cfg.audio.sounds_enabled);
         assert_eq!(cfg.audio.auto_stop_silence_secs, 2);
@@ -264,6 +283,25 @@ mod tests {
         assert!(cfg.replacements.is_empty());
         assert!(cfg.vocabulary.is_empty());
         assert!(cfg.profiles.is_empty());
+    }
+
+    #[test]
+    fn selection_and_mode_hotkeys_config_round_trip() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"
+[activation]
+selection_hotkey = "Ctrl+Shift+S"
+mode_hotkeys_enabled = false
+"#,
+        )
+        .expect("write");
+        let cfg = load(&path).expect("load");
+        assert_eq!(cfg.activation.selection_hotkey, "Ctrl+Shift+S");
+        assert!(!cfg.activation.mode_hotkeys_enabled);
+        assert_eq!(cfg.activation.dictate_hotkey, "Ctrl+Alt+Space");
     }
 
     #[test]

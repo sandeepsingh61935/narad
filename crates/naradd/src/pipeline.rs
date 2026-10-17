@@ -22,6 +22,7 @@ use crate::ipc::DaemonIpc;
 /// `Undone` includes the deleted text (FR-INS-5). Inserted, copied, cancelled,
 /// and error stay the existing brief outcomes.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum HudOutcome {
     Inserted,
     Copied,
@@ -85,6 +86,8 @@ struct SessionRuntime {
     hud_outcome: Option<HudOutcome>,
     /// Deleted text, or the reason an undo was refused. Empty otherwise.
     outcome_detail: String,
+    /// Active selection text captured when selection command started (FR-INS-6).
+    selection_context: Option<String>,
 }
 
 struct PipelineInner {
@@ -140,6 +143,7 @@ impl PipelineHandle {
                     last_inserted: None,
                     hud_outcome: None,
                     outcome_detail: String::new(),
+                    selection_context: None,
                 }),
                 store: Mutex::new(store),
                 asr: Mutex::new(asr),
@@ -264,7 +268,7 @@ impl PipelineHandle {
     /// as copied at listen start. Does not rewrite `config.toml`.
     pub fn set_mode(&self, mode: &str) -> Result<(), String> {
         let mode = mode.trim();
-        if !matches!(mode, "plain" | "email" | "bullet" | "code") {
+        if !matches!(mode, "plain" | "clean" | "email" | "bullet" | "code" | "selection") {
             return Err(format!("unknown mode: {mode}"));
         }
         let mut st = self
@@ -396,8 +400,34 @@ impl PipelineHandle {
         }
     }
 
-    /// Selection command mode stub (FR-INS-6). Full lifecycle wired in Task 2.
-    pub fn request_selection_command(&self) {}
+    /// Selection command mode (FR-INS-6). Captures primary selection and listens for instruction.
+    pub fn request_selection_command(&self) {
+        let selection = insert::read_primary_selection();
+        match selection {
+            None => {
+                self.set_outcome_detail("No text selected");
+                let handle = self.clone();
+                tokio::spawn(async move {
+                    handle.signal_hud(HudOutcome::Error).await;
+                    handle.schedule_idle_after(Duration::from_millis(800));
+                });
+            }
+            Some(text) if text.trim().is_empty() => {
+                self.set_outcome_detail("No text selected");
+                let handle = self.clone();
+                tokio::spawn(async move {
+                    handle.signal_hud(HudOutcome::Error).await;
+                    handle.schedule_idle_after(Duration::from_millis(800));
+                });
+            }
+            Some(text) => {
+                if let Ok(mut st) = self.inner.state.lock() {
+                    st.selection_context = Some(text);
+                }
+                self.spawn_listen(Some("selection".to_string()), ListenTrigger::Open);
+            }
+        }
+    }
 
     async fn begin_listen(
         &self,
@@ -562,6 +592,7 @@ impl PipelineHandle {
             st.cancel.store(true, Ordering::SeqCst);
             st.listen_started = None;
             st.awaiting_hold_release = false;
+            st.selection_context = None;
             st.capture.take()
         };
         drop(capture);
@@ -705,6 +736,15 @@ impl PipelineHandle {
             return Ok(());
         }
 
+        let is_selection = mode == "selection" || {
+            let st = self.inner.state.lock().ok();
+            st.as_ref().map_or(false, |s| s.selection_context.is_some())
+        };
+        let (effective_mode, raw_text_for_history) = match crate::cleanup::extract_spoken_mode_prefix(&text) {
+            Some((spoken_mode, _)) => (spoken_mode.to_string(), text.clone()),
+            None => (mode.clone(), text.clone()),
+        };
+
         let Some(cleanup_res) = self.accepted_transcript(&text, &mode) else {
             info!(raw = %text, "hallucination filter dropped output");
             self.inner.processing.store(false, Ordering::SeqCst);
@@ -716,11 +756,17 @@ impl PipelineHandle {
         if matches!(outcome, InsertOutcome::Copied) {
             self.set_outcome_detail(insert::paste_hint(terminal));
         }
-        let history_id = self.record_dictation(
+        let kind = if is_selection {
+            "selection_command"
+        } else {
+            "dictation"
+        };
+        let history_id = self.record_entry(
+            kind,
             duration_ms,
-            mode,
+            effective_mode,
             model_id,
-            text,
+            raw_text_for_history,
             cleanup_res.text,
             cleanup_res.flagged,
             outcome,
@@ -746,22 +792,103 @@ impl PipelineHandle {
         Ok(())
     }
 
-    /// Hallucination filter, commands, replacements, vocabulary, and mode cleanup (FR-TXT-1..4, 6..8).
-    ///
-    /// Plain and code modes leave text uncleaned. Clean, bullet, and email apply transformations
-    /// guarded by GroundingGuard.
+    /// Hallucination filter, commands, replacements, vocabulary, and mode cleanup (FR-TXT-1..4, 6..8, FR-ACT-5, FR-INS-6).
     fn accepted_transcript(&self, raw: &str, mode: &str) -> Option<crate::cleanup::CleanupResult> {
         if asr::is_hallucination(raw) {
             return None;
         }
+
+        let selection_ctx = self
+            .inner
+            .state
+            .lock()
+            .ok()
+            .and_then(|mut st| st.selection_context.take());
+
+        let (effective_mode, effective_raw) = match crate::cleanup::extract_spoken_mode_prefix(raw) {
+            Some((spoken_mode, stripped)) => {
+                info!(spoken_mode, original_mode = mode, "spoken mode prefix matched");
+                (spoken_mode, stripped)
+            }
+            None => (mode, raw),
+        };
+
+        if let Some(selected) = selection_ctx {
+            let final_text = crate::cleanup::apply_selection_command(&selected, effective_raw);
+            return Some(crate::cleanup::CleanupResult {
+                text: final_text,
+                flagged: false,
+                applied: true,
+            });
+        }
+
         let replacements = phrase_table(&self.inner.config.replacements);
         let vocabulary = phrase_table(&self.inner.config.vocabulary);
         let pre_cleanup = crate::text::apply_commands_replacements_then_vocabulary(
-            raw,
+            effective_raw,
             &replacements,
             &vocabulary,
         );
-        Some(crate::cleanup::apply_cleanup(&pre_cleanup, mode))
+        Some(crate::cleanup::apply_cleanup(&pre_cleanup, effective_mode))
+    }
+
+    /// Finishes transcript processing without audio recording (used in tests and commands).
+    pub async fn finish_transcript(&self, raw: &str) -> Result<Option<i64>, String> {
+        let (mode, is_selection) = {
+            let st = self
+                .inner
+                .state
+                .lock()
+                .map_err(|e| format!("state lock: {e}"))?;
+            (
+                st.mode.clone(),
+                st.mode == "selection" || st.selection_context.is_some(),
+            )
+        };
+        let (effective_mode, raw_text_for_history) = match crate::cleanup::extract_spoken_mode_prefix(raw) {
+            Some((spoken_mode, _)) => (spoken_mode.to_string(), raw.to_string()),
+            None => (mode.clone(), raw.to_string()),
+        };
+
+        let Some(cleanup_res) = self.accepted_transcript(raw, &mode) else {
+            self.set_state(SessionState::IDLE).await;
+            return Ok(None);
+        };
+        let terminal = self.focused_is_terminal();
+        let outcome = insert::insert_text(&cleanup_res.text, terminal).await;
+        if matches!(outcome, InsertOutcome::Copied) {
+            self.set_outcome_detail(insert::paste_hint(terminal));
+        }
+        let kind = if is_selection {
+            "selection_command"
+        } else {
+            "dictation"
+        };
+        let history_id = self.record_entry(
+            kind,
+            100,
+            effective_mode,
+            "test".into(),
+            raw_text_for_history,
+            cleanup_res.text,
+            cleanup_res.flagged,
+            outcome,
+            &[],
+        )?;
+        if let Some(id) = history_id {
+            self.emit_entry_added(id).await;
+        }
+        match outcome {
+            InsertOutcome::Inserted => {
+                self.set_state(SessionState::INSERTED).await;
+                self.schedule_idle_after(Duration::from_millis(1200));
+            }
+            InsertOutcome::Copied => {
+                self.set_state(SessionState::COPIED).await;
+                self.schedule_idle_after(Duration::from_secs(2));
+            }
+        }
+        Ok(history_id)
     }
 
     /// Paste the newest history row's `final_text` (FR-INS-4).
@@ -1000,6 +1127,31 @@ impl PipelineHandle {
         outcome: InsertOutcome,
         samples: &[f32],
     ) -> Result<Option<i64>, String> {
+        self.record_entry(
+            "dictation",
+            duration_ms,
+            mode,
+            asr_model,
+            raw_text,
+            final_text,
+            cleanup_flagged,
+            outcome,
+            samples,
+        )
+    }
+
+    fn record_entry(
+        &self,
+        kind: &str,
+        duration_ms: u32,
+        mode: String,
+        asr_model: String,
+        raw_text: String,
+        final_text: String,
+        cleanup_flagged: bool,
+        outcome: InsertOutcome,
+        samples: &[f32],
+    ) -> Result<Option<i64>, String> {
         let insert_status = match outcome {
             InsertOutcome::Inserted => InsertStatus::Success,
             InsertOutcome::Copied => InsertStatus::Skipped,
@@ -1018,7 +1170,8 @@ impl PipelineHandle {
         if paused {
             return Ok(None);
         }
-        let id = self.commit_dictation(
+        let id = self.commit_entry(
+            kind,
             duration_ms,
             mode,
             asr_model,
@@ -1042,11 +1195,9 @@ impl PipelineHandle {
         Ok(Some(id))
     }
 
-    /// Persist one utterance. Not paused-gated.
-    /// History `app_id` is the focus frozen at record start.
-    /// A successful paste also remembers the app focused now.
-    fn commit_dictation(
+    fn commit_entry(
         &self,
+        kind: &str,
         duration_ms: u32,
         mode: String,
         asr_model: String,
@@ -1087,9 +1238,31 @@ impl PipelineHandle {
                 cleanup_flagged,
                 audio_path: None,
                 pinned: false,
-                kind: "dictation".into(),
+                kind: kind.to_string(),
             })
             .map_err(|e| e.to_string())
+    }
+
+    fn commit_dictation(
+        &self,
+        duration_ms: u32,
+        mode: String,
+        asr_model: String,
+        raw_text: String,
+        final_text: String,
+        cleanup_flagged: bool,
+        insert_status: InsertStatus,
+    ) -> Result<i64, String> {
+        self.commit_entry(
+            "dictation",
+            duration_ms,
+            mode,
+            asr_model,
+            raw_text,
+            final_text,
+            cleanup_flagged,
+            insert_status,
+        )
     }
 
     /// Transcribe one file into a `kind=file` row. Does not paste or copy.
@@ -1340,7 +1513,7 @@ fn resolved_mode(requested: &str, session: &str) -> Result<String, String> {
     } else {
         requested
     };
-    if !matches!(mode, "plain" | "email" | "bullet" | "code") {
+    if !matches!(mode, "plain" | "clean" | "email" | "bullet" | "code") {
         return Err(format!("unknown mode: {mode}"));
     }
     Ok(mode.to_string())
@@ -2448,6 +2621,98 @@ mod tests {
         // No focus -> false
         pipe.report_focus("").expect("focus empty");
         assert!(!pipe.focused_is_terminal());
+    }
+
+    #[tokio::test]
+    async fn request_selection_command_refuses_when_no_text_selected() {
+        let (_dir, pipe) = test_pipe();
+        let mock = Arc::new(Mutex::new(None));
+        insert::with_test_primary_selection(mock, async {
+            pipe.request_selection_command();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert_eq!(
+                pipe.snapshot_props().expect("props").0,
+                SessionState::ERROR
+            );
+            assert_eq!(pipe.outcome_detail().expect("detail"), "No text selected");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn request_selection_command_captures_selection_and_applies_spoken_instruction_on_finish() {
+        let (_dir, pipe) = test_pipe();
+        let pasted = Arc::new(Mutex::new(Vec::new()));
+        let mock = Arc::new(Mutex::new(Some("don't do it, won't work".to_string())));
+
+        insert::with_test_inserts(Arc::clone(&pasted), async {
+            insert::with_test_primary_selection(mock, async {
+                pipe.request_selection_command();
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                assert_eq!(pipe.snapshot_props().expect("props").1, "selection");
+
+                let id = pipe
+                    .finish_transcript("make this formal")
+                    .await
+                    .expect("finish")
+                    .expect("id");
+                assert_eq!(
+                    pasted.lock().expect("pasted").as_slice(),
+                    ["Do not do it, will not work."]
+                );
+                let entry = pipe
+                    .with_store(|s| s.get(id).map_err(|e| e.to_string()))
+                    .expect("store")
+                    .expect("entry");
+                assert_eq!(entry.kind, "selection_command");
+                assert_eq!(entry.raw_text, "make this formal");
+                assert_eq!(entry.final_text, "Do not do it, will not work.");
+            })
+            .await;
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn spoken_prefix_overrides_active_mode_and_applies_email_formatting() {
+        let (_dir, pipe) = test_pipe();
+        assert_eq!(pipe.snapshot_props().expect("props").1, "plain");
+
+        let res = pipe
+            .accepted_transcript("email: meeting at two", "plain")
+            .expect("transcript");
+        assert_eq!(
+            res.text,
+            "Hi,\n\nMeeting at two.\n\nBest,\nSender"
+        );
+
+        let pasted = Arc::new(Mutex::new(Vec::new()));
+        insert::with_test_inserts(Arc::clone(&pasted), async {
+            let id = pipe
+                .finish_transcript("email: meeting at two")
+                .await
+                .expect("finish")
+                .expect("id");
+            let entry = pipe
+                .with_store(|s| s.get(id).map_err(|e| e.to_string()))
+                .expect("store")
+                .expect("entry");
+            assert_eq!(entry.mode, "email");
+            assert_eq!(
+                entry.final_text,
+                "Hi,\n\nMeeting at two.\n\nBest,\nSender"
+            );
+        })
+        .await;
+    }
+
+    #[test]
+    fn set_mode_accepts_clean_and_selection() {
+        let (_dir, pipe) = test_pipe();
+        pipe.set_mode("clean").expect("clean");
+        assert_eq!(pipe.snapshot_props().expect("props").1, "clean");
+        pipe.set_mode("selection").expect("selection");
+        assert_eq!(pipe.snapshot_props().expect("props").1, "selection");
     }
 }
 

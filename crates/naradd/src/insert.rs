@@ -440,12 +440,19 @@ fn restore_clipboard_text(text: &str) -> Result<()> {
     copy_via_wl_copy(text)
 }
 
-/// Per-task paste record so parallel tests do not share one portal stand-in.
+// Per-task paste record so parallel tests do not share one portal stand-in.
 #[cfg(test)]
 tokio::task_local! {
     static TEST_INSERT_LOG: std::sync::Arc<std::sync::Mutex<Vec<String>>>;
     static TEST_INSERT_TERMINAL: std::sync::Arc<std::sync::Mutex<Vec<bool>>>;
     static TEST_FORCE_COPY: ();
+    pub(crate) static TEST_PRIMARY_SELECTION: std::sync::Arc<std::sync::Mutex<Option<String>>>;
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_PRIMARY_SELECTION_FALLBACK: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
 }
 
 /// Record paste text for `fut` and skip the portal.
@@ -472,10 +479,81 @@ pub(crate) async fn with_test_copied_inserts<T>(
         .await
 }
 
-/// Per-task Backspace record. Tests must not open the real keyboard portal.
+/// Mock primary selection during `fut`.
+#[cfg(test)]
+pub(crate) async fn with_test_primary_selection<T>(
+    selection: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    fut: impl std::future::Future<Output = T>,
+) -> T {
+    TEST_PRIMARY_SELECTION.scope(selection, fut).await
+}
+
+/// Set mock primary selection for synchronous thread contexts.
+#[cfg(test)]
+#[allow(dead_code)]
+pub fn set_test_primary_selection(text: Option<String>) {
+    TEST_PRIMARY_SELECTION_FALLBACK.with(|cell| {
+        if let Ok(mut lock) = cell.lock() {
+            *lock = text;
+        }
+    });
+}
+
+// Per-task Backspace record. Tests must not open the real keyboard portal.
 #[cfg(test)]
 tokio::task_local! {
     static TEST_BACKSPACE_LOG: std::sync::Arc<std::sync::Mutex<Vec<i32>>>;
+}
+
+/// Reads current text selection via `wl-paste` primary clipboard (FR-INS-6).
+pub fn read_primary_selection() -> Option<String> {
+    #[cfg(test)]
+    {
+        if let Ok(arc) = TEST_PRIMARY_SELECTION.try_with(|s| s.clone()) {
+            if let Ok(guard) = arc.lock() {
+                return guard.as_deref().and_then(|s| {
+                    let trimmed = s.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                });
+            }
+        }
+        let fallback = TEST_PRIMARY_SELECTION_FALLBACK.with(|cell| {
+            cell.lock().ok().and_then(|guard| guard.clone())
+        });
+        if let Some(text) = fallback {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return None;
+            } else {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    let output = std::process::Command::new("wl-paste")
+        .args(["-n", "--primary", "-t", "text/plain"])
+        .output();
+
+    let output = match output {
+        Ok(out) if out.status.success() => Some(out),
+        _ => std::process::Command::new("wl-paste")
+            .args(["-n", "-t", "text/plain"])
+            .output()
+            .ok()
+            .filter(|out| out.status.success()),
+    }?;
+
+    let text = String::from_utf8(output.stdout).ok()?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 /// Record Backspaces for `fut` and skip the portal.
@@ -675,5 +753,29 @@ mod tests {
         assert_eq!(keys.len(), text.chars().count());
         assert!(keys.iter().all(|key| *key == KEY_BACKSPACE));
         assert_ne!(text.chars().count(), text.len());
+    }
+
+    #[tokio::test]
+    async fn primary_selection_capture_and_trimming() {
+        let mock = Arc::new(Mutex::new(Some("  selected text  ".to_string())));
+        let captured = with_test_primary_selection(Arc::clone(&mock), async {
+            read_primary_selection()
+        })
+        .await;
+        assert_eq!(captured.as_deref(), Some("selected text"));
+
+        let empty_mock = Arc::new(Mutex::new(Some("   \n\t ".to_string())));
+        let empty_captured = with_test_primary_selection(empty_mock, async {
+            read_primary_selection()
+        })
+        .await;
+        assert_eq!(empty_captured, None);
+
+        let none_mock = Arc::new(Mutex::new(None));
+        let none_captured = with_test_primary_selection(none_mock, async {
+            read_primary_selection()
+        })
+        .await;
+        assert_eq!(none_captured, None);
     }
 }

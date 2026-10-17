@@ -21,6 +21,15 @@ pub const APP_ID: &str = "dev.narad.Narad";
 const DICTATE_ID: &str = "narad-dictate";
 const PASTE_LAST_ID: &str = "narad-paste-last";
 const UNDO_LAST_ID: &str = "narad-undo-last";
+pub const SELECTION_ID: &str = "narad-selection";
+
+pub const MODE_SHORTCUTS: &[(&str, &str, &str, &str)] = &[
+    ("narad-mode-1", "plain", "Ctrl+Alt+1", "Narad plain mode dictation"),
+    ("narad-mode-2", "clean", "Ctrl+Alt+2", "Narad clean mode dictation"),
+    ("narad-mode-3", "email", "Ctrl+Alt+3", "Narad email mode dictation"),
+    ("narad-mode-4", "bullet", "Ctrl+Alt+4", "Narad bullet mode dictation"),
+    ("narad-mode-5", "code", "Ctrl+Alt+5", "Narad code mode dictation"),
+];
 
 /// Paste-last is a press. Key-repeat while held must not paste again. Release is not hold/tap.
 pub(crate) fn paste_last_should_fire(already_down: bool) -> bool {
@@ -114,12 +123,14 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
         .context("Registry.Register failed")?;
     info!(app_id = APP_ID, "registered host app with portal Registry");
 
-    let (trigger, paste_trigger, undo_trigger, threshold_ms) = {
+    let (trigger, paste_trigger, undo_trigger, selection_trigger, mode_hotkeys_enabled, threshold_ms) = {
         let cfg = pipeline.config();
         (
             to_portal_trigger(&cfg.activation.dictate_hotkey),
             to_portal_trigger(&cfg.activation.paste_last_hotkey),
             to_portal_trigger(&cfg.activation.undo_last_hotkey),
+            to_portal_trigger(&cfg.activation.selection_hotkey),
+            cfg.activation.mode_hotkeys_enabled,
             cfg.activation.hold_tap_threshold_ms,
         )
     };
@@ -132,6 +143,8 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
         trigger = %trigger,
         paste_last = %paste_trigger,
         undo_last = %undo_trigger,
+        selection = %selection_trigger,
+        mode_hotkeys_enabled,
         "GlobalShortcuts connected"
     );
 
@@ -146,11 +159,30 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
         .preferred_trigger(Some(paste_trigger.as_str()));
     let undo_last = NewShortcut::new(UNDO_LAST_ID, "Narad undo last insertion")
         .preferred_trigger(Some(undo_trigger.as_str()));
+    let selection = NewShortcut::new(SELECTION_ID, "Narad selection command")
+        .preferred_trigger(Some(selection_trigger.as_str()));
+
+    let mut shortcuts = vec![dictate, paste_last, undo_last, selection];
+    let mode_triggers: Vec<String> = if mode_hotkeys_enabled {
+        MODE_SHORTCUTS
+            .iter()
+            .map(|(_, _, hotkey, _)| to_portal_trigger(hotkey))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if mode_hotkeys_enabled {
+        for (i, (id, _mode, _hotkey, desc)) in MODE_SHORTCUTS.iter().enumerate() {
+            shortcuts.push(
+                NewShortcut::new(*id, *desc).preferred_trigger(Some(mode_triggers[i].as_str())),
+            );
+        }
+    }
 
     let request = portal
         .bind_shortcuts(
             &session,
-            &[dictate, paste_last, undo_last],
+            &shortcuts,
             None,
             BindShortcutsOptions::default(),
         )
@@ -174,6 +206,8 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
     let mut key_down = false;
     let mut paste_down = false;
     let mut undo_down = false;
+    let mut selection_down = false;
+    let mut mode_down = [false; 5];
     let mut press_at: Option<Instant> = None;
     // After a second-tap stop, ignore the following Deactivated so it does not re-interpret hold.
     let mut suppress_deactivate = false;
@@ -183,7 +217,9 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
         threshold_ms,
         paste_last = %paste_trigger,
         undo_last = %undo_trigger,
-        "hotkeys listening (dictate hold/tap; paste-last and undo-last on press; key-repeat ignored)"
+        selection = %selection_trigger,
+        mode_hotkeys_enabled,
+        "hotkeys listening (dictate hold/tap; paste-last, undo-last, selection, and mode hotkeys on press; key-repeat ignored)"
     );
 
     loop {
@@ -206,6 +242,25 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
                             if fire {
                                 info!("undo-last hotkey → UndoLast");
                                 pipeline.request_undo_last();
+                            }
+                            continue;
+                        }
+                        if ev.shortcut_id() == SELECTION_ID {
+                            let fire = paste_last_should_fire(selection_down);
+                            selection_down = true;
+                            if fire {
+                                info!("selection hotkey → SelectionCommand");
+                                pipeline.request_selection_command();
+                            }
+                            continue;
+                        }
+                        if let Some(idx) = MODE_SHORTCUTS.iter().position(|(id, _, _, _)| *id == ev.shortcut_id()) {
+                            let fire = paste_last_should_fire(mode_down[idx]);
+                            mode_down[idx] = true;
+                            if fire {
+                                let mode = MODE_SHORTCUTS[idx].1;
+                                info!(mode, "mode hotkey → Start");
+                                pipeline.request_start(Some(mode.to_string()));
                             }
                             continue;
                         }
@@ -258,6 +313,14 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
                         }
                         if ev.shortcut_id() == UNDO_LAST_ID {
                             undo_down = false;
+                            continue;
+                        }
+                        if ev.shortcut_id() == SELECTION_ID {
+                            selection_down = false;
+                            continue;
+                        }
+                        if let Some(idx) = MODE_SHORTCUTS.iter().position(|(id, _, _, _)| *id == ev.shortcut_id()) {
+                            mode_down[idx] = false;
                             continue;
                         }
                         if ev.shortcut_id() != DICTATE_ID {
@@ -330,5 +393,34 @@ mod tests {
             to_portal_trigger(&cfg.activation.paste_last_hotkey),
             to_portal_trigger(&cfg.activation.dictate_hotkey)
         );
+    }
+
+    #[test]
+    fn mode_and_selection_hotkeys_triggers_and_ids() {
+        assert_eq!(SELECTION_ID, "narad-selection");
+        assert_eq!(MODE_SHORTCUTS.len(), 5);
+        assert_eq!(MODE_SHORTCUTS[0].0, "narad-mode-1");
+        assert_eq!(MODE_SHORTCUTS[0].1, "plain");
+        assert_eq!(MODE_SHORTCUTS[0].2, "Ctrl+Alt+1");
+        assert_eq!(to_portal_trigger(MODE_SHORTCUTS[0].2), "CTRL+ALT+1");
+
+        assert_eq!(MODE_SHORTCUTS[1].0, "narad-mode-2");
+        assert_eq!(MODE_SHORTCUTS[1].1, "clean");
+        assert_eq!(MODE_SHORTCUTS[1].2, "Ctrl+Alt+2");
+
+        assert_eq!(MODE_SHORTCUTS[2].0, "narad-mode-3");
+        assert_eq!(MODE_SHORTCUTS[2].1, "email");
+        assert_eq!(MODE_SHORTCUTS[2].2, "Ctrl+Alt+3");
+
+        assert_eq!(MODE_SHORTCUTS[3].0, "narad-mode-4");
+        assert_eq!(MODE_SHORTCUTS[3].1, "bullet");
+        assert_eq!(MODE_SHORTCUTS[3].2, "Ctrl+Alt+4");
+
+        assert_eq!(MODE_SHORTCUTS[4].0, "narad-mode-5");
+        assert_eq!(MODE_SHORTCUTS[4].1, "code");
+        assert_eq!(MODE_SHORTCUTS[4].2, "Ctrl+Alt+5");
+
+        let cfg = crate::config::NaradConfig::default();
+        assert_eq!(to_portal_trigger(&cfg.activation.selection_hotkey), "CTRL+ALT+r");
     }
 }

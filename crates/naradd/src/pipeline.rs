@@ -236,9 +236,14 @@ impl PipelineHandle {
             .state
             .lock()
             .map_err(|e| format!("state lock: {e}"))?;
+        let active_mode = if st.dbus_state == SessionState::LISTENING || st.dbus_state == SessionState::PROCESSING {
+            st.utterance_mode.clone()
+        } else {
+            st.mode.clone()
+        };
         Ok((
             st.dbus_state.clone(),
-            st.mode.clone(),
+            active_mode,
             st.paused,
             st.hud_visible,
         ))
@@ -412,14 +417,6 @@ impl PipelineHandle {
                     handle.schedule_idle_after(Duration::from_millis(800));
                 });
             }
-            Some(text) if text.trim().is_empty() => {
-                self.set_outcome_detail("No text selected");
-                let handle = self.clone();
-                tokio::spawn(async move {
-                    handle.signal_hud(HudOutcome::Error).await;
-                    handle.schedule_idle_after(Duration::from_millis(800));
-                });
-            }
             Some(text) => {
                 if let Ok(mut st) = self.inner.state.lock() {
                     st.selection_context = Some(text);
@@ -449,10 +446,16 @@ impl PipelineHandle {
             }
             if let Some(m) = mode {
                 if !m.is_empty() {
-                    st.mode = m;
+                    if m == "selection" {
+                        st.utterance_mode = m;
+                    } else {
+                        st.mode = m;
+                        st.utterance_mode = st.mode.clone();
+                    }
                 }
+            } else {
+                st.utterance_mode = st.mode.clone();
             }
-            st.utterance_mode = st.mode.clone();
             st.cancel.store(false, Ordering::SeqCst);
             snapshot_focus_at_start(&mut st);
         }
@@ -612,7 +615,7 @@ impl PipelineHandle {
             return Ok(());
         }
 
-        let (capture, started, mode, cancel_flag) = {
+        let (capture, started, mode, cancel_flag, selection_context) = {
             let mut st = self
                 .inner
                 .state
@@ -624,6 +627,7 @@ impl PipelineHandle {
             }
             let capture = st.capture.take();
             let started = st.listen_started.take();
+            let selection_context = st.selection_context.take();
             st.awaiting_hold_release = false;
             st.dbus_state = SessionState::PROCESSING.to_string();
             (
@@ -631,6 +635,7 @@ impl PipelineHandle {
                 started,
                 st.utterance_mode.clone(),
                 st.cancel.clone(),
+                selection_context,
             )
         };
 
@@ -736,16 +741,13 @@ impl PipelineHandle {
             return Ok(());
         }
 
-        let is_selection = mode == "selection" || {
-            let st = self.inner.state.lock().ok();
-            st.as_ref().map_or(false, |s| s.selection_context.is_some())
-        };
+        let had_selection = selection_context.is_some();
         let (effective_mode, raw_text_for_history) = match crate::cleanup::extract_spoken_mode_prefix(&text) {
             Some((spoken_mode, _)) => (spoken_mode.to_string(), text.clone()),
             None => (mode.clone(), text.clone()),
         };
 
-        let Some(cleanup_res) = self.accepted_transcript(&text, &mode) else {
+        let Some(cleanup_res) = self.accepted_transcript_with_selection(&text, &mode, selection_context) else {
             info!(raw = %text, "hallucination filter dropped output");
             self.inner.processing.store(false, Ordering::SeqCst);
             self.set_state(SessionState::IDLE).await;
@@ -756,7 +758,7 @@ impl PipelineHandle {
         if matches!(outcome, InsertOutcome::Copied) {
             self.set_outcome_detail(insert::paste_hint(terminal));
         }
-        let kind = if is_selection {
+        let kind = if had_selection {
             "selection_command"
         } else {
             "dictation"
@@ -794,16 +796,24 @@ impl PipelineHandle {
 
     /// Hallucination filter, commands, replacements, vocabulary, and mode cleanup (FR-TXT-1..4, 6..8, FR-ACT-5, FR-INS-6).
     fn accepted_transcript(&self, raw: &str, mode: &str) -> Option<crate::cleanup::CleanupResult> {
-        if asr::is_hallucination(raw) {
-            return None;
-        }
-
         let selection_ctx = self
             .inner
             .state
             .lock()
             .ok()
             .and_then(|mut st| st.selection_context.take());
+        self.accepted_transcript_with_selection(raw, mode, selection_ctx)
+    }
+
+    fn accepted_transcript_with_selection(
+        &self,
+        raw: &str,
+        mode: &str,
+        selection_ctx: Option<String>,
+    ) -> Option<crate::cleanup::CleanupResult> {
+        if asr::is_hallucination(raw) {
+            return None;
+        }
 
         let (effective_mode, effective_raw) = match crate::cleanup::extract_spoken_mode_prefix(raw) {
             Some((spoken_mode, stripped)) => {
@@ -834,23 +844,22 @@ impl PipelineHandle {
 
     /// Finishes transcript processing without audio recording (used in tests and commands).
     pub async fn finish_transcript(&self, raw: &str) -> Result<Option<i64>, String> {
-        let (mode, is_selection) = {
-            let st = self
+        let (mode, selection_context) = {
+            let mut st = self
                 .inner
                 .state
                 .lock()
                 .map_err(|e| format!("state lock: {e}"))?;
-            (
-                st.mode.clone(),
-                st.mode == "selection" || st.selection_context.is_some(),
-            )
+            let sel = st.selection_context.take();
+            (st.mode.clone(), sel)
         };
+        let had_selection = selection_context.is_some();
         let (effective_mode, raw_text_for_history) = match crate::cleanup::extract_spoken_mode_prefix(raw) {
             Some((spoken_mode, _)) => (spoken_mode.to_string(), raw.to_string()),
             None => (mode.clone(), raw.to_string()),
         };
 
-        let Some(cleanup_res) = self.accepted_transcript(raw, &mode) else {
+        let Some(cleanup_res) = self.accepted_transcript_with_selection(raw, &mode, selection_context) else {
             self.set_state(SessionState::IDLE).await;
             return Ok(None);
         };
@@ -859,7 +868,7 @@ impl PipelineHandle {
         if matches!(outcome, InsertOutcome::Copied) {
             self.set_outcome_detail(insert::paste_hint(terminal));
         }
-        let kind = if is_selection {
+        let kind = if had_selection {
             "selection_command"
         } else {
             "dictation"
@@ -2713,6 +2722,51 @@ mod tests {
         assert_eq!(pipe.snapshot_props().expect("props").1, "clean");
         pipe.set_mode("selection").expect("selection");
         assert_eq!(pipe.snapshot_props().expect("props").1, "selection");
+    }
+
+    #[tokio::test]
+    async fn selection_command_preserves_persistent_session_mode_and_subsequent_dictation() {
+        let (_dir, pipe) = test_pipe();
+        assert_eq!(pipe.snapshot_props().expect("props").1, "plain");
+
+        let mock_sel = Arc::new(Mutex::new(Some("original text".to_string())));
+        insert::with_test_primary_selection(mock_sel, async {
+            pipe.request_selection_command();
+        })
+        .await;
+
+        let pasted = Arc::new(Mutex::new(Vec::new()));
+        insert::with_test_inserts(Arc::clone(&pasted), async {
+            let id = pipe
+                .finish_transcript("uppercase")
+                .await
+                .expect("finish")
+                .expect("id");
+            let entry = pipe
+                .with_store(|s| s.get(id).map_err(|e| e.to_string()))
+                .expect("store")
+                .expect("entry");
+            assert_eq!(entry.kind, "selection_command");
+            assert_eq!(entry.final_text, "ORIGINAL TEXT");
+
+            // Session mode must NOT be latched to selection
+            assert_eq!(pipe.snapshot_props().expect("props").1, "plain");
+
+            // Subsequent dictation must be classified as normal dictation in plain mode
+            let next_id = pipe
+                .finish_transcript("regular dictation")
+                .await
+                .expect("finish next")
+                .expect("id next");
+            let next_entry = pipe
+                .with_store(|s| s.get(next_id).map_err(|e| e.to_string()))
+                .expect("store")
+                .expect("next entry");
+            assert_eq!(next_entry.kind, "dictation");
+            assert_eq!(next_entry.mode, "plain");
+            assert_eq!(next_entry.final_text, "regular dictation");
+        })
+        .await;
     }
 }
 

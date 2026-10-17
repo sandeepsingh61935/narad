@@ -32,6 +32,7 @@ const DaemonIfaceXml = `
       <arg type="s" direction="in" name="mode"/>
     </method>
     <method name="Cancel"/>
+    <method name="SelectionCommand"/>
     <method name="ReportFocus">
       <arg type="s" direction="in" name="app_id"/>
     </method>
@@ -567,12 +568,13 @@ export default class NaradExtension extends Extension {
 
         const modeShortcuts = {
             plain: 'Ctrl+Alt+1',
-            email: 'Ctrl+Alt+2',
-            bullet: 'Ctrl+Alt+3',
-            code: 'Ctrl+Alt+4',
+            clean: 'Ctrl+Alt+2',
+            email: 'Ctrl+Alt+3',
+            bullet: 'Ctrl+Alt+4',
+            code: 'Ctrl+Alt+5',
         };
         this._modeItems = [];
-        for (const mode of ['plain', 'email', 'bullet', 'code']) {
+        for (const mode of ['plain', 'clean', 'email', 'bullet', 'code']) {
             const item = new PopupMenu.PopupMenuItem(mode);
             const accel = new St.Label({
                 text: modeShortcuts[mode],

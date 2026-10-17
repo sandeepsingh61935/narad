@@ -87,6 +87,8 @@ export function prepareConfigForSave(config: ConfigDraft): PreparedConfig {
         dictate_hotkey: config.activation.dictate_hotkey.trim(),
         paste_last_hotkey: config.activation.paste_last_hotkey.trim(),
         undo_last_hotkey: config.activation.undo_last_hotkey.trim(),
+        selection_hotkey: config.activation.selection_hotkey.trim(),
+        mode_hotkeys_enabled: config.activation.mode_hotkeys_enabled !== false,
         hold_tap_threshold_ms,
       },
       audio: {

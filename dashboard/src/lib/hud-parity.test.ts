@@ -34,6 +34,7 @@ test("right-click opens the dot menu and does not hide", () => {
 
   const literals = [
     "plain",
+    "clean",
     "email",
     "bullet",
     "code",
@@ -51,6 +52,10 @@ test("right-click opens the dot menu and does not hide", () => {
     extensionSource,
     /<property name="Mode" type="s" access="readwrite"\/>/,
   );
+  assert.match(
+    extensionSource,
+    /<method name="SelectionCommand"\/>/,
+  );
 });
 
 test("right-click menu includes keycap accelerators for modes", () => {
@@ -58,7 +63,21 @@ test("right-click menu includes keycap accelerators for modes", () => {
   assert.match(extensionSource, /Ctrl\+Alt\+2/);
   assert.match(extensionSource, /Ctrl\+Alt\+3/);
   assert.match(extensionSource, /Ctrl\+Alt\+4/);
+  assert.match(extensionSource, /Ctrl\+Alt\+5/);
   assert.match(extensionSource, /narad-hud-keycap/);
+});
+
+test("clean mode is in right-click menu with accelerator and selection mode is supported", () => {
+  assert.match(extensionSource, /clean:\s*'Ctrl\+Alt\+2'/);
+  assert.match(extensionSource, /'plain',\s*'clean',\s*'email',\s*'bullet',\s*'code'/);
+  assert.match(
+    extensionSource,
+    /this\._pillPrimary\.text\s*=\s*`\$\{this\._mode\s*\|\|\s*DEFAULT_MODE\}\s*·\s*EN`/,
+  );
+  assert.match(
+    extensionSource,
+    /this\._pillSecondary\.text\s*=\s*`\$\{this\._mode\s*\|\|\s*DEFAULT_MODE\}\s*·\s*EN`/,
+  );
 });
 
 test("right-click menu dynamically updates Pause history label", () => {

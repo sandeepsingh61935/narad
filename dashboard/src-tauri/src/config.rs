@@ -63,11 +63,25 @@ pub struct ActivationConfig {
     /// Press-only undo of the last insertion (FR-INS-5). Round-tripped so a save does not drop it.
     #[serde(default = "default_undo_last_hotkey")]
     pub undo_last_hotkey: String,
+    /// Selection command hotkey (FR-INS-6). Round-tripped so a save does not drop it.
+    #[serde(default = "default_selection_hotkey")]
+    pub selection_hotkey: String,
+    /// Mode hotkeys enabled (Ctrl+Alt+1..5) (FR-ACT-4). Round-tripped so a save does not drop it.
+    #[serde(default = "default_mode_hotkeys_enabled")]
+    pub mode_hotkeys_enabled: bool,
     pub hold_tap_threshold_ms: u64,
 }
 
 fn default_undo_last_hotkey() -> String {
     "Ctrl+Alt+Z".to_string()
+}
+
+fn default_selection_hotkey() -> String {
+    "Ctrl+Alt+R".to_string()
+}
+
+fn default_mode_hotkeys_enabled() -> bool {
+    true
 }
 
 impl Default for ActivationConfig {
@@ -76,6 +90,8 @@ impl Default for ActivationConfig {
             dictate_hotkey: "Ctrl+Alt+Space".to_string(),
             paste_last_hotkey: "Ctrl+Alt+V".to_string(),
             undo_last_hotkey: "Ctrl+Alt+Z".to_string(),
+            selection_hotkey: default_selection_hotkey(),
+            mode_hotkeys_enabled: default_mode_hotkeys_enabled(),
             hold_tap_threshold_ms: 250,
         }
     }
@@ -246,6 +262,30 @@ paste_last_hotkey = "Ctrl+Shift+V"
         assert!(text.contains("paste_last_hotkey = \"Ctrl+Shift+V\""));
         let again: DashboardConfig = toml::from_str(&text).expect("reparse");
         assert_eq!(again.activation, cfg.activation);
+    }
+
+    #[test]
+    fn reserialize_keeps_selection_and_mode_hotkeys() {
+        let raw = r#"
+[activation]
+selection_hotkey = "Ctrl+Shift+R"
+mode_hotkeys_enabled = false
+"#;
+        let cfg: DashboardConfig = toml::from_str(raw).expect("parse");
+        assert_eq!(cfg.activation.selection_hotkey, "Ctrl+Shift+R");
+        assert!(!cfg.activation.mode_hotkeys_enabled);
+        let text = toml::to_string_pretty(&cfg).expect("serialize");
+        assert!(text.contains("selection_hotkey = \"Ctrl+Shift+R\""));
+        assert!(text.contains("mode_hotkeys_enabled = false"));
+        let again: DashboardConfig = toml::from_str(&text).expect("reparse");
+        assert_eq!(again.activation, cfg.activation);
+    }
+
+    #[test]
+    fn default_selection_and_mode_hotkeys() {
+        let cfg = DashboardConfig::default();
+        assert_eq!(cfg.activation.selection_hotkey, "Ctrl+Alt+R");
+        assert!(cfg.activation.mode_hotkeys_enabled);
     }
 
     #[test]

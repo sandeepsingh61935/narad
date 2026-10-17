@@ -11,6 +11,8 @@
   let notice = $state<string | null>(null);
   let editingHotkey = $state(false);
   let hotkeyField = $state<HTMLInputElement | null>(null);
+  let editingSelectionHotkey = $state(false);
+  let selectionHotkeyField = $state<HTMLInputElement | null>(null);
   let saveChain: Promise<void> = Promise.resolve();
 
   const dictateParts = $derived.by(() => {
@@ -20,6 +22,22 @@
       .filter((part) => part.length > 0);
     return parts.length > 0 ? parts : ["—"];
   });
+
+  const selectionParts = $derived.by(() => {
+    const parts = (config.activation.selection_hotkey || "")
+      .split("+")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0);
+    return parts.length > 0 ? parts : ["—"];
+  });
+
+  const modeHotkeys = [
+    { mode: "Plain", shortcut: "Ctrl+Alt+1" },
+    { mode: "Clean", shortcut: "Ctrl+Alt+2" },
+    { mode: "Email", shortcut: "Ctrl+Alt+3" },
+    { mode: "Bullet", shortcut: "Ctrl+Alt+4" },
+    { mode: "Code", shortcut: "Ctrl+Alt+5" },
+  ];
 
   async function load() {
     loading = true;
@@ -70,6 +88,23 @@
 
   function finishHotkeyEdit() {
     editingHotkey = false;
+    commit();
+  }
+
+  async function beginSelectionHotkeyEdit() {
+    editingSelectionHotkey = true;
+    await tick();
+    selectionHotkeyField?.focus();
+    selectionHotkeyField?.select();
+  }
+
+  function finishSelectionHotkeyEdit() {
+    editingSelectionHotkey = false;
+    commit();
+  }
+
+  function toggleModeHotkeys() {
+    config.activation.mode_hotkeys_enabled = !config.activation.mode_hotkeys_enabled;
     commit();
   }
 
@@ -181,24 +216,33 @@
               >
             </div>
             <div class="flex items-center gap-space-md shrink-0">
-              <div class="flex items-center gap-1">
-                <kbd
-                  class="px-2 py-1 rounded bg-surface-container-lowest border border-outline-variant/50 font-keycap text-keycap text-on-surface"
-                  >Ctrl</kbd
-                >
-                <kbd
-                  class="px-2 py-1 rounded bg-surface-container-lowest border border-outline-variant/50 font-keycap text-keycap text-on-surface"
-                  >Alt</kbd
-                >
-                <kbd
-                  class="px-2 py-1 rounded bg-surface-container-lowest border border-outline-variant/50 font-keycap text-keycap text-on-surface"
-                  >R</kbd
-                >
-              </div>
+              {#if editingSelectionHotkey}
+                <input
+                  id="selection-hotkey"
+                  bind:this={selectionHotkeyField}
+                  class="w-40 px-2 py-1.5 min-h-[36px] rounded bg-surface-container-lowest border border-outline-variant/50 font-keycap text-keycap text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
+                  type="text"
+                  bind:value={config.activation.selection_hotkey}
+                  autocomplete="off"
+                  spellcheck="false"
+                  aria-label="Selection command hotkey"
+                  onblur={finishSelectionHotkeyEdit}
+                />
+              {:else}
+                <div class="flex items-center gap-1">
+                  {#each selectionParts as part}
+                    <kbd
+                      class="px-2 py-1 rounded bg-surface-container-lowest border border-outline-variant/50 font-keycap text-keycap text-on-surface"
+                      >{part}</kbd
+                    >
+                  {/each}
+                </div>
+              {/if}
               <button
                 class="px-3 py-1.5 min-h-[36px] text-on-surface bg-surface-container-high hover:bg-surface-bright rounded border border-outline-variant/40 font-body-muted text-body-muted text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
                 type="button"
                 aria-label="Change selection command hotkey"
+                onclick={beginSelectionHotkeyEdit}
               >
                 Change
               </button>
@@ -326,56 +370,51 @@
             class="px-4 py-3.5 flex items-center justify-between gap-4 hover:bg-surface-container-high/40 transition-colors"
           >
             <div class="flex flex-col min-w-0">
-              <div class="flex items-center gap-2">
-                <span class="font-headline-md text-headline-md text-[14px] text-on-surface"
-                  >Dictate in Mode 1–9</span
-                >
-                <span
-                  class="font-label-code text-label-code text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20"
-                  >Prefix Map</span
-                >
-              </div>
+              <span class="font-headline-md text-headline-md text-[14px] text-on-surface"
+                >Mode hotkeys</span
+              >
               <span
-                class="font-body-muted text-body-muted text-on-surface-variant text-[12px] mt-0.5"
-                >Jump directly to numbered pipeline presets (e.g., [Ctrl][Alt][2] for Code mode)</span
+                class="font-body-muted text-body-muted text-on-surface-variant text-[12px] truncate"
+                >Jump directly to preset modes using number shortcuts</span
               >
             </div>
-            <div class="flex items-center gap-space-lg shrink-0">
-              <div class="flex items-center gap-1">
-                <kbd
-                  class="px-2 py-1 rounded bg-surface-container-lowest border border-outline-variant/50 font-keycap text-keycap text-on-surface"
-                  >Ctrl</kbd
-                >
-                <kbd
-                  class="px-2 py-1 rounded bg-surface-container-lowest border border-outline-variant/50 font-keycap text-keycap text-on-surface"
-                  >Alt</kbd
-                >
-                <kbd
-                  class="px-2 py-1 rounded bg-surface-container-lowest border border-outline-variant/50 font-keycap text-keycap text-primary"
-                  >1–9</kbd
-                >
-              </div>
-              <button
-                aria-checked="true"
-                aria-label="Quick mode prefix switching"
-                class="w-11 h-6 bg-primary-container rounded-full relative p-0.5 transition-colors cursor-pointer flex items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-container"
-                role="switch"
-                type="button"
+            <button
+              id="mode-hotkeys"
+              aria-checked={config.activation.mode_hotkeys_enabled}
+              aria-label="Mode hotkeys"
+              class="w-11 h-6 {config.activation.mode_hotkeys_enabled ? 'bg-primary-container' : 'bg-surface-container-highest'} rounded-full relative p-0.5 transition-colors cursor-pointer flex items-center shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
+              role="switch"
+              type="button"
+              disabled={loading}
+              onclick={toggleModeHotkeys}
+            >
+              <span
+                class="w-5 h-5 {config.activation.mode_hotkeys_enabled ? 'bg-on-primary-container translate-x-5' : 'bg-outline translate-x-0'} rounded-full shadow transition-transform flex items-center justify-center"
               >
-                <span
-                  class="w-5 h-5 bg-on-primary-container rounded-full shadow transition-transform translate-x-5 flex items-center justify-center"
-                >
+                {#if config.activation.mode_hotkeys_enabled}
                   <span class="material-symbols-outlined text-[12px] text-primary" aria-hidden="true">check</span>
-                </span>
-              </button>
-              <button
-                class="px-3 py-1.5 min-h-[36px] text-on-surface bg-surface-container-high hover:bg-surface-bright rounded border border-outline-variant/40 font-body-muted text-body-muted text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
-                type="button"
-                aria-label="Change quick mode prefix"
+                {/if}
+              </span>
+            </button>
+          </div>
+          <div
+            class="px-4 py-3 flex flex-wrap items-center gap-2 transition-opacity {!config.activation.mode_hotkeys_enabled ? 'opacity-50' : ''}"
+          >
+            {#each modeHotkeys as item}
+              <div
+                class="inline-flex items-center gap-2 px-2.5 py-1.5 min-h-[36px] rounded-lg bg-surface-container-high/60 border border-outline-variant/30 text-[12px]"
               >
-                Change Prefix
-              </button>
-            </div>
+                <div class="flex items-center gap-0.5 font-keycap text-keycap">
+                  {#each item.shortcut.split("+") as key}
+                    <kbd
+                      class="px-1.5 py-0.5 rounded bg-surface-container-lowest border border-outline-variant/40 text-[11px] text-on-surface"
+                      >{key}</kbd
+                    >
+                  {/each}
+                </div>
+                <span class="font-headline-md text-on-surface">{item.mode}</span>
+              </div>
+            {/each}
           </div>
         </div>
       </div>

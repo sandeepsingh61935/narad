@@ -78,7 +78,25 @@ test("a settings save keeps the paste-last hotkey", () => {
   assert.equal(result.config.activation.dictate_hotkey, "Ctrl+Alt+Space");
   assert.equal(result.config.activation.paste_last_hotkey, "Ctrl+Alt+V");
   assert.equal(result.config.activation.undo_last_hotkey, "Ctrl+Alt+Z");
+  assert.equal(result.config.activation.selection_hotkey, "Ctrl+Alt+R");
+  assert.equal(result.config.activation.mode_hotkeys_enabled, true);
   assert.equal(result.config.activation.hold_tap_threshold_ms, 250);
+});
+
+test("a settings save keeps the selection hotkey and mode hotkeys toggle", () => {
+  const input = defaultConfig();
+  assert.equal(input.activation.selection_hotkey, "Ctrl+Alt+R");
+  assert.equal(input.activation.mode_hotkeys_enabled, true);
+
+  input.activation.selection_hotkey = "  Ctrl+Shift+R  ";
+  input.activation.mode_hotkeys_enabled = false;
+
+  const result = prepareConfigForSave(input);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.config.activation.selection_hotkey, "Ctrl+Shift+R");
+  assert.equal(result.config.activation.mode_hotkeys_enabled, false);
 });
 
 test("a settings save keeps the mic target", () => {

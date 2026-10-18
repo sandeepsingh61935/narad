@@ -11,7 +11,6 @@ pub mod hotkeys;
 pub mod ibus;
 pub mod insert;
 pub mod ipc;
-pub mod longform;
 pub mod mcp;
 pub mod paths;
 pub mod pipeline;

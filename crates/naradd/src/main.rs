@@ -10,7 +10,6 @@ mod hotkeys;
 mod insert;
 pub mod ibus;
 mod ipc;
-pub mod longform;
 mod paths;
 mod pipeline;
 mod retained;

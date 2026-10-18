@@ -149,6 +149,20 @@ pub struct AudioConfig {
     pub input_target: String,
     /// RNNoise on captured PCM before VAD/ASR (FR-AUD-5). Off leaves samples unchanged.
     pub noise_suppression: bool,
+    /// Continuous dictation mode: session stays active across natural pauses.
+    #[serde(default = "default_continuous_mode")]
+    pub continuous_mode: bool,
+    /// Unattended continuous silence timeout in seconds (safety failsafe).
+    #[serde(default = "default_unattended_silence_secs")]
+    pub unattended_silence_secs: u32,
+}
+
+fn default_continuous_mode() -> bool {
+    true
+}
+
+fn default_unattended_silence_secs() -> u32 {
+    30
 }
 
 impl Default for AudioConfig {
@@ -159,6 +173,8 @@ impl Default for AudioConfig {
             max_duration_secs: 300,
             input_target: String::new(),
             noise_suppression: false,
+            continuous_mode: true,
+            unattended_silence_secs: 30,
         }
     }
 }

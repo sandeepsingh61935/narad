@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use narad_core::store::{HistoryStore, InsertStatus, NewHistoryEntry};
 use narad_dbus::{SessionState, OBJECT_PATH};
-use tracing::{info, trace, warn};
+use tracing::{debug, info, trace, warn};
 use zbus::Connection;
 
 use crate::asr::{self, AsrEngine};
@@ -96,6 +96,7 @@ struct PipelineInner {
     state: Mutex<SessionRuntime>,
     store: Mutex<HistoryStore>,
     asr: Mutex<Option<AsrEngine>>,
+    online_asr: Mutex<Option<crate::asr::OnlineAsrEngine>>,
     wake_spotter: Mutex<Option<WakeWordSpotter>>,
     last_activity: Mutex<Instant>,
     conn: OnceLock<Connection>,
@@ -131,6 +132,7 @@ impl PipelineHandle {
         } else {
             None
         };
+        let online_asr = crate::asr::try_load_online(crate::asr::DEFAULT_ONLINE_ASR_ID);
         Self {
             inner: Arc::new(PipelineInner {
                 config: config.clone(),
@@ -157,6 +159,7 @@ impl PipelineHandle {
                 }),
                 store: Mutex::new(store),
                 asr: Mutex::new(asr),
+                online_asr: Mutex::new(online_asr),
                 wake_spotter: Mutex::new(wake_spotter),
                 last_activity: Mutex::new(Instant::now()),
                 conn: OnceLock::new(),
@@ -526,11 +529,21 @@ impl PipelineHandle {
         });
     }
 
+    /// Explicit Stop & Insert for streaming dictation.
+    pub fn request_stop_and_insert(&self) {
+        self.request_stop();
+    }
+
     pub fn request_cancel(&self) {
         let handle = self.clone();
         tokio::spawn(async move {
             handle.cancel_listen().await;
         });
+    }
+
+    /// Discard current streaming dictation without inserting or saving to history.
+    pub fn request_discard(&self) {
+        self.request_cancel();
     }
 
     pub fn request_toggle(&self, mode: Option<String>) {
@@ -624,6 +637,7 @@ impl PipelineHandle {
 
         self.emit_state(SessionState::LISTENING).await;
         self.spawn_level_pump(rms_bits);
+        self.spawn_streaming_pump(listen_gen);
         self.spawn_max_duration_timer(listen_gen);
         self.spawn_silence_timer(listen_gen);
         info!("listening");
@@ -657,9 +671,16 @@ impl PipelineHandle {
     }
 
     /// Tap-mode and HUD silence auto-stop (FR-AUD-3). Hold does not stop.
+    /// In continuous mode, applies unattended_silence_secs as a safety failsafe.
     /// `0` disables this timer only.
     fn spawn_silence_timer(&self, listen_gen: u64) {
-        let Some(limit) = configured_timeout(self.inner.config.audio.auto_stop_silence_secs) else {
+        let continuous = self.inner.config.audio.continuous_mode;
+        let secs = if continuous {
+            self.inner.config.audio.unattended_silence_secs
+        } else {
+            self.inner.config.audio.auto_stop_silence_secs
+        };
+        let Some(limit) = configured_timeout(secs) else {
             return;
         };
         let handle = self.clone();
@@ -681,7 +702,8 @@ impl PipelineHandle {
                 ) {
                     info!(
                         silence_secs = limit.as_secs(),
-                        "auto_stop_silence_secs reached; auto-stop"
+                        continuous,
+                        "silence threshold reached; auto-stop"
                     );
                     handle.request_stop();
                     break;
@@ -723,6 +745,49 @@ impl PipelineHandle {
                 }
                 let rms = f32::from_bits(rms_bits.load(Ordering::Relaxed)) as f64;
                 handle.emit_level(rms).await;
+            }
+        });
+    }
+
+    /// Pumps audio frames incrementally into OnlineAsrStream and emits PartialTranscript.
+    fn spawn_streaming_pump(&self, listen_gen: u64) {
+        let handle = self.clone();
+        tokio::spawn(async move {
+            let mut scanned = 0;
+            let mut tick = tokio::time::interval(std::time::Duration::from_millis(50));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let stream_slot = {
+                let asr_guard = handle.inner.online_asr.lock().ok();
+                asr_guard
+                    .as_ref()
+                    .and_then(|g| g.as_ref().and_then(|engine| engine.create_stream().ok()))
+            };
+            let Some(mut stream) = stream_slot else {
+                return;
+            };
+            loop {
+                tick.tick().await;
+                if !handle.is_listening() {
+                    break;
+                }
+                let Some(poll) = handle.silence_poll(listen_gen, scanned) else {
+                    break;
+                };
+                scanned = poll.end;
+                if !poll.fresh.is_empty() {
+                    stream.accept_waveform(audio::TARGET_SAMPLE_RATE as u32, &poll.fresh);
+                    let partial = {
+                        let asr_guard = handle.inner.online_asr.lock().ok();
+                        asr_guard.as_ref().and_then(|g| {
+                            g.as_ref().and_then(|engine| stream.decode(engine.recognizer()))
+                        })
+                    };
+                    if let Some(partial) = partial {
+                        if !partial.is_empty() {
+                            handle.emit_partial_transcript(&partial).await;
+                        }
+                    }
+                }
             }
         });
     }
@@ -808,16 +873,12 @@ impl PipelineHandle {
         let samples_16k = audio::resample_to_16k(&raw_samples, device_rate);
         // Off: same 16 kHz buffer, no denoise pass (FR-AUD-5).
         let samples_16k = denoise::apply(samples_16k, self.inner.config.audio.noise_suppression);
-        let trimmed = match audio::trim_silence(&samples_16k, audio::TARGET_SAMPLE_RATE) {
-            Some(t) => t,
-            None => {
-                info!("VAD: no speech; returning to idle");
-                audio::play_cue("error", self.inner.config.audio.sounds_enabled);
-                self.inner.processing.store(false, Ordering::SeqCst);
-                self.set_state(SessionState::IDLE).await;
-                return Ok(());
-            }
-        };
+        if samples_16k.len() < audio::TARGET_SAMPLE_RATE as usize / 10 {
+            info!("recording too short; returning to idle");
+            self.inner.processing.store(false, Ordering::SeqCst);
+            self.set_state(SessionState::IDLE).await;
+            return Ok(());
+        }
 
         let model_id = self.inner.config.models.asr_english.clone();
         let retained_samples = self
@@ -825,10 +886,11 @@ impl PipelineHandle {
             .config
             .history
             .retain_audio
-            .then(|| trimmed.clone());
+            .then(|| samples_16k.clone());
         // Run decode on a blocking pool; lock only inside the worker (Standards #5).
         let asr_slot = Arc::clone(&self.inner);
         let target_model_id = model_id.clone();
+        let decode_samples = samples_16k.clone();
         let transcribed = tokio::task::spawn_blocking(move || {
             let mut asr_guard = asr_slot.asr.lock().map_err(|e| format!("asr lock: {e}"))?;
             let needs_reload = match asr_guard.as_ref() {
@@ -852,17 +914,28 @@ impl PipelineHandle {
             }
             match asr_guard.as_ref() {
                 Some(engine) => engine
-                    .transcribe(&trimmed, audio::TARGET_SAMPLE_RATE)
+                    .transcribe(&decode_samples, audio::TARGET_SAMPLE_RATE)
                     .map_err(|e| e.to_string())
-                    .map(Some),
-                None => Ok(None),
+                    .map(|t| Some((t, target_model_id))),
+                None => {
+                    // Fall back to online_asr if offline asr is not available
+                    if let Ok(guard) = asr_slot.online_asr.lock() {
+                        if let Some(ref online) = *guard {
+                            match online.transcribe(&decode_samples, audio::TARGET_SAMPLE_RATE) {
+                                Ok(text) => return Ok(Some((text, online.model_id.clone()))),
+                                Err(e) => warn!(error = %e, "fallback online asr transcribe failed"),
+                            }
+                        }
+                    }
+                    Ok(None)
+                }
             }
         })
         .await
         .map_err(|e| format!("asr join: {e}"))?;
 
-        let text = match transcribed {
-            Ok(Some(t)) => t,
+        let (text, effective_model_id) = match transcribed {
+            Ok(Some((t, m))) => (t, m),
             Ok(None) => {
                 warn!("ASR engine not loaded");
                 self.inner.processing.store(false, Ordering::SeqCst);
@@ -875,6 +948,13 @@ impl PipelineHandle {
                 return Err(e);
             }
         };
+
+        if text.trim().is_empty() {
+            info!("ASR decoded empty transcript; returning to idle");
+            self.inner.processing.store(false, Ordering::SeqCst);
+            self.set_state(SessionState::IDLE).await;
+            return Ok(());
+        }
 
         if cancel_flag.load(Ordering::SeqCst) {
             self.inner.processing.store(false, Ordering::SeqCst);
@@ -909,7 +989,7 @@ impl PipelineHandle {
             kind,
             duration_ms,
             effective_mode,
-            model_id,
+            effective_model_id,
             raw_text_for_history,
             cleanup_res.text,
             cleanup_res.flagged,
@@ -1266,6 +1346,22 @@ impl PipelineHandle {
         {
             if let Err(err) = DaemonIpc::emit_entry_added(iface.signal_emitter(), id).await {
                 warn!(error = %err, "emit EntryAdded");
+            }
+        }
+    }
+
+    /// Emits `PartialTranscript` signal to active D-Bus subscribers.
+    pub async fn emit_partial_transcript(&self, text: &str) {
+        let Some(conn) = self.inner.conn.get() else {
+            return;
+        };
+        if let Ok(iface) = conn
+            .object_server()
+            .interface::<_, DaemonIpc>(OBJECT_PATH)
+            .await
+        {
+            if let Err(err) = DaemonIpc::emit_partial_transcript(iface.signal_emitter(), text).await {
+                warn!(error = %err, "emit PartialTranscript");
             }
         }
     }
@@ -2501,6 +2597,24 @@ mod tests {
 
         let mut off = SilenceWatch::new(configured_timeout(0), t0);
         assert!(!off.observe(t0 + Duration::from_secs(30), &quiet_frame(), rate, false));
+    }
+
+    #[test]
+    fn continuous_mode_unattended_silence_timeout_and_pause_behavior() {
+        let t0 = Instant::now();
+        // In continuous mode, limit is 30s unattended failsafe
+        let mut continuous_watch = SilenceWatch::new(configured_timeout(30), t0);
+        let rate = audio::TARGET_SAMPLE_RATE;
+        let quiet = quiet_frame();
+
+        // 2s pause does NOT trigger cutoff in continuous mode
+        assert!(!continuous_watch.observe(t0 + Duration::from_secs(2), &quiet, rate, false));
+        // 10s thinking pause does NOT trigger cutoff
+        assert!(!continuous_watch.observe(t0 + Duration::from_secs(10), &quiet, rate, false));
+        // 29s pause does NOT trigger cutoff
+        assert!(!continuous_watch.observe(t0 + Duration::from_secs(29), &quiet, rate, false));
+        // 30s unattended silence triggers safety cutoff
+        assert!(continuous_watch.observe(t0 + Duration::from_secs(30), &quiet, rate, false));
     }
 
     #[test]

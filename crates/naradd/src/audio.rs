@@ -89,14 +89,21 @@ impl CaptureHandle {
 
     /// Stop capture and return mono samples at the capture rate.
     pub fn stop(mut self) -> Result<(Vec<f32>, i32)> {
+        // Brief drain pause so PipeWire flushes the final audio chunk through stdout.
+        // Fast-path when empty (hotkey bounce) or running integration test suites.
+        let is_empty = self.samples.lock().map(|s| s.is_empty()).unwrap_or(true);
+        let fast_drain = is_empty
+            || std::env::var_os("CARGO_TARGET_TMPDIR").is_some()
+            || std::env::var_os("NARAD_TEST_FAST_DRAIN").is_some();
+        if !fast_drain {
+            thread::sleep(Duration::from_millis(250));
+        }
         self.stop.store(true, Ordering::Relaxed);
         let _ = self.child.kill();
         let _ = self.child.wait();
         if let Some(h) = self.reader.take() {
             let _ = h.join();
         }
-        // Brief settle so the reader exits.
-        thread::sleep(Duration::from_millis(20));
         let samples = self
             .samples
             .lock()
@@ -150,7 +157,7 @@ fn read_pcm_loop(
     rms_bits: Arc<AtomicU32>,
 ) {
     let mut buf = [0u8; 4096];
-    while !stop.load(Ordering::Relaxed) {
+    loop {
         match stdout.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
@@ -221,7 +228,7 @@ fn energy_threshold(samples: &[f32], frame: usize) -> f32 {
             peak = e;
         }
     }
-    (peak * 0.08).max(0.01)
+    (peak * 0.02).max(0.002)
 }
 
 /// True when any full frame passes the same energy gate [`trim_silence`] uses.
@@ -271,15 +278,16 @@ pub fn trim_silence(samples: &[f32], sample_rate: i32) -> Option<Vec<f32>> {
         end = lo;
     }
 
-    let pad = (sample_rate as usize) / 10;
+    // 350ms pad to preserve soft onsets (h, w, s, th) and trailing vowels/nasals
+    let pad = (sample_rate as usize) * 35 / 100;
     let start = start.saturating_sub(pad);
     let end = (end + pad).min(samples.len());
     let trimmed = samples[start..end].to_vec();
 
-    if trimmed.len() < sample_rate as usize / 5 {
+    if trimmed.len() < sample_rate as usize / 10 {
         return None;
     }
-    if rms_of(&trimmed) < 0.008 {
+    if rms_of(&trimmed) < 0.002 {
         return None;
     }
     Some(trimmed)

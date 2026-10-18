@@ -1,6 +1,8 @@
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import * as Keyboard from 'resource:///org/gnome/shell/ui/status/keyboard.js';
+import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
@@ -31,7 +33,10 @@ const DaemonIfaceXml = `
     <method name="Toggle">
       <arg type="s" direction="in" name="mode"/>
     </method>
+    <method name="Stop"/>
+    <method name="StopAndInsert"/>
     <method name="Cancel"/>
+    <method name="Discard"/>
     <method name="SelectionCommand"/>
     <method name="ReportFocus">
       <arg type="s" direction="in" name="app_id"/>
@@ -41,6 +46,9 @@ const DaemonIfaceXml = `
     </signal>
     <signal name="Level">
       <arg type="d" name="rms"/>
+    </signal>
+    <signal name="PartialTranscript">
+      <arg type="s" name="text"/>
     </signal>
     <property name="Mode" type="s" access="readwrite"/>
     <property name="Paused" type="b" access="readwrite"/>
@@ -80,6 +88,8 @@ export default class NaradExtension extends Extension {
         this._menu = null;
         this._menuManager = null;
         this._modeItems = null;
+        this._originalInputSource = null;
+        this._inputSettings = null;
 
         this._root = new St.BoxLayout({
             reactive: true,
@@ -140,6 +150,7 @@ export default class NaradExtension extends Extension {
             style_class: 'narad-hud-pill',
             vertical: false,
             visible: false,
+            reactive: true,
             y_align: Clutter.ActorAlign.CENTER,
         });
         this._pill.spacing = 8;
@@ -204,15 +215,40 @@ export default class NaradExtension extends Extension {
             visible: false,
         });
 
+        this._stopBtn = new St.Button({
+            name: 'narad-stop-btn',
+            style_class: 'narad-hud-btn',
+            can_focus: true,
+            reactive: true,
+            track_hover: true,
+            label: '■ Stop & Insert',
+            visible: false,
+        });
+
+        this._discardBtn = new St.Button({
+            name: 'narad-discard-btn',
+            style_class: 'narad-hud-btn',
+            can_focus: true,
+            reactive: true,
+            track_hover: true,
+            label: '× Discard',
+            visible: false,
+        });
+
+        this._connect(this._stopBtn, 'clicked', () => this._onStopClick());
+        this._connect(this._discardBtn, 'clicked', () => this._onDiscardClick());
+
         this._pill.add_child(this._wave);
         this._pill.add_child(this._pillIcon);
         this._pill.add_child(this._pillPrimary);
         this._pill.add_child(this._pillSep1);
         this._pill.add_child(this._pillSecondary);
-        this._pill.add_child(this._pillSep2);
-        this._pill.add_child(this._pillTertiary);
         this._pill.add_child(this._pillDot);
         this._pill.add_child(this._pillKeycap);
+        this._pill.add_child(this._stopBtn);
+        this._pill.add_child(this._discardBtn);
+        this._pill.add_child(this._pillSep2);
+        this._pill.add_child(this._pillTertiary);
 
         this._hint = new St.Label({
             style_class: 'narad-hud-hint',
@@ -235,6 +271,9 @@ export default class NaradExtension extends Extension {
                 return Clutter.EVENT_STOP;
             }
             if (button !== Clutter.BUTTON_PRIMARY)
+                return Clutter.EVENT_PROPAGATE;
+            const source = event.get_source();
+            if (this._isDescendant(source, this._stopBtn) || this._isDescendant(source, this._discardBtn))
                 return Clutter.EVENT_PROPAGATE;
             const [x, y] = event.get_coords();
             this._press = {
@@ -267,6 +306,9 @@ export default class NaradExtension extends Extension {
         });
         this._connect(this._root, 'button-release-event', (_actor, event) => {
             if (event.get_button() !== Clutter.BUTTON_PRIMARY)
+                return Clutter.EVENT_PROPAGATE;
+            const source = event.get_source();
+            if (this._isDescendant(source, this._stopBtn) || this._isDescendant(source, this._discardBtn))
                 return Clutter.EVENT_PROPAGATE;
             if (this._press && !this._press.moved)
                 this._onToggleClick();
@@ -416,6 +458,12 @@ export default class NaradExtension extends Extension {
                 this._onLevel(params[0]);
             }),
         );
+        this._signalIds.push(
+            proxy.connectSignal('PartialTranscript', (_p, _sender, params) => {
+                const text = params[0];
+                this._onPartialTranscript(text);
+            }),
+        );
         this._propSignalId = proxy.connect('g-properties-changed', (_p, changed, _inv) => {
             const dict = changed.deep_unpack();
             if (dict.HudVisible !== undefined) {
@@ -508,6 +556,7 @@ export default class NaradExtension extends Extension {
     }
 
     _onDaemonVanished() {
+        this._restoreOriginalInputSource();
         this._disconnectProxySignals();
         this._proxy = null;
         this._daemonConnected = false;
@@ -743,16 +792,176 @@ export default class NaradExtension extends Extension {
             this._root.visible = !!visible;
     }
 
-    _onEscCancel() {
-        console.log('[narad] Esc → Cancel');
-        if (this._daemonConnected && this._proxy) {
-            this._proxy.CancelRemote((_result, error) => {
-                if (error)
-                    console.warn(`[narad] Cancel failed: ${error.message}`);
-            });
+    _isDescendant(actor, ancestor) {
+        if (!actor || !ancestor)
+            return false;
+        if (actor === ancestor)
+            return true;
+        if (typeof ancestor.contains === 'function')
+            return ancestor.contains(actor);
+        return false;
+    }
+
+    get originalInputSource() {
+        return this._originalInputSource;
+    }
+
+    _activateNaradInputSource() {
+        if (this._originalInputSource !== null)
             return;
+
+        try {
+            const isManager = Keyboard.getInputSourceManager?.();
+            if (isManager) {
+                this._originalInputSource = isManager.currentSource || null;
+                const sources = isManager.inputSources || {};
+                const naradSource = Object.values(sources).find(
+                    s => s && (s.id === 'narad' || (s.type === 'ibus' && s.id === 'narad')),
+                );
+                if (naradSource && typeof naradSource.activate === 'function') {
+                    naradSource.activate(true);
+                    return;
+                }
+            }
+        } catch (e) {
+            console.warn(`[narad] input source manager switch failed: ${e.message}`);
         }
-        this._applyState('idle');
+
+        try {
+            const ibusManager = IBusManager.getIBusManager?.();
+            if (ibusManager) {
+                if (!this._originalInputSource) {
+                    const isManager = Keyboard.getInputSourceManager?.();
+                    this._originalInputSource = isManager?.currentSource || 'default';
+                }
+                ibusManager.setEngine('narad');
+                return;
+            }
+        } catch (e) {
+            console.warn(`[narad] ibusManager setEngine failed: ${e.message}`);
+        }
+
+        try {
+            if (!this._inputSettings)
+                this._inputSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.input-sources' });
+            if (!this._originalInputSource) {
+                const currentIdx = this._inputSettings.get_uint('current');
+                this._originalInputSource = { gsettingsIndex: currentIdx };
+            }
+        } catch (e) {
+            console.warn(`[narad] gsettings input source switch failed: ${e.message}`);
+        }
+    }
+
+    _restoreOriginalInputSource() {
+        if (!this._originalInputSource)
+            return;
+
+        const original = this._originalInputSource;
+        this._originalInputSource = null;
+
+        try {
+            if (typeof original === 'object' && original !== null) {
+                if (typeof original.activate === 'function') {
+                    original.activate(true);
+                    return;
+                }
+                if (typeof original.gsettingsIndex === 'number' && this._inputSettings) {
+                    this._inputSettings.set_uint('current', original.gsettingsIndex);
+                    return;
+                }
+            }
+
+            if (typeof original === 'string' && original !== 'default') {
+                const ibusManager = IBusManager.getIBusManager?.();
+                if (ibusManager) {
+                    ibusManager.setEngine(original);
+                    return;
+                }
+            }
+
+            const isManager = Keyboard.getInputSourceManager?.();
+            if (isManager) {
+                if (isManager.currentSource && typeof isManager.currentSource.activate === 'function') {
+                    isManager.currentSource.activate(true);
+                } else {
+                    const first = Object.values(isManager.inputSources || {})[0];
+                    if (first && typeof first.activate === 'function')
+                        first.activate(true);
+                }
+            }
+        } catch (e) {
+            console.warn(`[narad] restore input source failed: ${e.message}`);
+        }
+    }
+
+    _syncInputSource(state) {
+        if (state === 'listening' || state === 'recording') {
+            this._activateNaradInputSource();
+        } else if (['idle', 'cancelled', 'inserted', 'copied', 'error', 'undone'].includes(state)) {
+            this._restoreOriginalInputSource();
+        }
+    }
+
+    _onStopClick() {
+        console.log('[narad] Stop clicked');
+        if (this._daemonConnected && this._proxy) {
+            if (typeof this._proxy.StopAndInsertRemote === 'function') {
+                this._proxy.StopAndInsertRemote((_result, error) => {
+                    if (error) {
+                        if (typeof this._proxy.StopRemote === 'function') {
+                            this._proxy.StopRemote((_res, err2) => {
+                                if (err2)
+                                    console.warn(`[narad] Stop failed: ${err2.message}`);
+                            });
+                        } else {
+                            console.warn(`[narad] StopAndInsert failed: ${error.message}`);
+                        }
+                    }
+                });
+                return;
+            } else if (typeof this._proxy.StopRemote === 'function') {
+                this._proxy.StopRemote((_result, error) => {
+                    if (error)
+                        console.warn(`[narad] Stop failed: ${error.message}`);
+                });
+                return;
+            }
+        }
+        this._applyState('inserted');
+    }
+
+    _onDiscardClick() {
+        console.log('[narad] Discard clicked');
+        if (this._daemonConnected && this._proxy) {
+            if (typeof this._proxy.DiscardRemote === 'function') {
+                this._proxy.DiscardRemote((_result, error) => {
+                    if (error) {
+                        if (typeof this._proxy.CancelRemote === 'function') {
+                            this._proxy.CancelRemote((_res, err2) => {
+                                if (err2)
+                                    console.warn(`[narad] Cancel failed: ${err2.message}`);
+                            });
+                        } else {
+                            console.warn(`[narad] Discard failed: ${error.message}`);
+                        }
+                    }
+                });
+                return;
+            } else if (typeof this._proxy.CancelRemote === 'function') {
+                this._proxy.CancelRemote((_result, error) => {
+                    if (error)
+                        console.warn(`[narad] Cancel failed: ${error.message}`);
+                });
+                return;
+            }
+        }
+        this._applyState('cancelled');
+    }
+
+    _onEscCancel() {
+        console.log('[narad] Esc → Cancel / Discard');
+        this._onDiscardClick();
     }
 
     _bindEsc() {
@@ -821,6 +1030,7 @@ export default class NaradExtension extends Extension {
         this._levelDriven = false;
         this._state = state;
         this._syncEscGrab(state);
+        this._syncInputSource(state);
 
         this._row.style_class = `narad-hud is-${state}`;
         this._anchor.style_class = 'narad-hud-anchor';
@@ -835,6 +1045,8 @@ export default class NaradExtension extends Extension {
         this._pillTertiary.visible = false;
         this._pillDot.visible = false;
         this._pillKeycap.visible = false;
+        this._stopBtn.visible = false;
+        this._discardBtn.visible = false;
         this._hint.visible = false;
         this._pillPrimary.style_class = 'hud-label narad-hud-text';
         this._pillSecondary.style_class = 'hud-meta narad-hud-text-accent';
@@ -865,6 +1077,8 @@ export default class NaradExtension extends Extension {
                 this._pillIcon.icon_name = 'audio-input-microphone-symbolic';
                 this._pillIcon.visible = true;
             }
+            this._stopBtn.visible = true;
+            this._discardBtn.visible = true;
             this._startElapsed();
             break;
 
@@ -1045,6 +1259,17 @@ export default class NaradExtension extends Extension {
         }
     }
 
+    _onPartialTranscript(text) {
+        if (!text || typeof text !== 'string')
+            return;
+        const trimmed = text.trim();
+        if (!trimmed)
+            return;
+        if (this._state === 'listening' || this._state === 'recording') {
+            this._pillPrimary.text = trimmed;
+        }
+    }
+
     _startWave() {
         if (!this._animationsEnabled())
             return;
@@ -1103,6 +1328,9 @@ export default class NaradExtension extends Extension {
     }
 
     disable() {
+        this._restoreOriginalInputSource();
+        this._originalInputSource = null;
+        this._inputSettings = null;
         this._clearTimers();
         this._unbindEsc();
         if (this._accelHandler) {
@@ -1140,5 +1368,7 @@ export default class NaradExtension extends Extension {
         }
         this._anchor = null;
         this._pill = null;
+        this._stopBtn = null;
+        this._discardBtn = null;
     }
 }

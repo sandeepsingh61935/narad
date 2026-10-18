@@ -342,7 +342,7 @@ pub async fn run(pipeline: PipelineHandle) -> Result<()> {
                             continue;
                         }
 
-                        if held_ms >= threshold_ms {
+                        if threshold_ms > 0 && held_ms >= threshold_ms {
                             if pipeline.is_listening() {
                                 info!(held_ms, "hotkey hold release → Stop");
                                 pipeline.request_stop();

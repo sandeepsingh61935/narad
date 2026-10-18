@@ -30,6 +30,11 @@ impl DaemonIpc {
     pub async fn emit_entry_added(emitter: &SignalEmitter<'_>, id: i64) -> zbus::Result<()> {
         Self::entry_added(emitter, id).await
     }
+
+    /// Emit `PartialTranscript` during streaming recognition.
+    pub async fn emit_partial_transcript(emitter: &SignalEmitter<'_>, text: &str) -> zbus::Result<()> {
+        Self::partial_transcript(emitter, text).await
+    }
 }
 
 #[interface(name = "dev.narad.Daemon")]
@@ -59,11 +64,27 @@ impl DaemonIpc {
         Ok(())
     }
 
+    async fn stop_and_insert(
+        &self,
+        #[zbus(signal_emitter)] _emitter: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<()> {
+        self.pipeline.request_stop_and_insert();
+        Ok(())
+    }
+
     async fn cancel(
         &self,
         #[zbus(signal_emitter)] _emitter: SignalEmitter<'_>,
     ) -> zbus::fdo::Result<()> {
         self.pipeline.request_cancel();
+        Ok(())
+    }
+
+    async fn discard(
+        &self,
+        #[zbus(signal_emitter)] _emitter: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<()> {
+        self.pipeline.request_discard();
         Ok(())
     }
 
@@ -266,6 +287,9 @@ impl DaemonIpc {
 
     #[zbus(signal)]
     async fn entry_added(emitter: &SignalEmitter<'_>, id: i64) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn partial_transcript(emitter: &SignalEmitter<'_>, text: &str) -> zbus::Result<()>;
 
     #[zbus(property)]
     async fn mode(&self) -> zbus::fdo::Result<String> {

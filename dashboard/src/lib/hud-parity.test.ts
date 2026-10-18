@@ -114,3 +114,102 @@ test("companion HUD displays mode and language pair during listening and process
   );
 });
 
+test("companion HUD includes clickable Stop & Insert and Discard buttons in listening state", () => {
+  assert.match(extensionSource, /name:\s*['"]narad-stop-btn['"]/);
+  assert.match(extensionSource, /name:\s*['"]narad-discard-btn['"]/);
+  assert.match(extensionSource, /label:\s*['"]■ Stop & Insert['"]/);
+  assert.match(extensionSource, /label:\s*['"]× Discard['"]/);
+
+  const listenStart = extensionSource.indexOf("case 'listening':");
+  const procStart = extensionSource.indexOf("case 'processing':");
+  assert.ok(listenStart >= 0 && procStart > listenStart);
+  const listenBlock = extensionSource.slice(listenStart, procStart);
+
+  assert.match(listenBlock, /this\._stopBtn\.visible\s*=\s*true/);
+  assert.match(listenBlock, /this\._discardBtn\.visible\s*=\s*true/);
+
+  // In base state reset, buttons are hidden
+  const applyStateStart = extensionSource.indexOf("_applyState(state)");
+  const switchStart = extensionSource.indexOf("switch (state)", applyStateStart);
+  const baseBlock = extensionSource.slice(applyStateStart, switchStart);
+  assert.match(baseBlock, /this\._stopBtn\.visible\s*=\s*false/);
+  assert.match(baseBlock, /this\._discardBtn\.visible\s*=\s*false/);
+
+  // Handlers wire to daemon D-Bus StopAndInsert/Stop and Discard/Cancel
+  assert.match(extensionSource, /<method name="Stop"\/>/);
+  assert.match(extensionSource, /<method name="StopAndInsert"\/>/);
+  assert.match(extensionSource, /<method name="Discard"\/>/);
+  assert.match(extensionSource, /_onStopClick/);
+  assert.match(extensionSource, /StopAndInsertRemote/);
+  assert.match(extensionSource, /_onDiscardClick/);
+  assert.match(extensionSource, /DiscardRemote/);
+});
+
+test("extension enforces input source switching and crash watchdog recovery contract", () => {
+  assert.match(extensionSource, /originalInputSource/);
+  assert.match(extensionSource, /_activateNaradInputSource/);
+  assert.match(extensionSource, /_restoreOriginalInputSource/);
+  assert.match(extensionSource, /_syncInputSource/);
+
+  // Activates narad on listening/recording
+  const syncStart = extensionSource.indexOf("_syncInputSource(state) {");
+  assert.ok(syncStart >= 0, "missing _syncInputSource definition");
+  const syncEnd = extensionSource.indexOf("_onStopClick()", syncStart);
+  assert.ok(syncEnd > syncStart, "_syncInputSource definition must precede _onStopClick");
+  const syncFn = extensionSource.slice(syncStart, syncEnd);
+  assert.match(syncFn, /listening/);
+  assert.match(syncFn, /_activateNaradInputSource/);
+
+  // Restores on idle, cancelled, inserted
+  assert.match(syncFn, /idle/);
+  assert.match(syncFn, /cancelled/);
+  assert.match(syncFn, /inserted/);
+  assert.match(syncFn, /_restoreOriginalInputSource/);
+
+  // Watchdog restores on daemon vanishing (crash or unexpected disconnect)
+  const vanishStart = extensionSource.indexOf("_onDaemonVanished() {");
+  const vanishEnd = extensionSource.indexOf("_disconnectProxySignals()", vanishStart);
+  assert.ok(vanishStart >= 0 && vanishEnd > vanishStart);
+  const vanishBlock = extensionSource.slice(vanishStart, vanishEnd);
+  assert.match(vanishBlock, /this\._restoreOriginalInputSource\(\)/);
+
+  // Restores on extension disable
+  const disableStart = extensionSource.indexOf("disable()");
+  const disableBlock = extensionSource.slice(disableStart, disableStart + 120);
+  assert.match(disableBlock, /this\._restoreOriginalInputSource\(\)/);
+});
+
+test("stylesheet styles #narad-stop-btn and #narad-discard-btn with Quiet Precision", () => {
+  const stylesheetSource = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "../../../extension/stylesheet.css"),
+    "utf8",
+  );
+
+  assert.match(stylesheetSource, /#narad-stop-btn/);
+  assert.match(stylesheetSource, /#narad-discard-btn/);
+
+  // Touch target >= 28px
+  assert.match(stylesheetSource, /min-height:\s*28px/);
+  assert.match(stylesheetSource, /min-width:\s*28px/);
+
+  // Warm charcoal background
+  assert.match(stylesheetSource, /background-color:\s*rgba\(45,\s*43,\s*40/);
+
+  // Saffron hover accent
+  assert.match(stylesheetSource, /#narad-stop-btn:hover/);
+  assert.match(stylesheetSource, /#narad-discard-btn:hover/);
+  assert.match(stylesheetSource, /#e08a1e/);
+
+  // Visible focus state
+  assert.match(stylesheetSource, /#narad-stop-btn:focus/);
+  assert.match(stylesheetSource, /#narad-discard-btn:focus/);
+});
+
+test("preserves existing hotkeys for toggle and cancel", () => {
+  assert.match(extensionSource, /Ctrl\+Alt\+Space/);
+  assert.match(extensionSource, /_bindEsc/);
+  assert.match(extensionSource, /_unbindEsc/);
+  assert.match(extensionSource, /_onEscCancel/);
+});
+
+

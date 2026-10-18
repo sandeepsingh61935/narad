@@ -89,6 +89,8 @@ Visual/surface authority: Stitch **Quiet Precision** + `narad_floating_hud_compo
 | FR-ASR-4 | Spoken-language auto-detect when the active model supports it; otherwise fixed source language per mode. | 3 |
 | FR-ASR-5 | Hallucination filter: drop known phantom phrases (e.g. "Thanks for watching") and output produced from silence/noise-only audio. | 1 |
 | FR-ASR-6 | Transcribe dropped audio/video files from the dashboard (and via CLI). | 2 |
+| FR-ASR-7 | Real-time online streaming speech recognition with sub-35ms partial token emissions via `sherpa_onnx::OnlineRecognizer` (Zipformer Transducer/CTC). | 1 |
+| FR-ASR-8 | Universal BYOM (Bring-Your-Own-Model) dynamic discovery & runtime hardware profiler: auto-detects user-dropped models, benchmarks AVX2/AVX-512 SIMD cores, and tunes inference threads. | 2 |
 
 ### 4.5 Text processing pipeline
 
@@ -100,10 +102,11 @@ Order: raw transcript → voice commands → dictionary/replacements → transla
 | FR-TXT-2 | Custom vocabulary (names, jargon) used for biasing where the model supports it, plus post-correction mapping. | 2 |
 | FR-TXT-3 | Text replacements / snippets (e.g. "my email" → `me@example.com`, "insert signature" → multi-line block). | 2 |
 | FR-TXT-4 | Code dictation: "camel case user name" → `userName`; also snake, kebab, pascal, constant case. | 2 |
-| FR-TXT-5 | Translation A → B via installed translation pack; skipped when A = B. | 3 |
+| FR-TXT-5 | Translation A → B via installed translation pack or single-pass Whisper translation; skipped when A = B. | 3 |
 | FR-TXT-6 | AI cleanup with a local LLM: filler removal, hallucination removal, formatting, restructure, rephrase. | 4 |
 | FR-TXT-7 | Cleanup is per-mode: **off for Plain dictation**, on for modes that need it. | 4 |
 | FR-TXT-8 | Cleanup guard: if LLM output adds content not grounded in the transcript (length/novel-word thresholds), fall back to the pre-cleanup text and flag the entry. | 4 |
+| FR-VOC-3 | Auto-learning dictionary: semantic diff-match-patch detects post-insertion user edits and learns corrections into the local SQLite dictionary. | 2 |
 
 Built-in modes (editable, user can add more):
 
@@ -121,12 +124,14 @@ Built-in modes (editable, user can add more):
 
 | ID | Requirement | Phase |
 |---|---|---|
-| FR-INS-1 | Insert final text at the cursor of the target app, all at once after stop. | 1 |
-| FR-INS-2 | Primary method: clipboard paste with the user's clipboard saved and restored afterwards. Terminals use `Ctrl+Shift+V`. | 1 |
+| FR-INS-1 | Insert final text at the cursor of the target app, all at once after stop or committed atomically from pre-edit. | 1 |
+| FR-INS-2 | Fallback method (terminals / non-IBus apps): clipboard paste with the user's clipboard saved and restored afterwards. Terminals use `Ctrl+Shift+V`. | 1 |
 | FR-INS-3 | If insertion fails or no text field is focused, text is copied to clipboard and the HUD shows a "copied" state (companion pill + paste keycap hint). | 1 |
 | FR-INS-4 | Paste-last hotkey re-inserts the most recent final text. | 2 |
 | FR-INS-5 | Undo-last hotkey removes the last inserted text (if focus/cursor unchanged). | 2 |
 | FR-INS-6 | Selection command mode: select text, press selection hotkey, speak an instruction ("make this formal", "translate to Hindi", "shorten") → selection replaced. | 4 |
+| FR-INS-7 | Primary streaming method: Native IBus Input Method Engine (`org.freedesktop.IBus.Engine`) shows underlined pre-edit tokens directly at the blinking cursor in real time; commits atomically on silence pause or hotkey release. | 1 |
+| FR-INS-8 | Surrounding-text context via IBus `SetSurroundingText` dynamically determines capitalization, sentence boundaries, and word spacing without overwriting existing text. | 1 |
 
 ### 4.7 Dashboard and history
 
@@ -149,6 +154,7 @@ Built-in modes (editable, user can add more):
 |---|---|---|
 | FR-CTX-1 | Record the target app (app id / window class) with each entry. | 2 |
 | FR-CTX-2 | Per-app profiles: default mode per app (e.g. Slack → Message, VS Code → Code, Terminal → Plain with `Ctrl+Shift+V`). | 4 |
+| FR-CTX-3 | Local screen, UI, and IDE context harvesting via AT-SPI2 accessibility tree (`org.a11y.Bus`) and directory symbol scanner for dynamic in-memory hotword biasing. | 2 |
 
 ### 4.9 Models
 
@@ -176,6 +182,12 @@ Built-in modes (editable, user can add more):
 | FR-CLI-2 | `narad last`, `narad history [--search Q] [--json]`. | 2 |
 | FR-CLI-3 | `narad transcribe <file> [--mode M] [--to LANG]`. | 2 |
 | FR-CLI-4 | `narad models list/install/remove/benchmark`. | 3 |
+
+### 4.12 Agentic Extensibility
+
+| ID | Requirement | Phase |
+|---|---|---|
+| FR-MCP-1 | Local Model Context Protocol (MCP) server over stdio/Unix socket for AI coding agents to control dictation, read history, and register custom vocabulary. | 2 |
 
 ## 5. Non-functional requirements
 
@@ -210,12 +222,21 @@ Built-in modes (editable, user can add more):
 - NFR-U-1: Works out of the box after install with one permission prompt (remote-desktop/input) and one shortcut confirmation.
 - NFR-U-2: Every setting has a sensible default; no setting required to start dictating.
 
+### 5.5 Realistic and Rigorous Testing Quality Gate
+
+| ID | Metric | Target |
+|---|---|---|
+| NFR-T-1 | Acoustic human corpora coverage | Real LibriSpeech + diverse accents (US, UK, Indian, European) tested with calibrated noise injection at 5, 10, and 15 dB SNR; WER regression gate enforced. |
+| NFR-T-2 | Live desktop widget integration | Headless Wayland (Weston) + IBus testbed passes pre-edit streaming across GTK4, Qt6, Chromium, and VTE terminal widgets. |
+| NFR-T-3 | Concurrency & Chaos resilience | 50 hotkey cycles in 5s; typing collision during pre-edit; zero deadlock, zero dropped keystrokes. |
+| NFR-T-4 | Endurance & Memory footprint | 30-min continuous transcription session maintains flat RSS memory footprint (<150 MB); zero leaks across 100 model swaps. |
+
 ## 6. Out of scope for v1
 
-- Cloud ASR/LLM providers.
-- Live word-by-word streaming into the target app.
+- Cloud ASR/LLM providers (100% on-device only).
 - Windows/macOS/KDE/X11 builds (architecture must not block them).
 - Multi-device sync.
+- *(Note: Live word-by-word streaming into the target app was originally deferred in early Phase 0, but is graduated to core architecture via FR-ASR-7 and FR-INS-7 to achieve parity and superiority over Wispr Flow).*
 
 ## 7. Backlog (ideas not yet scheduled)
 

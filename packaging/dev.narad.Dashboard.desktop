@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Narad
+Comment=Local voice-to-text dictation and transcription dashboard
+Exec=narad-dashboard %U
+TryExec=narad-dashboard
+Icon=dev.narad.Dashboard
+Terminal=false
+Categories=Utility;AudioVideo;Office;
+Keywords=voice;dictation;speech;transcription;audio;
+StartupWMClass=dev.narad.Dashboard
+StartupNotify=true

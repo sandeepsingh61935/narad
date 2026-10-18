@@ -87,7 +87,23 @@ gnome-extensions list --enabled | grep narad
 
 More detail: [`extension/README.md`](../extension/README.md).
 
-## 3. First-run checklist
+## 3. Desktop application launcher and icon
+
+Install the dashboard binary, desktop entry, application icons, and Desktop shortcut:
+
+```bash
+./packaging/install-desktop.sh
+```
+
+What it does:
+1. Builds the dashboard release binary (`dashboard/src-tauri/target/release/dashboard`) if needed
+2. Installs the executable to `~/.local/bin/narad-dashboard-bin`
+3. Installs a daemon-guard launcher script to `~/.local/bin/narad-dashboard`
+4. Installs icons (32px, 128px, 256px, 512px) under `~/.local/share/icons/hicolor/`
+5. Installs the desktop entry to `~/.local/share/applications/dev.narad.Dashboard.desktop`
+6. Creates an executable launcher at `~/Desktop/dev.narad.Dashboard.desktop`
+
+## 4. First-run checklist
 
 1. Daemon active: `systemctl --user is-active narad.service` → `active`
 2. D-Bus name claimed: `busctl --user status dev.narad.Daemon` (exactly one `naradd`; PID matches the service)
@@ -103,9 +119,11 @@ More detail: [`extension/README.md`](../extension/README.md).
 
 ```
 packaging/
-  narad.service           # systemd user unit
-  install-user.sh         # build + install + enable daemon
-  install-extension.sh    # symlink + enable GNOME extension
-  config.toml.example     # seed for ~/.config/narad/config.toml
-  README.md               # this file
+  narad.service                # systemd user unit
+  install-user.sh              # build + install + enable daemon
+  install-extension.sh         # symlink + enable GNOME extension
+  install-desktop.sh           # install dashboard desktop icon & launcher
+  dev.narad.Dashboard.desktop  # desktop entry template
+  config.toml.example          # seed for ~/.config/narad/config.toml
+  README.md                    # this file
 ```

@@ -58,12 +58,12 @@ Default hotkeys (proposed, configurable):
 
 ### 4.2 Floating HUD
 
-Visual/surface authority: Stitch **Quiet Precision** + `narad_floating_hud_component_sheet` (circular ~28px anchor + companion waveform HUD pill while active). IDs keep the `FR-DOT-*` prefix for roadmap continuity.
+Visual/surface authority: **Libadwaita Dark Visual System** (ADR-006, `brand-spec.md`, `DESIGN-HANDOFF.md`): compact circular ~28px anchor + Raycast-style companion waveform HUD pill while active. IDs keep the `FR-DOT-*` prefix for roadmap continuity.
 
 | ID | Requirement | Phase |
 |---|---|---|
 | FR-DOT-1 | Always-on-top floating HUD: compact circular anchor (~28px), draggable; position persists across restarts. | 1 |
-| FR-DOT-2 | States: **idle** (neutral anchor); **listening** (saffron anchor + mic-level pulse + companion pill with live waveform); **processing** (spinner on anchor + “Transcribing…” pill); **inserted** / **copied** / **cancelled** / **error** (brief outcome on anchor + companion toast/pill as needed). Status never by color alone. | 1 |
+| FR-DOT-2 | States: **idle** (neutral anchor); **listening** (Adwaita Blue anchor + mic-level pulse + companion pill with live waveform bars); **processing** (spinner on anchor + “Transcribing…” pill); **inserted** / **copied** / **cancelled** / **error** (brief outcome on anchor + companion toast/pill as needed). Status never by color alone. | 1 |
 | FR-DOT-3 | Can be hidden (hotkey still works). | 1 |
 | FR-DOT-4 | Right-click menu on the anchor: current mode, open dashboard, pause history, hide HUD, quit (with keycap accelerators). | 2 |
 | FR-DOT-5 | While listening/processing, companion HUD shows current mode and language pair (plus elapsed time while listening). | 3 |
@@ -141,7 +141,7 @@ Built-in modes (editable, user can add more):
 | FR-HIS-7 | Retention policy: auto-delete text and/or audio after N days; pause history. | 2 |
 | FR-HIS-8 | Stats: words dictated, speaking WPM, utterance count, estimated time saved vs typing; daily/weekly view. | 2 |
 | FR-HIS-9 | Settings tab: hotkeys, mic, modes, dictionary, sounds, retention, models. | 1+ |
-| FR-HIS-10 | Follows GNOME light/dark theme; fully keyboard-navigable. | 1 |
+| FR-HIS-10 | Libadwaita dark window posture with Tauri CSD; fully keyboard-navigable. | 1 |
 
 ### 4.8 App context
 

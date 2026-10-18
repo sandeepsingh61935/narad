@@ -8,6 +8,7 @@ mod denoise;
 mod history_days;
 mod hotkeys;
 mod insert;
+pub mod ibus;
 mod ipc;
 pub mod longform;
 mod paths;
@@ -98,6 +99,9 @@ async fn main() -> Result<()> {
     let audio_dir = data_dir.join("audio");
     if let Err(err) = retained::clear_partial_audio(&audio_dir) {
         warn!(%err, "clear partial audio");
+    }
+    if let Err(err) = ibus::write_ibus_component_manifest(None) {
+        warn!(%err, "write ibus component manifest");
     }
     let pipeline = PipelineHandle::new(cfg.clone(), store, asr_engine, audio_dir);
     pipeline.start_retention_purge();

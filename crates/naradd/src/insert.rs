@@ -60,12 +60,21 @@ fn clear_restore_token() -> Result<()> {
     Ok(())
 }
 
-fn spawn_clipboard_transfer_handler(text: String) -> tokio::task::JoinHandle<()> {
+static ACTIVE_PORTAL_TEXT: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+static PORTAL_TRANSFER_SPAWNED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static LAST_INSERTED_TEXT: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+fn ensure_portal_transfer_handler() {
+    if PORTAL_TRANSFER_SPAWNED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     tokio::spawn(async move {
         let clipboard = match Clipboard::new().await {
             Ok(c) => c,
             Err(err) => {
                 warn!("clipboard portal: {err}");
+                PORTAL_TRANSFER_SPAWNED.store(false, std::sync::atomic::Ordering::SeqCst);
                 return;
             }
         };
@@ -73,6 +82,7 @@ fn spawn_clipboard_transfer_handler(text: String) -> tokio::task::JoinHandle<()>
             Ok(stream) => stream,
             Err(err) => {
                 warn!("SelectionTransfer stream: {err}");
+                PORTAL_TRANSFER_SPAWNED.store(false, std::sync::atomic::Ordering::SeqCst);
                 return;
             }
         };
@@ -84,22 +94,27 @@ fn spawn_clipboard_transfer_handler(text: String) -> tokio::task::JoinHandle<()>
                     .await;
                 continue;
             }
-            let success = match clipboard.selection_write(&session, serial).await {
-                Ok(fd) => {
-                    let mut file = std::fs::File::from(OwnedFd::from(fd));
-                    std::io::Write::write_all(&mut file, text.as_bytes()).is_ok()
-                }
-                Err(err) => {
-                    warn!("SelectionWrite failed: {err}");
-                    false
-                }
+            let active = ACTIVE_PORTAL_TEXT.read().ok().and_then(|g| g.clone());
+            let success = match active {
+                Some(text) => match clipboard.selection_write(&session, serial).await {
+                    Ok(fd) => {
+                        let mut file = std::fs::File::from(OwnedFd::from(fd));
+                        std::io::Write::write_all(&mut file, text.as_bytes()).is_ok()
+                    }
+                    Err(err) => {
+                        warn!("SelectionWrite failed: {err}");
+                        false
+                    }
+                },
+                None => false,
             };
             let _ = clipboard
                 .selection_write_done(&session, serial, success)
                 .await;
         }
-    })
+    });
 }
+
 
 /// CreateSession → SelectDevices → RequestClipboard → Start (order required by portal).
 async fn open_remote_desktop_session(
@@ -156,7 +171,10 @@ async fn advertise_clipboard(
     session: &ashpd::desktop::Session<RemoteDesktop>,
     text: &str,
 ) -> Result<()> {
-    let _writer = spawn_clipboard_transfer_handler(text.to_owned());
+    ensure_portal_transfer_handler();
+    if let Ok(mut g) = ACTIVE_PORTAL_TEXT.write() {
+        *g = Some(text.to_owned());
+    }
     clipboard
         .set_selection(
             session,
@@ -269,10 +287,13 @@ async fn portal_backspaces(
     Ok(())
 }
 
+// Linux evdev keycodes (KEY_LEFTCTRL = 29, KEY_LEFTSHIFT = 42, KEY_V = 47, KEY_BACKSPACE = 14)
+pub const EI_CTRL: u32 = 29;
+pub const EI_SHIFT: u32 = 42;
+pub const EI_V: u32 = 47;
+pub const EI_BACKSPACE: u32 = 14;
+
 fn libei_paste(stream: UnixStream, terminal: bool) -> Result<()> {
-    const EI_CTRL: u32 = 29 - 8;
-    const EI_SHIFT: u32 = 42 - 8;
-    const EI_V: u32 = 47 - 8;
     libei_with_keyboard(stream, move |kb| {
         let press = |keyboard: &ei::Keyboard, code: u32, down: bool| {
             let state = if down {
@@ -296,7 +317,6 @@ fn libei_paste(stream: UnixStream, terminal: bool) -> Result<()> {
 }
 
 fn libei_backspaces(stream: UnixStream, count: usize) -> Result<()> {
-    const EI_BACKSPACE: u32 = 14 - 8;
     libei_with_keyboard(stream, move |kb| {
         for _ in 0..count {
             kb.key(EI_BACKSPACE, ei::keyboard::KeyState::Press);
@@ -415,24 +435,49 @@ fn snapshot_clipboard_wl() -> Option<String> {
     String::from_utf8(output.stdout).ok()
 }
 
+fn clear_clipboard_wl() -> Result<()> {
+    let status = std::process::Command::new("wl-copy")
+        .arg("--clear")
+        .status()
+        .context("spawn wl-copy --clear")?;
+    if !status.success() {
+        bail!("wl-copy --clear exited {status}");
+    }
+    Ok(())
+}
+
 /// Snapshot current clipboard text before SetSelection (FR-INS-2). Never logs contents (NFR-S-4).
 async fn snapshot_clipboard(
     clipboard: &Clipboard,
     session: &ashpd::desktop::Session<RemoteDesktop>,
 ) -> Option<String> {
-    match clipboard.selection_read(session, "text/plain").await {
-        Ok(fd) => {
-            let mut file = std::fs::File::from(OwnedFd::from(fd));
-            let mut buf = Vec::new();
-            if std::io::Read::read_to_end(&mut file, &mut buf).is_ok() {
-                if let Ok(s) = String::from_utf8(buf) {
-                    return Some(s);
+    let raw = match snapshot_clipboard_wl() {
+        Some(s) => Some(s),
+        None => match clipboard.selection_read(session, "text/plain").await {
+            Ok(fd) => {
+                let mut file = std::fs::File::from(OwnedFd::from(fd));
+                let mut buf = Vec::new();
+                if std::io::Read::read_to_end(&mut file, &mut buf).is_ok() {
+                    String::from_utf8(buf).ok()
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        },
+    };
+
+    // If the snapshot matches what Narad itself just inserted, treat it as empty prior clipboard
+    if let Some(ref current) = raw {
+        if let Ok(last_guard) = LAST_INSERTED_TEXT.read() {
+            if let Some(ref last) = *last_guard {
+                if current.trim() == last.trim() {
+                    return None;
                 }
             }
         }
-        Err(_) => {}
     }
-    snapshot_clipboard_wl()
+    raw
 }
 
 /// Restore prior clipboard after a successful paste. Errors are non-fatal.
@@ -692,26 +737,40 @@ pub async fn insert_text(text: &str, terminal: bool) -> InsertOutcome {
     // FR-INS-2 / ARCHITECTURE §4: save → set → paste → restore (keep Narad text only for FR-INS-3).
     let prior = snapshot_clipboard(&clipboard, &session).await;
 
-    if let Err(err) = advertise_clipboard(&clipboard, &session, text).await {
-        warn!(error = %err, "SetSelection failed");
-        let _ = copy_via_wl_copy(text);
-        return InsertOutcome::Copied;
+    // Always put text directly on the Wayland clipboard via wl-copy so every app can read it reliably
+    if let Err(err) = copy_via_wl_copy(text) {
+        warn!(error = %err, "copy_via_wl_copy failed");
     }
 
-    // Brief yield so the transfer handler is ready.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Best-effort portal selection advertise
+    let _ = advertise_clipboard(&clipboard, &session, text).await;
+
+    // Brief yield so the clipboard is ready across compositors.
+    tokio::time::sleep(Duration::from_millis(60)).await;
 
     match paste_chord(&remote, &session, terminal).await {
         Ok(()) => {
             info!("paste chord sent");
+            if let Ok(mut lock) = LAST_INSERTED_TEXT.write() {
+                *lock = Some(text.to_string());
+            }
             // Let the focused app finish reading our selection before restore.
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(250)).await;
             match &prior {
                 Some(prev) => match restore_clipboard_text(prev) {
                     Ok(()) => warn!("clipboard restore ok"),
                     Err(err) => warn!(error = %err, "clipboard restore failed"),
                 },
-                None => warn!("clipboard restore skipped: no prior text snapshot"),
+                None => {
+                    if let Err(err) = clear_clipboard_wl() {
+                        warn!(error = %err, "clipboard clear failed");
+                    } else {
+                        warn!("clipboard cleared (no prior user clipboard)");
+                    }
+                }
+            }
+            if let Ok(mut g) = ACTIVE_PORTAL_TEXT.write() {
+                *g = None;
             }
             InsertOutcome::Inserted
         }
@@ -777,5 +836,28 @@ mod tests {
         })
         .await;
         assert_eq!(none_captured, None);
+    }
+
+    #[test]
+    fn evdev_keycodes_match_linux_kernel_constants_and_not_x11_offsets() {
+        // Standard Linux input-event-codes:
+        // KEY_LEFTCTRL = 29 (NOT 21 / KEY_Y)
+        // KEY_LEFTSHIFT = 42 (NOT 34 / KEY_G)
+        // KEY_V = 47 (NOT 39 / KEY_SEMICOLON)
+        // KEY_BACKSPACE = 14 (NOT 6 / KEY_5)
+        const EXPECTED_CTRL: u32 = 29;
+        const EXPECTED_SHIFT: u32 = 42;
+        const EXPECTED_V: u32 = 47;
+        const EXPECTED_BACKSPACE: u32 = 14;
+
+        assert_eq!(EI_CTRL, EXPECTED_CTRL);
+        assert_eq!(EI_SHIFT, EXPECTED_SHIFT);
+        assert_eq!(EI_V, EXPECTED_V);
+        assert_eq!(EI_BACKSPACE, EXPECTED_BACKSPACE);
+
+        // Guard against "- 8" regression that types "y;"
+        assert_ne!(EI_CTRL, 21, "EI_CTRL must not map to KEY_Y (21)");
+        assert_ne!(EI_V, 39, "EI_V must not map to KEY_SEMICOLON (39)");
+        assert_ne!(EI_BACKSPACE, 6, "EI_BACKSPACE must not map to KEY_5 (6)");
     }
 }

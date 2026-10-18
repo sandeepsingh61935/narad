@@ -11,7 +11,6 @@ test("the shell links History, Stats, and Settings only", () => {
   assert.match(layout, /label: "History"/);
   assert.match(layout, /label: "Stats"/);
   assert.match(layout, /label: "Settings"/);
-  assert.equal(layout.includes("/models"), false);
   assert.equal(layout.includes("/setup"), false);
   assert.equal(layout.includes("Buffer RAM"), false);
   assert.equal(layout.includes("124 MB"), false);

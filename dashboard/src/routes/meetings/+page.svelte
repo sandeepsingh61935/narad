@@ -168,24 +168,24 @@
   <title>Meeting notes — Narad</title>
 </svelte:head>
 
-<div class="content flex flex-col flex-1 min-h-0 bg-surface text-on-surface">
+<div class="content flex flex-col flex-1 min-h-0 bg-surface text-fg text-on-surface">
   <div class="content-scroll pad max-w-4xl mx-auto w-full flex-1 flex flex-col gap-4">
     <!-- Top breadcrumb and actions -->
-    <div class="flex items-center justify-between gap-4 border-b border-outline-variant/30 pb-2">
-      <div class="flex items-center gap-2 text-on-surface-variant font-mono text-xs">
-        <svg class="icon text-primary" viewBox="0 0 24 24" aria-hidden="true">
+    <div class="flex items-center justify-between gap-4 border-b border-border border-outline-variant pb-2">
+      <div class="flex items-center gap-2 text-muted text-on-surface-variant font-mono text-xs">
+        <svg class="icon text-accent" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
           <circle cx="9" cy="7" r="4" />
           <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
           <path d="M16 3.13a4 4 0 0 1 0 7.75" />
         </svg>
-        <span class="font-medium text-sm text-on-surface">Meeting notes</span>
+        <span class="font-medium text-sm text-fg">Meeting notes</span>
       </div>
 
       {#if activeDocument}
         <button
           type="button"
-          class="btn btn-quiet min-h-[36px] text-xs font-medium text-on-surface-variant hover:text-on-surface focus-visible:outline-none focus-visible:ring-2"
+          class="btn btn-quiet min-h-[36px] text-xs font-medium text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2"
           onclick={() => {
             activeDocument = null;
             documents = [];
@@ -213,18 +213,18 @@
     {/if}
 
     {#if loading}
-      <div class="group bg-surface-container border border-outline-variant/30 p-8 flex items-center justify-center min-h-[280px]">
-        <span class="text-sm font-mono text-on-surface-variant">Loading meeting document…</span>
+      <div class="group bg-surface-container border border-border p-8 flex items-center justify-center min-h-[280px]">
+        <span class="text-sm font-mono text-muted">Loading meeting document…</span>
       </div>
     {:else if activeDocument}
       <!-- Header Card with title, metadata and export buttons -->
-      <header class="group bg-surface-container p-5 border border-outline-variant/40 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <header class="group bg-surface-container p-5 border border-border flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div class="flex flex-col gap-1.5 min-w-0">
-          <h1 class="text-xl font-semibold tracking-tight text-on-surface truncate">
+          <h1 class="text-xl font-semibold tracking-tight text-fg truncate">
             {formatMeetingTitle(activeDocument.title) || "Untitled meeting"}
           </h1>
-          <div class="flex flex-wrap items-center gap-3 text-xs text-on-surface-variant font-mono">
-            <span class="stamp {activeDocument.status === 'completed' ? 'text-ok' : 'text-primary'}">
+          <div class="flex flex-wrap items-center gap-3 text-xs text-muted font-mono">
+            <span class="stamp {activeDocument.status === 'completed' ? 'text-ok' : 'text-accent'}">
               <i></i>
               <span>{formatMeetingStatus(activeDocument.status)}</span>
             </span>
@@ -268,15 +268,15 @@
             </button>
           </div>
           {#if copyFeedback}
-            <span class="text-xs text-primary font-mono" role="status">{copyFeedback}</span>
+            <span class="text-xs text-accent font-mono" role="status">{copyFeedback}</span>
           {/if}
         </div>
       </header>
 
       <!-- Speaker turns & transcript blocks -->
-      <section aria-label="Meeting transcript" class="group bg-surface-container border border-outline-variant/30 divide-y divide-border">
+      <section aria-label="Meeting transcript" class="group border border-border divide-y divide-border">
         {#if speakerBlocks.length === 0}
-          <div class="p-8 text-center text-sm text-on-surface-variant font-mono">
+          <div class="p-8 text-center text-sm text-muted font-mono">
             No transcription turns recorded in this document yet.
           </div>
         {:else}
@@ -284,20 +284,20 @@
             <article class="row p-4 flex flex-col gap-2 hover:bg-raised/40 transition-colors">
               <div class="flex items-center justify-between w-full">
                 <div class="flex items-center gap-2">
-                  <span class="kbd text-xs font-semibold text-primary border-primary/30">
+                  <span class="kbd text-xs font-semibold text-accent border-accent/30">
                     {formatSpeakerLabel(block.speaker_label, i + 1)}
                   </span>
-                  <span class="mono text-xs text-on-surface-variant">
+                  <span class="mono text-xs text-muted">
                     {formatMeetingDuration(block.start_ms)}
                   </span>
                 </div>
                 {#if block.duration_ms > 0}
-                  <span class="mono text-xs text-on-surface-variant">
+                  <span class="mono text-xs text-muted">
                     {formatMeetingDuration(block.duration_ms)}
                   </span>
                 {/if}
               </div>
-              <p class="text-sm text-on-surface leading-relaxed whitespace-pre-wrap font-sans">
+              <p class="text-sm text-fg leading-relaxed whitespace-pre-wrap font-sans">
                 {block.text || "(empty)"}
               </p>
             </article>
@@ -306,9 +306,9 @@
       </section>
     {:else}
       <!-- Empty state -->
-      <div class="group bg-surface-container border border-outline-variant/30 p-10 flex flex-col items-center justify-center text-center min-h-[320px]">
+      <div class="group border border-border p-10 flex flex-col items-center justify-center text-center min-h-[320px]">
         <div class="w-12 h-12 rounded-full bg-raised flex items-center justify-center text-muted mb-3 border border-border">
-          <svg class="icon text-primary w-6 h-6" viewBox="0 0 24 24" aria-hidden="true">
+          <svg class="icon text-accent w-6 h-6" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
             <polyline points="14 2 14 8 20 8" />
             <line x1="16" y1="13" x2="8" y2="13" />
@@ -316,10 +316,10 @@
             <polyline points="10 9 9 9 8 9" />
           </svg>
         </div>
-        <h2 class="text-base font-semibold text-on-surface mb-1">
+        <h2 class="text-base font-semibold text-fg mb-1">
           No meeting documents yet
         </h2>
-        <p class="text-xs text-on-surface-variant max-w-md mb-4 leading-relaxed">
+        <p class="text-xs text-muted max-w-md mb-4 leading-relaxed">
           Meeting and long-form recordings are transcribed continuously into structured notes. Start a session or view a sample meeting.
         </p>
         <button

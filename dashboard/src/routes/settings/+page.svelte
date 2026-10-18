@@ -70,6 +70,16 @@
   async function load() {
     loading = true;
     error = null;
+    const hasTauri = typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
+    if (!hasTauri) {
+      config = defaultConfig();
+      try {
+        paused = localStorage.getItem("narad.pause") === "true";
+        autostart = localStorage.getItem("narad.autostart") === "true";
+      } catch {}
+      loading = false;
+      return;
+    }
     try {
       config = await invoke<DashboardConfig>("load_config");
       silence = String(config.audio.auto_stop_silence_secs ?? 2);
@@ -84,7 +94,6 @@
       const status = await invoke<{ paused: boolean }>("session_status");
       paused = status.paused;
     } catch {
-      // In offline/prototype mode, read from localStorage
       try {
         paused = localStorage.getItem("narad.pause") === "true";
         autostart = localStorage.getItem("narad.autostart") === "true";
@@ -310,7 +319,7 @@
           checked={talkMode === "hold"}
           onchange={() => setTalkMode("hold")}
         />
-        <strong>Hold to dictate</strong>
+        <strong>Hold to talk</strong>
         <span>Hold the shortcut, speak, release to transcribe. Best when you dictate in short bursts.</span>
       </label>
       <label>
@@ -321,8 +330,8 @@
           checked={talkMode === "tap"}
           onchange={() => setTalkMode("tap")}
         />
-        <strong>Hands-free toggle</strong>
-        <span>Press once to start continuous listening, press again to stop. Better for long dictations.</span>
+        <strong>Tap to toggle</strong>
+        <span>Press once to start, once to stop. Better for long passages.</span>
       </label>
     </div>
 

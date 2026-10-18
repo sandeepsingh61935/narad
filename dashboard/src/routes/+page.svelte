@@ -25,6 +25,8 @@
     84, 59, 37, 24, 31, 54, 47, 22,
   ];
 
+  const FILTER_MODES = ["All modes", ...ACTIVE_MODES];
+
   type SessionStatus = {
     paused: boolean;
     mode: string;
@@ -553,21 +555,8 @@
           />
           <span class="kbd">/</span>
         </label>
-        <div class="flex items-center justify-between">
-          <div class="mono muted count-line" id="count">
-            {entries.length} {entries.length === 1 ? "transcript" : "transcripts"}
-          </div>
-          <select
-            class="input text-xs py-0.5 px-2 w-auto h-7 min-h-0 bg-surface border-border"
-            bind:value={modeFilter}
-            onchange={() => void loadHistory()}
-            aria-label="Filter by mode"
-          >
-            <option value="">All modes</option>
-            {#each ACTIVE_MODES as m}
-              <option value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>
-            {/each}
-          </select>
+        <div class="mono muted count-line" id="count">
+          {entries.length} {entries.length === 1 ? "transcript" : "transcripts"}
         </div>
       </div>
 
@@ -586,15 +575,8 @@
               data-od-id="history-row-{item.id}"
               onclick={() => selectEntry(item.id)}
             >
-              <div class="flex items-center gap-1.5 min-w-0">
-                <svg class="icon muted shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                  <path d="M12 19v3" />
-                </svg>
-                <span class="mono small font-medium truncate">{formatTime(item.created_at)}</span>
-              </div>
-              <span class="small muted mono">{formatDuration(item.duration_ms)}</span>
+              <span class="hist-time">{formatTime(item.created_at)}</span>
+              <span class="hist-dest">{deliveryLabel(item.insert_status)}</span>
               <span class="hist-preview">{item.final_text || item.raw_text}</span>
             </button>
           {/each}
@@ -638,6 +620,14 @@
               onclick={() => void deleteEntry()}
             >
               Delete <span class="kbd">Del</span>
+            </button>
+            <button
+              type="button"
+              class="btn btn-quiet"
+              id="add-dict"
+              onclick={() => toast("Add to dictionary")}
+            >
+              Add to dictionary
             </button>
           </div>
         </div>
@@ -733,30 +723,7 @@
           {displayedText}
         </p>
 
-        <!-- Word Tags with "Add to dictionary" -->
-        <div class="px-[18px] py-2 flex flex-col gap-2">
-          <div class="flex items-center justify-between">
-            <span class="text-xs font-medium muted">Word tags</span>
-          </div>
-          <div class="flex flex-wrap items-center gap-1.5">
-            {#each (selectedEntry.tags || []) as tag}
-              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-raised border border-border text-xs">
-                <span>{tag}</span>
-                <button
-                  type="button"
-                  class="text-muted hover:text-fg ml-1 text-[11px]"
-                  title="Add to custom words dictionary"
-                  onclick={() => void addWordToDictionary(tag)}
-                >
-                  + Add to dictionary
-                </button>
-              </span>
-            {/each}
-            {#if (!selectedEntry.tags || selectedEntry.tags.length === 0)}
-              <span class="text-xs muted">No tags on this entry.</span>
-            {/if}
-          </div>
-        </div>
+
 
         <!-- Provenance Footer -->
         <div class="mt-auto px-[18px] py-3 border-t border-border flex items-center justify-between text-xs muted mono">

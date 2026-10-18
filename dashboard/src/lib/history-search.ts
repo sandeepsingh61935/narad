@@ -1,4 +1,4 @@
-import { ACTIVE_MODES, type ActiveMode } from "./config.ts";
+import { ACTIVE_MODES, type ActiveMode } from "./config";
 
 export type HistoryFilterDraft = {
   query?: string;

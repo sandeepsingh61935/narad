@@ -40,9 +40,9 @@ test("validateDictionaryPair validates single pair", () => {
   assert.equal(validateDictionaryPair({ spoken: "hello", written: "world" }).valid, true);
 });
 
-test("dictionary exists in settings layout and has sentence case placeholders", () => {
-  const layout = readFileSync(join(here, "../routes/settings/+layout.svelte"), "utf8");
-  assert.match(layout, /href:\s*["']\/settings\/dictionary["']/);
+test("dictionary exists and has sentence case placeholders", () => {
+  const wordsPath = join(here, "../routes/words/+page.svelte");
+  assert.equal(existsSync(wordsPath), true);
 
   const settingsDictPath = join(here, "../routes/settings/dictionary/+page.svelte");
   assert.equal(existsSync(settingsDictPath), true);

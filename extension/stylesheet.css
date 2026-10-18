@@ -1,39 +1,72 @@
-/* Quiet Precision — floating HUD (Stitch). Dark theme default. */
+/* Narad — Libadwaita Floating HUD for GNOME Shell.
+ * Palette: Libadwaita warm-charcoal and Adwaita Blue.
+ *   --bg: #252423
+ *   --surface: #2d2c2b
+ *   --raised: #383635
+ *   --border: #4c4a48
+ *   --fg: #f0eeeb
+ *   --muted: #b4b1ad
+ *   --accent: #3584e4 (hover: #1c71d8, focus: #78aeed)
+ *   --ok: #57ab5a
+ *   --warn: #e3b341
+ *   --danger: #e01b24
+ */
 
+/* HUD root row / pill geometry */
 .narad-hud {
-    spacing: 10px;
-    padding: 0;
+    height: 36px;
+    padding: 0 12px;
+    border-radius: 9999px;
+    background-color: #252423;
+    border: 1px solid #4c4a48;
+    color: #f0eeeb;
+    spacing: 8px;
 }
 
+.narad-hud.is-idle {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: 9999px;
+    background-color: #2d2c2b;
+    border: 1px solid #4c4a48;
+}
+
+/* Anchor dot (idle / compact target) */
 .narad-hud-anchor {
     width: 28px;
     height: 28px;
     border-radius: 9999px;
-    background-color: rgba(255, 255, 255, 0.10);
-    border: 1px solid rgba(255, 255, 255, 0.20);
+    background-color: #2d2c2b;
+    border: 1px solid #4c4a48;
 }
 
 .narad-hud-anchor:hover,
-.narad-hud-anchor:focus {
-    background-color: rgba(255, 255, 255, 0.15);
+.narad-hud-anchor:focus,
+.narad-hud.is-idle:hover,
+.narad-hud.is-idle:focus {
+    background-color: #383635;
+    border-color: #3584e4;
 }
 
 .narad-hud-anchor-core {
     width: 8px;
     height: 8px;
     border-radius: 9999px;
-    background-color: rgba(230, 226, 223, 0.80);
+    background-color: #b4b1ad;
 }
 
 .narad-hud-anchor:hover .narad-hud-anchor-core,
-.narad-hud-anchor:focus .narad-hud-anchor-core {
-    background-color: #e08a1e;
+.narad-hud-anchor:focus .narad-hud-anchor-core,
+.narad-hud.is-idle:hover .narad-hud-anchor-core,
+.narad-hud.is-idle:focus .narad-hud-anchor-core {
+    background-color: #3584e4;
 }
 
-/* Listening */
+/* Listening state (Adwaita Blue #3584e4) */
 .narad-hud-anchor-listening {
-    background-color: #e08a1e;
-    border-color: rgba(224, 138, 30, 0.55);
+    background-color: #3584e4;
+    border-color: #1c71d8;
 }
 
 .narad-hud-anchor-listening .narad-hud-anchor-core {
@@ -44,163 +77,249 @@
 
 .narad-hud-anchor-listening StIcon {
     icon-size: 14px;
-    color: #1c1b1a;
+    color: #ffffff;
 }
 
-/* Processing */
+.narad-hud.is-listening,
+.narad-hud-pill-listening {
+    border-color: rgba(53, 132, 228, 0.65);
+}
+
+/* Processing / transcribing state */
 .narad-hud-anchor-processing {
-    background-color: rgba(224, 138, 30, 0.80);
-    border-color: rgba(255, 255, 255, 0.10);
+    background-color: rgba(53, 132, 228, 0.20);
+    border-color: #3584e4;
 }
 
 .narad-hud-anchor-processing .narad-hud-anchor-core {
     width: 10px;
     height: 10px;
-    background-color: #e08a1e;
+    background-color: #3584e4;
 }
 
-.narad-hud-anchor-processing StIcon {
+.narad-hud-anchor-processing StIcon,
+.narad-hud-anchor-processing .spinner {
     icon-size: 14px;
-    color: #1c1b1a;
+    color: #f0eeeb;
 }
 
-/* Copied / inserted success */
+.narad-hud.is-processing,
+.narad-hud-pill-processing {
+    border-color: #4c4a48;
+}
+
+/* Copied / inserted / result state (Ok green #57ab5a) */
 .narad-hud-anchor-copied {
-    background-color: rgba(78, 154, 100, 0.90);
-    border-color: rgba(78, 154, 100, 0.50);
+    background-color: rgba(87, 171, 90, 0.20);
+    border-color: #57ab5a;
 }
 
-.narad-hud-anchor-copied StLabel {
-    color: #1c1b1a;
+.narad-hud-anchor-copied StLabel,
+.narad-hud-anchor-copied .ok-icon,
+.ok-icon {
+    color: #57ab5a;
     font-weight: 700;
-    font-size: 11px;
+    font-size: 13px;
 }
 
-/* Cancelled */
+.narad-hud.is-result,
+.narad-hud-pill-copied {
+    border-color: rgba(87, 171, 90, 0.50);
+}
+
+/* Cancelled state */
 .narad-hud-anchor-cancelled {
-    background-color: rgba(158, 154, 148, 0.35);
-    border-color: rgba(158, 154, 148, 0.45);
+    background-color: rgba(180, 177, 173, 0.18);
+    border-color: #4c4a48;
 }
 
 .narad-hud-anchor-cancelled StLabel {
-    color: #e6e2df;
+    color: #b4b1ad;
     font-weight: 700;
     font-size: 11px;
 }
 
-/* Error */
+.narad-hud.is-cancelled,
+.narad-hud-pill-cancelled {
+    border-color: #4c4a48;
+}
+
+/* Error state (Danger red #e01b24) */
 .narad-hud-anchor-error {
-    background-color: rgba(217, 83, 79, 0.20);
-    border-color: rgba(217, 83, 79, 0.50);
+    background-color: rgba(224, 27, 36, 0.20);
+    border-color: #e01b24;
 }
 
 .narad-hud-anchor-error StIcon {
     icon-size: 14px;
-    color: #d9534f;
+    color: #e01b24;
 }
 
-/* History paused — icon + label, not color alone (FR-HIS-7). */
+.narad-hud.is-error,
+.narad-hud-pill-error {
+    border-color: rgba(224, 27, 36, 0.50);
+}
+
+/* History paused — icon + label (FR-HIS-7) */
 .narad-hud-anchor-paused {
-    background-color: rgba(158, 154, 148, 0.18);
-    border-color: rgba(230, 226, 223, 0.55);
+    background-color: rgba(180, 177, 173, 0.18);
+    border-color: #4c4a48;
 }
 
 .narad-hud-anchor-paused StIcon {
     icon-size: 12px;
-    color: #e6e2df;
+    color: #f0eeeb;
+}
+
+.narad-hud-pill-paused {
+    border-color: #4c4a48;
 }
 
 /* Companion pill */
 .narad-hud-pill {
-    height: 32px;
+    height: 36px;
     padding: 0 12px;
     spacing: 8px;
     border-radius: 9999px;
-    background-color: rgba(30, 29, 27, 0.95);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    background-color: #252423;
+    border: 1px solid #4c4a48;
+    color: #f0eeeb;
 }
 
-.narad-hud-pill-listening {
-    border-color: rgba(224, 138, 30, 0.35);
+.narad-hud .narad-hud-pill {
+    border: none;
+    background-color: transparent;
+    padding: 0;
+    height: auto;
 }
 
-.narad-hud-pill-copied {
-    border-color: rgba(78, 154, 100, 0.35);
-}
-
-.narad-hud-pill-cancelled {
-    border-color: rgba(158, 154, 148, 0.35);
-}
-
-.narad-hud-pill-error {
-    border-color: rgba(217, 83, 79, 0.40);
-}
-
-.narad-hud-pill-paused {
-    border-color: rgba(230, 226, 223, 0.28);
-}
-
+/* Live waveform bars */
+.bars,
 .narad-hud-wave {
     spacing: 2px;
-    height: 16px;
+    height: 14px;
 }
 
+.bars span,
+.bars StWidget,
+.bars-bar,
 .narad-hud-wave-bar {
-    width: 2px;
-    border-radius: 9999px;
-    background-color: #e08a1e;
+    width: 3px;
+    border-radius: 2px;
+    background-color: #3584e4;
 }
 
+/* Wave dot indicator */
+.hud-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+    background-color: #3584e4;
+}
+
+/* Transcribing spinner ring */
+.spinner,
+StIcon.spinner,
+.narad-hud-spinner {
+    width: 14px;
+    height: 14px;
+    icon-size: 14px;
+    color: #f0eeeb;
+}
+
+/* Typography & labels */
+.hud-label,
 .narad-hud-text {
-    color: #edebeb;
-    font-size: 12px;
+    color: #f0eeeb;
+    font-size: 13px;
     font-weight: 500;
 }
 
+.hud-meta,
 .narad-hud-text-muted {
-    color: rgba(225, 222, 217, 0.65);
-    font-size: 11px;
-    font-family: monospace;
+    color: #b4b1ad;
+    font-size: 12px;
+    font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
 }
 
 .narad-hud-text-accent {
-    color: #f59e32;
-    font-size: 11px;
-    font-family: monospace;
+    color: #3584e4;
+    font-size: 12px;
+    font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
 }
 
 .narad-hud-text-success {
-    color: #edebeb;
-    font-size: 12px;
-}
-
-.narad-hud-text-error {
-    color: #ffb4ab;
-    font-size: 12px;
+    color: #f0eeeb;
+    font-size: 13px;
     font-weight: 500;
 }
 
-.narad-hud-keycap {
-    padding: 1px 6px;
-    border-radius: 4px;
-    background-color: rgba(255, 255, 255, 0.10);
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    color: #e6e2df;
-    font-size: 9px;
-    font-family: "JetBrains Mono", monospace;
-    font-weight: 600;
+.narad-hud-text-error {
+    color: #ff7b72;
+    font-size: 13px;
+    font-weight: 500;
 }
 
-.popup-menu-item .narad-hud-keycap {
+/* Keycap accelerators in mono style */
+.narad-hud-keycap,
+.kbd {
+    padding: 1px 6px;
+    border-radius: 4px;
+    background-color: #383635;
+    border: 1px solid #4c4a48;
+    color: #b4b1ad;
+    font-size: 10px;
+    font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
+    font-weight: 500;
+}
+
+.popup-menu-item .narad-hud-keycap,
+.popup-menu-item .kbd {
     margin-left: 12px;
 }
 
+/* Popover context menu (Libadwaita warm-charcoal) */
+.popover,
+.popup-menu,
+.popup-menu-content {
+    background-color: #2d2c2b;
+    border: 1px solid #4c4a48;
+    border-radius: 8px;
+    padding: 6px;
+    color: #f0eeeb;
+    box-shadow: none;
+}
+
+.popup-menu-item {
+    color: #f0eeeb;
+    border-radius: 6px;
+    padding: 6px 10px;
+    spacing: 8px;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.popup-menu-item:hover,
+.popup-menu-item:focus,
+.popup-menu-item:active,
+.popup-menu-item.selected {
+    background-color: #383635;
+    color: #f0eeeb;
+}
+
+.popup-separator-menu-item {
+    background-color: #4c4a48;
+    height: 1px;
+    margin: 4px 6px;
+}
+
+/* Tooltip / hint */
 .narad-hud-hint {
-    padding: 2px 8px;
+    padding: 3px 8px;
     border-radius: 4px;
-    background-color: rgba(0, 0, 0, 0.80);
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    color: #9e9a94;
-    font-size: 10px;
-    font-family: monospace;
+    background-color: #252423;
+    border: 1px solid #4c4a48;
+    color: #b4b1ad;
+    font-size: 11px;
+    font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
 }

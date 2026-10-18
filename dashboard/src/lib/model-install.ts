@@ -1,4 +1,4 @@
-import { DEFAULT_SPEECH_MODEL_ID } from './models.ts';
+import { DEFAULT_SPEECH_MODEL_ID } from './models';
 
 export type ModelInstallStatus = 'available' | 'downloading' | 'verifying' | 'installed' | 'error';
 

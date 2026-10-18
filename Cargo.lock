@@ -1337,6 +1337,7 @@ dependencies = [
  "nnnoiseless",
  "reis",
  "serde",
+ "serde_json",
  "sherpa-onnx",
  "tempfile",
  "thiserror",

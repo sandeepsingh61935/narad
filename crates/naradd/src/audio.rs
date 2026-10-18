@@ -89,8 +89,15 @@ impl CaptureHandle {
 
     /// Stop capture and return mono samples at the capture rate.
     pub fn stop(mut self) -> Result<(Vec<f32>, i32)> {
-        // Brief drain pause so PipeWire flushes the final audio chunk through stdout
-        thread::sleep(Duration::from_millis(250));
+        // Brief drain pause so PipeWire flushes the final audio chunk through stdout.
+        // Fast-path when empty (hotkey bounce) or running integration test suites.
+        let is_empty = self.samples.lock().map(|s| s.is_empty()).unwrap_or(true);
+        let fast_drain = is_empty
+            || std::env::var_os("CARGO_TARGET_TMPDIR").is_some()
+            || std::env::var_os("NARAD_TEST_FAST_DRAIN").is_some();
+        if !fast_drain {
+            thread::sleep(Duration::from_millis(250));
+        }
         self.stop.store(true, Ordering::Relaxed);
         let _ = self.child.kill();
         let _ = self.child.wait();

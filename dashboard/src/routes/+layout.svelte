@@ -1,9 +1,23 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { page } from "$app/state";
   import ToastHost from "$lib/ToastHost.svelte";
+  import SetupModal from "$lib/SetupModal.svelte";
   import "../app.css";
 
   let { children } = $props();
+
+  let showSetupModal = $state(false);
+
+  onMount(() => {
+    function onOpenSetup() {
+      showSetupModal = true;
+    }
+    window.addEventListener("open-setup-wizard", onOpenSetup);
+    return () => {
+      window.removeEventListener("open-setup-wizard", onOpenSetup);
+    };
+  });
 
   const links = [
     { href: "/hud", label: "Floating HUD", icon: "hud", odId: "nav-hud", svg: `<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>` },
@@ -129,5 +143,6 @@
     </main>
   </div>
   <ToastHost />
+  <SetupModal bind:open={showSetupModal} />
 </div>
 

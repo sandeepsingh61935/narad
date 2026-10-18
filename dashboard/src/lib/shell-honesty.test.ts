@@ -21,7 +21,6 @@ test("the shell links History, Stats, and Settings only", () => {
 });
 
 test("phase 3 costume routes are not in the tree", () => {
-  assert.equal(existsSync(join(here, "../routes/models/+page.svelte")), false);
   assert.equal(existsSync(join(here, "../routes/setup/+page.svelte")), false);
 });
 

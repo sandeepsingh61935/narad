@@ -69,6 +69,7 @@ pub struct ContinuousAudioChunker {
     sample_rate: u32,
     chunk_size_samples: usize,
     step_samples: usize,
+    overlap_samples: usize,
     buffer: Vec<f32>,
     total_samples_processed: u64,
     next_chunk_index: u32,
@@ -81,6 +82,7 @@ impl ContinuousAudioChunker {
     /// * `chunk_duration_ms`: Duration of each chunk in milliseconds (e.g. 5,000 ms).
     /// * `overlap_ms`: Overlap duration in milliseconds between consecutive chunks.
     pub fn new(sample_rate: u32, chunk_duration_ms: u32, overlap_ms: u32) -> Self {
+        assert!(sample_rate > 0, "sample_rate must be positive");
         let chunk_size_samples =
             ((sample_rate as u64 * chunk_duration_ms as u64) / 1000).max(1) as usize;
         let overlap_samples =
@@ -92,6 +94,7 @@ impl ContinuousAudioChunker {
             sample_rate,
             chunk_size_samples,
             step_samples,
+            overlap_samples,
             buffer: Vec::new(),
             total_samples_processed: 0,
             next_chunk_index: 0,
@@ -130,6 +133,10 @@ impl ContinuousAudioChunker {
     /// Flush remaining buffered audio as a final trailing chunk if any exists.
     pub fn flush(&mut self) -> Option<AudioChunk> {
         if self.buffer.is_empty() {
+            return None;
+        }
+        if self.next_chunk_index > 0 && self.buffer.len() <= self.overlap_samples {
+            self.buffer.clear();
             return None;
         }
         let chunk_samples = std::mem::take(&mut self.buffer);
@@ -590,4 +597,35 @@ mod tests {
             Err(LongformError::DocumentNotFound(id)) if id == missing_id
         ));
     }
+
+    #[test]
+    fn test_continuous_audio_chunker_flush_suppresses_trailing_overlap() {
+        // 16kHz, 500ms chunks (8000 samples), 100ms overlap (1600 samples)
+        let mut chunker = ContinuousAudioChunker::new(16000, 500, 100);
+
+        // Push exactly 8000 samples
+        chunker.push_samples(&vec![0.5f32; 8000]);
+        let chunks = chunker.drain_chunks();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].chunk_index, 0);
+
+        // Remaining in buffer is exactly 1600 samples (the overlap)
+        // Flush must suppress this trailing overlap
+        assert!(chunker.flush().is_none());
+
+        // When next_chunk_index == 0, short audio under overlap_samples is still flushed
+        let mut short_chunker = ContinuousAudioChunker::new(16000, 500, 100);
+        short_chunker.push_samples(&vec![0.5f32; 1000]);
+        assert!(short_chunker.drain_chunks().is_empty());
+        let short_flush = short_chunker.flush();
+        assert!(short_flush.is_some());
+        assert_eq!(short_flush.unwrap().samples.len(), 1000);
+    }
+
+    #[test]
+    #[should_panic(expected = "sample_rate must be positive")]
+    fn test_continuous_audio_chunker_zero_sample_rate_panics() {
+        ContinuousAudioChunker::new(0, 5000, 500);
+    }
 }
+

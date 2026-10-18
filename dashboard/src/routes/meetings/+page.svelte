@@ -59,7 +59,7 @@
   let copyFeedback = $state<string | null>(null);
 
   const speakerBlocks = $derived(
-    activeDocument ? aggregateSpeakerBlocks(activeDocument.chunks) : [],
+    activeDocument ? aggregateSpeakerBlocks(activeDocument.chunks) : []
   );
 
   function exportMarkdown() {
@@ -168,134 +168,136 @@
   <title>Meeting notes — Narad</title>
 </svelte:head>
 
-<div class="flex-1 bg-surface min-h-screen text-on-surface w-full">
-  <div class="px-space-xl py-space-lg flex flex-col gap-space-lg max-w-5xl mx-auto w-full">
-    <!-- Breadcrumb header -->
-    <div class="flex items-center justify-between gap-space-md border-b border-outline-variant/30 pb-space-sm">
-      <div class="flex items-center gap-space-xs text-on-surface-variant font-label-code text-label-code">
-        <span class="material-symbols-outlined text-[16px] text-primary" aria-hidden="true">groups</span>
-        <span>Meeting notes</span>
+<div class="content flex flex-col flex-1 min-h-0 bg-surface text-on-surface">
+  <div class="content-scroll pad max-w-4xl mx-auto w-full flex-1 flex flex-col gap-4">
+    <!-- Top breadcrumb and actions -->
+    <div class="flex items-center justify-between gap-4 border-b border-outline-variant/30 pb-2">
+      <div class="flex items-center gap-2 text-on-surface-variant font-mono text-xs">
+        <svg class="icon text-primary" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+          <circle cx="9" cy="7" r="4" />
+          <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+        </svg>
+        <span class="font-medium text-sm text-on-surface">Meeting notes</span>
       </div>
 
       {#if activeDocument}
-        <div class="flex items-center gap-space-xs">
-          <button
-            type="button"
-            class="min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-body-muted text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            onclick={() => {
-              activeDocument = null;
-              documents = [];
-            }}
-          >
-            Clear view
-          </button>
-        </div>
+        <button
+          type="button"
+          class="btn btn-quiet min-h-[36px] text-xs font-medium text-on-surface-variant hover:text-on-surface focus-visible:outline-none focus-visible:ring-2"
+          onclick={() => {
+            activeDocument = null;
+            documents = [];
+          }}
+        >
+          Clear view
+        </button>
       {/if}
     </div>
 
-    <!-- Document switcher if multiple meetings exist -->
+    <!-- Document switcher for multi-meeting history -->
     {#if documents.length > 1}
-      <nav aria-label="Meeting documents" class="flex items-center gap-space-xs overflow-x-auto pb-1">
+      <div class="seg" role="tablist" aria-label="Meeting documents">
         {#each documents as doc}
           <button
             type="button"
-            class="min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-body-default transition-colors border {doc.id === activeDocument?.id ? 'bg-surface-container-high text-on-surface border-primary/50' : 'bg-surface-container text-on-surface-variant border-outline-variant/30 hover:bg-surface-container-high hover:text-on-surface'}"
+            class="min-h-[36px] px-3 text-xs font-medium transition-colors {doc.id === activeDocument?.id ? 'is-active' : ''}"
+            aria-pressed={doc.id === activeDocument?.id}
             onclick={() => selectDocument(doc.id)}
           >
             {formatMeetingTitle(doc.title)}
           </button>
         {/each}
-      </nav>
+      </div>
     {/if}
 
     {#if loading}
-      <div class="bg-surface-container rounded-xl p-space-xl border border-outline-variant/30 flex items-center justify-center min-h-[320px]">
-        <span class="font-body-muted text-body-muted text-on-surface-variant">Loading meeting document…</span>
+      <div class="group bg-surface-container border border-outline-variant/30 p-8 flex items-center justify-center min-h-[280px]">
+        <span class="text-sm font-mono text-on-surface-variant">Loading meeting document…</span>
       </div>
     {:else if activeDocument}
-      <!-- Meeting Header Card -->
-      <header class="bg-surface-container p-space-lg rounded-xl border border-outline-variant/40 flex flex-col md:flex-row md:items-center justify-between gap-space-md shadow-xs">
-        <div class="flex flex-col gap-1 min-w-0">
-          <h1 class="font-headline-lg text-headline-lg font-semibold tracking-tight text-on-surface truncate">
+      <!-- Header Card with title, metadata and export buttons -->
+      <header class="group bg-surface-container p-5 border border-outline-variant/40 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div class="flex flex-col gap-1.5 min-w-0">
+          <h1 class="text-xl font-semibold tracking-tight text-on-surface truncate">
             {formatMeetingTitle(activeDocument.title) || "Untitled meeting"}
           </h1>
-          <div class="flex flex-wrap items-center gap-space-sm text-body-muted font-body-muted text-on-surface-variant text-xs">
-            <!-- Status Badge -->
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium {activeDocument.status === 'completed' ? 'bg-emerald-950/40 text-emerald-300 border border-emerald-800/40' : 'bg-primary-container/20 text-primary border border-primary/30'}">
-              <span class="w-1.5 h-1.5 rounded-full {activeDocument.status === 'completed' ? 'bg-emerald-400' : 'bg-primary animate-pulse'}" aria-hidden="true"></span>
+          <div class="flex flex-wrap items-center gap-3 text-xs text-on-surface-variant font-mono">
+            <span class="stamp {activeDocument.status === 'completed' ? 'text-ok' : 'text-primary'}">
+              <i></i>
               <span>{formatMeetingStatus(activeDocument.status)}</span>
             </span>
-
-            <span aria-hidden="true" class="text-outline-variant">•</span>
-
-            <!-- Duration -->
+            <span class="text-border">•</span>
             <span class="flex items-center gap-1">
-              <span class="material-symbols-outlined text-[14px]" aria-hidden="true">schedule</span>
+              <svg class="icon text-muted" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 7v6l4 2" />
+              </svg>
               <span>{formatMeetingDuration(activeDocument.duration_ms)}</span>
             </span>
-
-            <span aria-hidden="true" class="text-outline-variant">•</span>
-
-            <!-- Timestamp -->
+            <span class="text-border">•</span>
             <span>{formatMeetingDate(activeDocument.created_at)}</span>
           </div>
         </div>
 
-        <!-- Export Actions -->
         <div class="flex flex-col items-end gap-1 shrink-0 self-start md:self-auto">
-          <div class="flex items-center gap-space-sm">
+          <div class="flex items-center gap-2">
             <button
               type="button"
-              class="min-h-[36px] px-3.5 py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-bright text-on-surface font-body-muted text-body-muted transition-colors flex items-center gap-1.5 border border-outline-variant/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
+              class="btn btn-primary min-h-[36px] focus-visible:outline-none focus-visible:ring-2"
               onclick={exportMarkdown}
             >
-              <span class="material-symbols-outlined text-[16px] text-primary" aria-hidden="true">download</span>
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
               <span>Export markdown</span>
             </button>
             <button
               type="button"
-              class="min-h-[36px] px-3.5 py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-bright text-on-surface font-body-muted text-body-muted transition-colors flex items-center gap-1.5 border border-outline-variant/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
+              class="btn min-h-[36px] focus-visible:outline-none focus-visible:ring-2"
               onclick={copyText}
             >
-              <span class="material-symbols-outlined text-[16px] text-primary" aria-hidden="true">content_copy</span>
+              <svg class="icon text-muted" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
               <span>Copy text</span>
             </button>
           </div>
           {#if copyFeedback}
-            <span class="text-xs text-primary font-body-muted" role="status">{copyFeedback}</span>
+            <span class="text-xs text-primary font-mono" role="status">{copyFeedback}</span>
           {/if}
         </div>
       </header>
 
       <!-- Speaker turns & transcript blocks -->
-      <section aria-label="Meeting transcript" class="flex flex-col gap-space-md">
+      <section aria-label="Meeting transcript" class="group bg-surface-container border border-outline-variant/30 divide-y divide-border">
         {#if speakerBlocks.length === 0}
-          <div class="bg-surface-container rounded-xl p-space-lg border border-outline-variant/30 text-on-surface-variant font-body-muted text-body-muted text-center">
+          <div class="p-8 text-center text-sm text-on-surface-variant font-mono">
             No transcription turns recorded in this document yet.
           </div>
         {:else}
           {#each speakerBlocks as block, i}
-            <article class="bg-surface-container rounded-xl p-space-lg border border-outline-variant/30 flex flex-col gap-space-sm transition-all hover:border-outline-variant/60">
-              <div class="flex items-center justify-between gap-space-sm border-b border-outline-variant/20 pb-space-xs">
-                <div class="flex items-center gap-space-sm">
-                  <!-- Speaker name badge -->
-                  <span class="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-semibold bg-surface-container-high text-primary border border-outline-variant/40">
+            <article class="row p-4 flex flex-col gap-2 hover:bg-raised/40 transition-colors">
+              <div class="flex items-center justify-between w-full">
+                <div class="flex items-center gap-2">
+                  <span class="kbd text-xs font-semibold text-primary border-primary/30">
                     {formatSpeakerLabel(block.speaker_label, i + 1)}
                   </span>
-                  <!-- Start timestamp offset -->
-                  <span class="font-label-code text-label-code text-on-surface-variant flex items-center gap-1 text-xs">
-                    <span class="material-symbols-outlined text-[13px]" aria-hidden="true">timer</span>
-                    <span>{formatMeetingDuration(block.start_ms)}</span>
+                  <span class="mono text-xs text-on-surface-variant">
+                    {formatMeetingDuration(block.start_ms)}
                   </span>
                 </div>
                 {#if block.duration_ms > 0}
-                  <span class="font-label-code text-label-code text-on-surface-variant text-xs">
+                  <span class="mono text-xs text-on-surface-variant">
                     {formatMeetingDuration(block.duration_ms)}
                   </span>
                 {/if}
               </div>
-              <!-- Transcription paragraph -->
-              <p class="font-body-default text-body-default text-on-surface leading-relaxed whitespace-pre-wrap">
+              <p class="text-sm text-on-surface leading-relaxed whitespace-pre-wrap font-sans">
                 {block.text || "(empty)"}
               </p>
             </article>
@@ -304,23 +306,28 @@
       </section>
     {:else}
       <!-- Empty state -->
-      <div class="bg-surface-container rounded-xl p-space-xl border border-outline-variant/30 flex flex-col items-center justify-center text-center min-h-[380px]">
-        <div class="w-14 h-14 rounded-full bg-surface-container-high flex items-center justify-center text-outline mb-space-md border border-outline-variant/40">
-          <span class="material-symbols-outlined text-[28px]" aria-hidden="true">description</span>
+      <div class="group bg-surface-container border border-outline-variant/30 p-10 flex flex-col items-center justify-center text-center min-h-[320px]">
+        <div class="w-12 h-12 rounded-full bg-raised flex items-center justify-center text-muted mb-3 border border-border">
+          <svg class="icon text-primary w-6 h-6" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+            <polyline points="10 9 9 9 8 9" />
+          </svg>
         </div>
-        <h2 class="font-headline-md text-headline-md text-on-surface font-semibold mb-space-xs">
+        <h2 class="text-base font-semibold text-on-surface mb-1">
           No meeting documents yet
         </h2>
-        <p class="font-body-muted text-body-muted text-on-surface-variant max-w-md mb-space-lg">
+        <p class="text-xs text-on-surface-variant max-w-md mb-4 leading-relaxed">
           Meeting and long-form recordings are transcribed continuously into structured notes. Start a session or view a sample meeting.
         </p>
         <button
           type="button"
-          class="min-h-[36px] px-4 py-2 rounded-lg bg-surface-container-high hover:bg-surface-bright text-on-surface font-body-muted text-body-muted transition-colors flex items-center gap-2 border border-outline-variant/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container"
+          class="btn btn-primary min-h-[36px] focus-visible:outline-none focus-visible:ring-2"
           onclick={loadSampleDocument}
         >
-          <span class="material-symbols-outlined text-[16px] text-primary" aria-hidden="true">visibility</span>
-          <span>View sample meeting</span>
+          View sample meeting
         </button>
       </div>
     {/if}

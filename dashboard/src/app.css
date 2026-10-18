@@ -899,3 +899,238 @@ button.row {
     transform: translateY(0);
   }
 }
+
+/* Dialog scrim & modal */
+.dialog-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: oklch(12% 0.01 70 / 0.72);
+}
+.dialog-scrim[hidden] {
+  display: none !important;
+}
+.dialog {
+  width: min(480px, 100%);
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--window-radius);
+  background: var(--surface);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+}
+.dialog h2 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.dialog p {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 14px;
+  max-width: 52ch;
+}
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+/* Choice card radio group */
+.choice {
+  display: grid;
+  gap: 8px;
+}
+.choice label {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 4px 10px;
+  align-items: start;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease), transform var(--dur-out) var(--ease);
+}
+.choice label:hover {
+  background: color-mix(in oklch, var(--raised) 65%, transparent);
+}
+.choice label:active {
+  transform: translateY(1px);
+}
+.choice label:has(input:checked) {
+  border-color: color-mix(in oklch, var(--accent) 70%, var(--border));
+  background: var(--raised);
+}
+.choice input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+.choice strong {
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+}
+.choice span {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+
+/* Progress bar */
+.progress {
+  height: 6px;
+  border-radius: 99px;
+  background: var(--bg);
+  overflow: hidden;
+  width: 140px;
+  border: 1px solid var(--border);
+}
+.progress b {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 160ms ease-out;
+}
+
+/* Setup Wizard styles */
+.setup-steps {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+.setup-steps span {
+  font: 11px/1 var(--font-mono);
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding-bottom: 6px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -9px;
+}
+.setup-steps span.is-on {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+.test-well {
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.test-well i {
+  width: 4px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--muted);
+  transform-origin: center;
+  transition: height 120ms ease, background 120ms ease;
+}
+.test-well.is-live i {
+  animation: eq 640ms ease-in-out infinite;
+  background: var(--accent);
+}
+.test-well.is-live i:nth-child(odd) {
+  animation-delay: 80ms;
+}
+@keyframes eq {
+  0%, 100% { transform: scaleY(0.4); }
+  50% { transform: scaleY(2.8); }
+}
+
+/* Stats metrics and figures */
+.stat-figures {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
+}
+@media (max-width: 640px) {
+  .stat-figures {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.stat-figure {
+  min-width: 0;
+  padding: 14px 16px;
+  border-left: 1px solid var(--border);
+}
+.stat-figure:first-child {
+  border-left: 0;
+}
+.stat-kicker {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.stat-value {
+  margin: 8px 0 0;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+.stat-note {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+  line-height: 1.4;
+}
+
+/* Meters, notes, and misc helpers */
+.meter {
+  height: 6px;
+  margin-top: 8px;
+  border-radius: 3px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.meter i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: var(--accent);
+}
+.privacy-note {
+  margin-top: 12px;
+  color: var(--muted);
+}
+.setup-link {
+  margin-top: 18px;
+}
+.lede {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+.empty {
+  padding: 32px 16px;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+}
+

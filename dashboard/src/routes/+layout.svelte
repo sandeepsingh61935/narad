@@ -9,7 +9,7 @@
   let { children } = $props();
 
   let showSetupModal = $state(false);
-  let isTauriApp = $state(false);
+  let isTauriApp = $state(typeof window !== "undefined" && isTauri());
   let daemonConnected = $state<boolean | null>(null);
 
   async function checkDaemonConnection() {
@@ -165,7 +165,6 @@
   >
       <header
         class="headerbar"
-        data-tauri-drag-region
         data-od-id="headerbar"
         onmousedown={startDragging}
         ondblclick={toggleMaximize}

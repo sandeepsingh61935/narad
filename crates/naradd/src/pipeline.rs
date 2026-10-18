@@ -355,12 +355,13 @@ impl PipelineHandle {
             return None;
         }
 
-        {
+        let mode = {
             let st = self.inner.state.lock().ok()?;
             if st.dbus_state != SessionState::IDLE {
                 return None;
             }
-        }
+            st.mode.clone()
+        };
 
         let mut spotter_guard = self.inner.wake_spotter.lock().ok()?;
         let spotter = spotter_guard.as_mut()?;
@@ -373,12 +374,6 @@ impl PipelineHandle {
             "wake word detected, starting dictation hands-free"
         );
 
-        let mode = self
-            .inner
-            .state
-            .lock()
-            .map(|st| st.mode.clone())
-            .unwrap_or_else(|_| "plain".to_string());
         self.request_start(Some(mode));
 
         Some(detection)

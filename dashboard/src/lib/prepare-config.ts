@@ -90,6 +90,8 @@ export function prepareConfigForSave(config: ConfigDraft): PreparedConfig {
         selection_hotkey: config.activation.selection_hotkey.trim(),
         mode_hotkeys_enabled: config.activation.mode_hotkeys_enabled !== false,
         hold_tap_threshold_ms,
+        wake_word_enabled: config.activation.wake_word_enabled === true,
+        wake_word_phrase: (config.activation.wake_word_phrase ?? "hey narad").trim() || "hey narad",
       },
       audio: {
         ...config.audio,

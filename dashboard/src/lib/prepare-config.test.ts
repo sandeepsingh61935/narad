@@ -294,6 +294,9 @@ test("the modes page lists the four modes and privacy drops the mock copy", () =
   assert.ok(audio.includes("auto_stop_silence_secs"));
   assert.ok(audio.includes("max_duration_secs"));
   assert.ok(audio.includes("sounds_enabled"));
+  assert.ok(audio.includes("wake_word_enabled"));
+  assert.ok(audio.includes("Wake word"));
+  assert.ok(audio.includes("Listen for 'Hey Narad' in background. Keeps microphone open."));
 
 
   const dictionary = readFileSync(join(here, "../routes/dictionary/+page.svelte"), "utf8");
@@ -340,5 +343,37 @@ test("a settings save cleans and deduplicates profiles", () => {
     { app_id: "code", mode: "code" },
     { app_id: "org.gnome.Terminal", mode: "plain", paste_with_shift: true },
   ]);
+});
+
+test("default wake word is disabled and phrase is hey narad", () => {
+  const config = defaultConfig();
+  assert.equal(config.activation.wake_word_enabled, false);
+  assert.equal(config.activation.wake_word_phrase, "hey narad");
+});
+
+test("a settings save keeps wake word enabled and trims wake word phrase", () => {
+  const input = defaultConfig();
+  input.activation.wake_word_enabled = true;
+  input.activation.wake_word_phrase = "  start recording  ";
+
+  const result = prepareConfigForSave(input);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.config.activation.wake_word_enabled, true);
+  assert.equal(result.config.activation.wake_word_phrase, "start recording");
+});
+
+test("a blank wake word phrase falls back to hey narad and falsy enabled stays false", () => {
+  const input = defaultConfig();
+  input.activation.wake_word_phrase = "   ";
+  (input.activation as any).wake_word_enabled = "not-a-bool";
+
+  const result = prepareConfigForSave(input);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.config.activation.wake_word_enabled, false);
+  assert.equal(result.config.activation.wake_word_phrase, "hey narad");
 });
 

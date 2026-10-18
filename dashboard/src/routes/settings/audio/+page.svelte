@@ -215,5 +215,37 @@
         />
       </div>
     </div>
+
+    <div class="bg-surface-container-low rounded-xl overflow-hidden flex flex-col border border-outline-variant/30">
+      <div class="p-4 flex items-center justify-between gap-4">
+        <div class="flex flex-col min-w-0">
+          <span class="font-body-default text-body-default text-on-surface">Wake word</span>
+          <span class="font-body-muted text-body-muted text-on-surface-variant">
+            Listen for 'Hey Narad' in background. Keeps microphone open.
+          </span>
+        </div>
+        <button
+          id="wake-word-enabled"
+          aria-checked={config.activation.wake_word_enabled}
+          aria-label="Wake word"
+          class="w-11 h-6 {config.activation.wake_word_enabled ? 'bg-primary-container' : 'bg-surface-container-highest'} rounded-full relative p-0.5 transition-colors cursor-pointer flex items-center shrink-0 before:absolute before:-inset-2 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface-container disabled:opacity-50 disabled:cursor-not-allowed"
+          role="switch"
+          type="button"
+          disabled={!loaded}
+          onclick={() => {
+            config.activation.wake_word_enabled = !config.activation.wake_word_enabled;
+            commit();
+          }}
+        >
+          <span
+            class="w-5 h-5 {config.activation.wake_word_enabled ? 'bg-on-primary-container translate-x-5' : 'bg-outline translate-x-0'} rounded-full shadow transition-transform flex items-center justify-center"
+          >
+            {#if config.activation.wake_word_enabled}
+              <span class="material-symbols-outlined text-[12px] text-primary" aria-hidden="true">check</span>
+            {/if}
+          </span>
+        </button>
+      </div>
+    </div>
   </div>
 </section>

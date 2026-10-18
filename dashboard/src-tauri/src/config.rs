@@ -70,6 +70,10 @@ pub struct ActivationConfig {
     #[serde(default = "default_mode_hotkeys_enabled")]
     pub mode_hotkeys_enabled: bool,
     pub hold_tap_threshold_ms: u64,
+    #[serde(default)]
+    pub wake_word_enabled: bool,
+    #[serde(default = "default_wake_word_phrase")]
+    pub wake_word_phrase: String,
 }
 
 fn default_undo_last_hotkey() -> String {
@@ -84,6 +88,10 @@ fn default_mode_hotkeys_enabled() -> bool {
     true
 }
 
+fn default_wake_word_phrase() -> String {
+    "hey narad".to_string()
+}
+
 impl Default for ActivationConfig {
     fn default() -> Self {
         Self {
@@ -93,6 +101,8 @@ impl Default for ActivationConfig {
             selection_hotkey: default_selection_hotkey(),
             mode_hotkeys_enabled: default_mode_hotkeys_enabled(),
             hold_tap_threshold_ms: 250,
+            wake_word_enabled: false,
+            wake_word_phrase: default_wake_word_phrase(),
         }
     }
 }
@@ -417,5 +427,36 @@ dictate_hotkey = "Ctrl+Alt+D"
 
         let again: DashboardConfig = toml::from_str(&text).expect("reparse");
         assert_eq!(again.profiles, cfg.profiles);
+    }
+
+    #[test]
+    fn default_wake_word_is_off_and_round_trips() {
+        let cfg = DashboardConfig::default();
+        assert!(!cfg.activation.wake_word_enabled);
+        assert_eq!(cfg.activation.wake_word_phrase, "hey narad");
+        let text = toml::to_string_pretty(&cfg).expect("serialize");
+        assert!(text.contains("wake_word_enabled = false"));
+        assert!(text.contains("wake_word_phrase = \"hey narad\""));
+        let loaded: DashboardConfig = toml::from_str(&text).expect("parse");
+        assert_eq!(loaded.activation.wake_word_enabled, false);
+        assert_eq!(loaded.activation.wake_word_phrase, "hey narad");
+    }
+
+    #[test]
+    fn reserialize_keeps_wake_word() {
+        let raw = r#"
+[activation]
+wake_word_enabled = true
+wake_word_phrase = "start recording"
+"#;
+        let cfg: DashboardConfig = toml::from_str(raw).expect("parse");
+        assert!(cfg.activation.wake_word_enabled);
+        assert_eq!(cfg.activation.wake_word_phrase, "start recording");
+        let text = toml::to_string_pretty(&cfg).expect("serialize");
+        assert!(text.contains("wake_word_enabled = true"));
+        assert!(text.contains("wake_word_phrase = \"start recording\""));
+        let again: DashboardConfig = toml::from_str(&text).expect("reparse");
+        assert_eq!(again.activation.wake_word_enabled, true);
+        assert_eq!(again.activation.wake_word_phrase, "start recording");
     }
 }

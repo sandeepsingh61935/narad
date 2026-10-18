@@ -18,6 +18,8 @@ export type DashboardConfig = {
     selection_hotkey: string;
     mode_hotkeys_enabled: boolean;
     hold_tap_threshold_ms: number;
+    wake_word_enabled: boolean;
+    wake_word_phrase: string;
   };
   audio: {
     sounds_enabled: boolean;
@@ -63,6 +65,8 @@ export function defaultConfig(): DashboardConfig {
       selection_hotkey: "Ctrl+Alt+R",
       mode_hotkeys_enabled: true,
       hold_tap_threshold_ms: 250,
+      wake_word_enabled: false,
+      wake_word_phrase: "hey narad",
     },
     audio: {
       sounds_enabled: true,

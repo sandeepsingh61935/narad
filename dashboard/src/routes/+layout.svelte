@@ -1,5 +1,6 @@
 <script lang="ts">
   import { page } from "$app/state";
+  import ToastHost from "$lib/ToastHost.svelte";
   import "../app.css";
 
   let { children } = $props();
@@ -127,4 +128,6 @@
       {@render children()}
     </main>
   </div>
+  <ToastHost />
 </div>
+

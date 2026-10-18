@@ -42,13 +42,13 @@ if [[ "$DEBUG" -eq 1 ]]; then
   BIN_SRC="$REPO_ROOT/dashboard/src-tauri/target/debug/dashboard"
   if [[ ! -x "$BIN_SRC" ]]; then
     echo "debug dashboard not found at $BIN_SRC; building..."
-    (cd "$REPO_ROOT/dashboard" && bun run build && cargo build --manifest-path src-tauri/Cargo.toml)
+    (cd "$REPO_ROOT/dashboard" && bun run tauri build --debug --no-bundle)
   fi
 else
   BIN_SRC="$REPO_ROOT/dashboard/src-tauri/target/release/dashboard"
   if [[ ! -x "$BIN_SRC" ]]; then
     echo "building release dashboard..."
-    (cd "$REPO_ROOT/dashboard" && bun run build && cargo build --manifest-path src-tauri/Cargo.toml --release)
+    (cd "$REPO_ROOT/dashboard" && bun run tauri build --no-bundle)
   fi
 fi
 

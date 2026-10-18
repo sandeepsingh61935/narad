@@ -204,3 +204,40 @@
     font-size: 10px;
     font-family: monospace;
 }
+
+/* Floating HUD action buttons — Stop & Discard (Quiet Precision) */
+#narad-stop-btn,
+#narad-discard-btn {
+    min-height: 28px;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 9999px;
+    background-color: rgba(45, 43, 40, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #edebeb;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+#narad-stop-btn:hover,
+#narad-discard-btn:hover {
+    background-color: rgba(58, 55, 51, 0.95);
+    border-color: #e08a1e;
+    color: #f59e32;
+}
+
+#narad-stop-btn:focus,
+#narad-discard-btn:focus {
+    border-color: #e08a1e;
+    background-color: rgba(224, 138, 30, 0.20);
+    outline: none;
+}
+
+#narad-stop-btn:active,
+#narad-discard-btn:active {
+    background-color: #e08a1e;
+    border-color: #e08a1e;
+    color: #1c1b1a;
+}
+

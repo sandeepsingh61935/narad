@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Narad dictation daemon"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "naradd"
 path = "src/main.rs"
@@ -14,6 +17,7 @@ narad-core = { path = "../narad-core" }
 narad-dbus = { path = "../narad-dbus" }
 nnnoiseless = "0.5"
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }

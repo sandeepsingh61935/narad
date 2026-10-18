@@ -71,7 +71,7 @@ pub struct WakeWordSpotter {
     energy_threshold: f32,
     state: SpotterState,
     buffer: Vec<f32>,
-    samples_processed: u64,
+    samples_processed_16k: u64,
     refractory_samples_remaining: usize,
     silence_samples_count: usize,
     template: PhraseTemplate,
@@ -107,7 +107,7 @@ impl WakeWordSpotter {
             energy_threshold: DEFAULT_ENERGY_THRESHOLD,
             state: SpotterState::Listening,
             buffer: Vec::with_capacity(MAX_BUFFER_SAMPLES),
-            samples_processed: 0,
+            samples_processed_16k: 0,
             refractory_samples_remaining: 0,
             silence_samples_count: 0,
             template,
@@ -169,6 +169,16 @@ impl WakeWordSpotter {
         self.state
     }
 
+    /// Total 16 kHz audio samples processed since creation.
+    pub fn samples_processed_16k(&self) -> u64 {
+        self.samples_processed_16k
+    }
+
+    /// Remaining refractory cool-down samples suppressing detections.
+    pub fn refractory_samples_remaining(&self) -> usize {
+        self.refractory_samples_remaining
+    }
+
     /// Reset internal audio buffers, refractory timers, and state machine.
     pub fn reset(&mut self) {
         self.buffer.clear();
@@ -199,24 +209,32 @@ impl WakeWordSpotter {
         };
 
         let num_samples_16k = pcm_16k.len();
-        self.samples_processed += (num_samples_16k as u64 * sample_rate as u64) / TARGET_SAMPLE_RATE as u64;
+        self.samples_processed_16k += num_samples_16k as u64;
 
         // If in refractory cool-down period, count down and suppress detections.
-        if self.refractory_samples_remaining > 0 {
+        let pcm_active: &[f32] = if self.refractory_samples_remaining > 0 {
             if num_samples_16k >= self.refractory_samples_remaining {
+                let remaining = self.refractory_samples_remaining;
                 self.refractory_samples_remaining = 0;
                 self.state = SpotterState::Listening;
                 trace!("wake word refractory period ended; resumed listening");
+                &pcm_16k[remaining..]
             } else {
                 self.refractory_samples_remaining -= num_samples_16k;
                 return None;
             }
+        } else {
+            &pcm_16k
+        };
+
+        if pcm_active.is_empty() {
+            return None;
         }
 
         // Energy gate on incoming block.
-        let block_rms = compute_rms(&pcm_16k);
+        let block_rms = compute_rms(pcm_active);
         if block_rms < self.energy_threshold {
-            self.silence_samples_count += num_samples_16k;
+            self.silence_samples_count += pcm_active.len();
             if self.buffer.is_empty() {
                 // Buffer is already empty; no need to accumulate leading silence.
                 return None;
@@ -229,10 +247,10 @@ impl WakeWordSpotter {
             }
             // During short pauses (like inter-word dip), retain silence frames
             // so the phrase envelope keeps natural timing.
-            self.buffer.extend_from_slice(&pcm_16k);
+            self.buffer.extend_from_slice(pcm_active);
         } else {
             self.silence_samples_count = 0;
-            self.buffer.extend_from_slice(&pcm_16k);
+            self.buffer.extend_from_slice(pcm_active);
         }
 
         // Cap buffer size.
@@ -287,7 +305,7 @@ impl WakeWordSpotter {
             );
 
             if confidence >= self.threshold {
-                let timestamp_ms = (self.samples_processed * 1000) / sample_rate as u64;
+                let timestamp_ms = (self.samples_processed_16k * 1000) / TARGET_SAMPLE_RATE as u64;
                 let detection = WakeWordDetection {
                     phrase: self.phrase.clone(),
                     confidence,
@@ -1097,4 +1115,31 @@ mod tests {
         assert!(detection.is_some(), "generic phrase must be matched");
         assert_eq!(detection.unwrap().phrase, "start recording");
     }
+
+    #[test]
+    fn test_refractory_partial_chunk_buffering_and_sample_tracking() {
+        let mut spotter = WakeWordSpotter::default();
+        let samples = generate_wake_phrase_samples("hey narad", 16_000);
+        let len = samples.len() as u64;
+
+        let det = spotter.process_pcm(&samples, 16_000).expect("detection");
+        assert_eq!(spotter.state(), SpotterState::CoolingDown);
+        assert_eq!(spotter.refractory_samples_remaining(), REFRACTORY_SAMPLES);
+        assert_eq!(spotter.samples_processed_16k(), len);
+        assert_eq!(det.timestamp_ms, (len * 1000) / 16_000);
+
+        // Feed block larger than refractory window: 19_200 + 1_000 = 20_200 samples of quiet audio.
+        let large_block = vec![0.02f32; REFRACTORY_SAMPLES + 1_000];
+        let det2 = spotter.process_pcm(&large_block, 16_000);
+        assert!(det2.is_none());
+        assert_eq!(spotter.state(), SpotterState::Listening);
+        assert_eq!(spotter.refractory_samples_remaining(), 0);
+        assert_eq!(
+            spotter.samples_processed_16k(),
+            len + large_block.len() as u64
+        );
+        // Only the trailing 1,000 samples should have been buffered
+        assert_eq!(spotter.buffer.len(), 1_000);
+    }
 }
+

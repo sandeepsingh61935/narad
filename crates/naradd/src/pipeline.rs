@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use narad_core::store::{HistoryStore, InsertStatus, NewHistoryEntry};
 use narad_dbus::{SessionState, OBJECT_PATH};
-use tracing::{info, warn};
+use tracing::{info, trace, warn};
 use zbus::Connection;
 
 use crate::asr::{self, AsrEngine};
@@ -16,6 +16,7 @@ use crate::config::NaradConfig;
 use crate::denoise;
 use crate::insert::{self, InsertOutcome};
 use crate::ipc::DaemonIpc;
+use crate::wakeword::{WakeWordDetection, WakeWordSpotter};
 
 /// HUD outcome signaled on `StateChanged`.
 ///
@@ -95,6 +96,7 @@ struct PipelineInner {
     state: Mutex<SessionRuntime>,
     store: Mutex<HistoryStore>,
     asr: Mutex<Option<AsrEngine>>,
+    wake_spotter: Mutex<Option<WakeWordSpotter>>,
     last_activity: Mutex<Instant>,
     conn: OnceLock<Connection>,
     /// Prevent overlapping stop/process tasks.
@@ -121,6 +123,14 @@ impl PipelineHandle {
         asr: Option<AsrEngine>,
         audio_dir: PathBuf,
     ) -> Self {
+        let wake_spotter = if config.activation.wake_word_enabled {
+            Some(WakeWordSpotter::new(
+                &config.activation.wake_word_phrase,
+                crate::wakeword::DEFAULT_CONFIDENCE_THRESHOLD,
+            ))
+        } else {
+            None
+        };
         Self {
             inner: Arc::new(PipelineInner {
                 config: config.clone(),
@@ -147,6 +157,7 @@ impl PipelineHandle {
                 }),
                 store: Mutex::new(store),
                 asr: Mutex::new(asr),
+                wake_spotter: Mutex::new(wake_spotter),
                 last_activity: Mutex::new(Instant::now()),
                 conn: OnceLock::new(),
                 processing: AtomicBool::new(false),
@@ -328,6 +339,136 @@ impl PipelineHandle {
         self.spawn_listen(mode, ListenTrigger::Open);
     }
 
+    /// Feed audio stream in idle for wake word detection (FR-ACT-6).
+    ///
+    /// If wake word detection is disabled or the session is not idle, returns `None`.
+    /// When the configured wake phrase is spotted in idle audio:
+    /// - Logs `wake word detected, starting dictation hands-free`
+    /// - Automatically starts dictation session in current mode
+    /// - Returns `Some(WakeWordDetection)`
+    pub fn feed_idle_pcm(
+        &self,
+        samples: &[f32],
+        sample_rate: u32,
+    ) -> Option<WakeWordDetection> {
+        if !self.inner.config.activation.wake_word_enabled {
+            return None;
+        }
+
+        {
+            let st = self.inner.state.lock().ok()?;
+            if st.dbus_state != SessionState::IDLE {
+                return None;
+            }
+        }
+
+        let mut spotter_guard = self.inner.wake_spotter.lock().ok()?;
+        let spotter = spotter_guard.as_mut()?;
+        let detection = spotter.process_pcm(samples, sample_rate)?;
+
+        trace!("wake word detected, starting dictation hands-free");
+        info!(
+            phrase = %detection.phrase,
+            confidence = format!("{:.3}", detection.confidence),
+            "wake word detected, starting dictation hands-free"
+        );
+
+        let mode = self
+            .inner
+            .state
+            .lock()
+            .map(|st| st.mode.clone())
+            .unwrap_or_else(|_| "plain".to_string());
+        self.request_start(Some(mode));
+
+        Some(detection)
+    }
+
+    /// Process audio stream in idle for wake word spotting (alias for `feed_idle_pcm`).
+    #[allow(dead_code)]
+    pub fn process_idle_audio(
+        &self,
+        samples: &[f32],
+        sample_rate: u32,
+    ) -> Option<WakeWordDetection> {
+        self.feed_idle_pcm(samples, sample_rate)
+    }
+
+    /// Check if wake word engine is enabled in this pipeline.
+    #[allow(dead_code)]
+    pub fn is_wake_word_enabled(&self) -> bool {
+        self.inner.config.activation.wake_word_enabled
+    }
+
+    /// Spawn continuous microphone capture tap in idle when wake word is enabled (FR-AUD-1, FR-ACT-6).
+    #[allow(dead_code)]
+    pub fn spawn_idle_audio_tap(&self) -> Option<tokio::task::JoinHandle<()>> {
+        if !self.inner.config.activation.wake_word_enabled {
+            return None;
+        }
+        let handle = self.clone();
+        Some(tokio::spawn(async move {
+            handle.run_idle_audio_tap().await;
+        }))
+    }
+
+    #[allow(dead_code)]
+    async fn run_idle_audio_tap(&self) {
+        let mut tick = tokio::time::interval(Duration::from_millis(100));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        let mut active_capture: Option<CaptureHandle> = None;
+        let mut scanned = 0;
+
+        loop {
+            tick.tick().await;
+
+            let is_idle = self
+                .inner
+                .state
+                .lock()
+                .map(|st| st.dbus_state == SessionState::IDLE)
+                .unwrap_or(false);
+
+            if !is_idle {
+                if active_capture.is_some() {
+                    active_capture.take();
+                    scanned = 0;
+                }
+                continue;
+            }
+
+            // In idle: ensure capture is running
+            if active_capture.is_none() {
+                match CaptureHandle::start(&self.inner.config.audio.input_target) {
+                    Ok(cap) => {
+                        active_capture = Some(cap);
+                        scanned = 0;
+                    }
+                    Err(err) => {
+                        warn!(error = %err, "idle audio tap failed to start capture");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        continue;
+                    }
+                }
+            }
+
+            if let Some(ref capture) = active_capture {
+                let (new_samples, new_scanned) = capture.copy_from(scanned);
+                scanned = new_scanned;
+                if !new_samples.is_empty()
+                    && self
+                        .feed_idle_pcm(&new_samples, audio::TARGET_SAMPLE_RATE as u32)
+                        .is_some()
+                {
+                    // Wake word detected; release idle capture handle so begin_listen can capture.
+                    active_capture.take();
+                    scanned = 0;
+                }
+            }
+        }
+    }
+
     /// Undo-last shortcut. One press deletes; release is not a second action.
     pub fn request_undo_last(&self) {
         let handle = self.clone();
@@ -458,6 +599,12 @@ impl PipelineHandle {
             }
             st.cancel.store(false, Ordering::SeqCst);
             snapshot_focus_at_start(&mut st);
+        }
+
+        if let Ok(mut g) = self.inner.wake_spotter.lock() {
+            if let Some(spotter) = g.as_mut() {
+                spotter.reset();
+            }
         }
 
         audio::play_cue("start", self.inner.config.audio.sounds_enabled);
@@ -1070,6 +1217,13 @@ impl PipelineHandle {
             if state == SessionState::IDLE {
                 st.outcome_detail.clear();
                 st.hud_outcome = None;
+            }
+        }
+        if state == SessionState::IDLE {
+            if let Ok(mut g) = self.inner.wake_spotter.lock() {
+                if let Some(spotter) = g.as_mut() {
+                    spotter.reset();
+                }
             }
         }
         self.emit_state(state).await;
@@ -2767,6 +2921,77 @@ mod tests {
             assert_eq!(next_entry.final_text, "regular dictation");
         })
         .await;
+    }
+
+    #[test]
+    fn wake_word_disabled_by_default_rejects_audio_and_stays_idle() {
+        let (_dir, pipe) = test_pipe();
+        assert!(!pipe.is_wake_word_enabled());
+        let samples = crate::wakeword::generate_wake_phrase_samples("hey narad", 16_000);
+        assert!(pipe.feed_idle_pcm(&samples, 16_000).is_none());
+        assert!(pipe.process_idle_audio(&samples, 16_000).is_none());
+        assert!(!pipe.is_listening());
+        assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::IDLE);
+    }
+
+    #[tokio::test]
+    async fn wake_word_enabled_detects_phrase_and_transitions_to_listening() {
+        let mut cfg = NaradConfig::default();
+        cfg.activation.wake_word_enabled = true;
+        cfg.activation.wake_word_phrase = "hey narad".to_string();
+
+        let (_dir, pipe) = test_pipe_with_config(cfg);
+        assert!(pipe.is_wake_word_enabled());
+        assert!(!pipe.is_listening());
+
+        // 1. Feeding pure silence should not trigger
+        let silence = vec![0.0f32; 16_000];
+        assert!(pipe.feed_idle_pcm(&silence, 16_000).is_none());
+        assert!(!pipe.is_listening());
+
+        // 2. Feeding synthesized wake phrase triggers detection and automatic hands-free start
+        let samples = crate::wakeword::generate_wake_phrase_samples("hey narad", 16_000);
+        let detection = pipe.feed_idle_pcm(&samples, 16_000);
+        assert!(detection.is_some(), "wake phrase must trigger detection in idle");
+        let det = detection.unwrap();
+        assert_eq!(det.phrase, "hey narad");
+        assert!(det.confidence >= 0.70);
+
+        // Allow spawned start task to complete
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(pipe.is_listening(), "pipeline must transition to listening state");
+        assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::LISTENING);
+
+        // 3. While listening, additional audio feed is ignored
+        assert!(
+            pipe.feed_idle_pcm(&samples, 16_000).is_none(),
+            "feed in non-idle state must be ignored"
+        );
+    }
+
+    #[tokio::test]
+    async fn wake_word_custom_phrase_and_mode_preservation() {
+        let mut cfg = NaradConfig::default();
+        cfg.activation.wake_word_enabled = true;
+        cfg.activation.wake_word_phrase = "start recording".to_string();
+
+        let (_dir, pipe) = test_pipe_with_config(cfg);
+        pipe.set_mode("email").expect("set_mode");
+
+        // "hey narad" does not trigger custom phrase
+        let default_samples = crate::wakeword::generate_wake_phrase_samples("hey narad", 16_000);
+        assert!(pipe.feed_idle_pcm(&default_samples, 16_000).is_none());
+        assert!(!pipe.is_listening());
+
+        // Custom phrase triggers
+        let custom_samples = crate::wakeword::generate_wake_phrase_samples("start recording", 16_000);
+        let detection = pipe.feed_idle_pcm(&custom_samples, 16_000);
+        assert!(detection.is_some(), "custom wake phrase must trigger detection");
+        assert_eq!(detection.unwrap().phrase, "start recording");
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(pipe.is_listening());
+        assert_eq!(pipe.snapshot_props().expect("props").1, "email");
     }
 }
 

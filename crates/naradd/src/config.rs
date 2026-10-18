@@ -94,6 +94,12 @@ pub struct ActivationConfig {
     pub mode_hotkeys_enabled: bool,
     /// Press duration at or above this value is treated as hold; below is tap (FR-ACT-1).
     pub hold_tap_threshold_ms: u64,
+    /// Continuous wake word spotting enabled in idle (FR-ACT-6; off by default).
+    #[serde(default)]
+    pub wake_word_enabled: bool,
+    /// Keyword phrase triggering hands-free dictation (FR-ACT-6).
+    #[serde(default = "default_wake_word_phrase")]
+    pub wake_word_phrase: String,
 }
 
 fn default_undo_last_hotkey() -> String {
@@ -108,6 +114,10 @@ fn default_mode_hotkeys_enabled() -> bool {
     true
 }
 
+fn default_wake_word_phrase() -> String {
+    crate::wakeword::DEFAULT_KEYWORD_PHRASE.to_string()
+}
+
 impl Default for ActivationConfig {
     fn default() -> Self {
         Self {
@@ -117,6 +127,8 @@ impl Default for ActivationConfig {
             selection_hotkey: default_selection_hotkey(),
             mode_hotkeys_enabled: default_mode_hotkeys_enabled(),
             hold_tap_threshold_ms: 250,
+            wake_word_enabled: false,
+            wake_word_phrase: crate::wakeword::DEFAULT_KEYWORD_PHRASE.to_string(),
         }
     }
 }
@@ -269,6 +281,8 @@ mod tests {
         assert_eq!(cfg.activation.selection_hotkey, "Ctrl+Alt+R");
         assert!(cfg.activation.mode_hotkeys_enabled);
         assert_eq!(cfg.activation.hold_tap_threshold_ms, 250);
+        assert!(!cfg.activation.wake_word_enabled);
+        assert_eq!(cfg.activation.wake_word_phrase, "hey narad");
         assert!(cfg.audio.sounds_enabled);
         assert_eq!(cfg.audio.auto_stop_silence_secs, 2);
         assert_eq!(cfg.audio.max_duration_secs, 300);
@@ -382,6 +396,8 @@ idle_unload_minutes = 10
         assert_eq!(cfg.activation.dictate_hotkey, "Ctrl+Alt+Space");
         assert_eq!(cfg.activation.paste_last_hotkey, "Ctrl+Alt+V");
         assert_eq!(cfg.activation.hold_tap_threshold_ms, 250);
+        assert!(!cfg.activation.wake_word_enabled);
+        assert_eq!(cfg.activation.wake_word_phrase, "hey narad");
         assert_eq!(cfg.models.asr_english, "parakeet-ctc-110m-int8");
         assert_eq!(cfg.models.idle_unload_minutes, None);
         assert!(!cfg.history.retain_audio);
@@ -553,6 +569,42 @@ mode = "plain"
         // Unknown app returns None
         assert!(cfg.find_profile("unknown.app").is_none());
         assert!(cfg.find_profile("").is_none());
+    }
+
+    #[test]
+    fn wake_word_config_defaults_off_and_round_trips() {
+        let cfg = NaradConfig::default();
+        assert!(!cfg.activation.wake_word_enabled);
+        assert_eq!(cfg.activation.wake_word_phrase, "hey narad");
+        let text = toml::to_string_pretty(&cfg).expect("serialize");
+        assert!(text.contains("wake_word_enabled = false"));
+        assert!(text.contains("wake_word_phrase = \"hey narad\""));
+
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"
+[activation]
+wake_word_enabled = true
+wake_word_phrase = "hey assistant"
+"#,
+        )
+        .expect("write");
+        let loaded = load(&path).expect("load");
+        assert!(loaded.activation.wake_word_enabled);
+        assert_eq!(loaded.activation.wake_word_phrase, "hey assistant");
+
+        let text = toml::to_string_pretty(&loaded).expect("serialize");
+        let again: NaradConfig = toml::from_str(&text).expect("parse");
+        assert_eq!(
+            again.activation.wake_word_enabled,
+            loaded.activation.wake_word_enabled
+        );
+        assert_eq!(
+            again.activation.wake_word_phrase,
+            loaded.activation.wake_word_phrase
+        );
     }
 }
 

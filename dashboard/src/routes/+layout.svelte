@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { isTauri, invoke } from "@tauri-apps/api/core";
   import { page } from "$app/state";
   import ToastHost from "$lib/ToastHost.svelte";
   import SetupModal from "$lib/SetupModal.svelte";
@@ -8,13 +9,34 @@
   let { children } = $props();
 
   let showSetupModal = $state(false);
+  let isTauriApp = $state(false);
+  let daemonConnected = $state<boolean | null>(null);
+
+  async function checkDaemonConnection() {
+    if (typeof window === "undefined") return;
+    if (!isTauri()) {
+      daemonConnected = true; // web preview mock mode
+      return;
+    }
+    try {
+      await invoke("session_status");
+      daemonConnected = true;
+    } catch {
+      daemonConnected = false;
+    }
+  }
 
   onMount(() => {
+    isTauriApp = isTauri();
+    checkDaemonConnection();
+    const interval = setInterval(checkDaemonConnection, 4000);
+
     function onOpenSetup() {
       showSetupModal = true;
     }
     window.addEventListener("open-setup-wizard", onOpenSetup);
     return () => {
+      clearInterval(interval);
       window.removeEventListener("open-setup-wizard", onOpenSetup);
     };
   });
@@ -94,8 +116,8 @@
     try {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       await getCurrentWindow().minimize();
-    } catch {
-      // Non-Tauri fallback
+    } catch (e) {
+      console.warn("Could not minimize window:", e);
     }
   }
 
@@ -104,8 +126,8 @@
     try {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       await getCurrentWindow().toggleMaximize();
-    } catch {
-      // Non-Tauri fallback
+    } catch (e) {
+      console.warn("Could not toggle maximize window:", e);
     }
   }
 
@@ -114,15 +136,40 @@
     try {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       await getCurrentWindow().close();
+    } catch (e) {
+      console.warn("Could not close window:", e);
+    }
+  }
+
+  async function startDragging(e: MouseEvent) {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("button, a, input, select, textarea, .wc")) return;
+    if (typeof window === "undefined") return;
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().startDragging();
     } catch {
       // Non-Tauri fallback
     }
   }
 </script>
 
-<div class="stage min-h-screen w-full flex items-center justify-center p-4 bg-desktop">
-  <div class="window w-[1100px] max-w-[calc(100vw-32px)] h-[760px] max-h-[calc(100vh-32px)] flex-shrink-0 flex flex-col bg-bg border border-border rounded-[var(--window-radius)] overflow-hidden select-none shadow-2xl relative">
-      <header class="headerbar" data-tauri-drag-region data-od-id="headerbar">
+<div
+  class="stage min-h-screen w-full flex items-center justify-center {isTauriApp ? 'p-0 bg-bg h-screen overflow-hidden' : 'p-4 bg-desktop'}"
+  class:is-tauri-stage={isTauriApp}
+>
+  <div
+    class="window flex-shrink-0 flex flex-col bg-bg select-none relative {isTauriApp ? 'w-full h-full max-w-full max-h-full rounded-none border-0 shadow-none overflow-hidden' : 'w-[1100px] max-w-[calc(100vw-32px)] h-[760px] max-h-[calc(100vh-32px)] border border-border rounded-[var(--window-radius)] overflow-hidden shadow-2xl'}"
+    class:is-tauri-win={isTauriApp}
+  >
+      <header
+        class="headerbar"
+        data-tauri-drag-region
+        data-od-id="headerbar"
+        onmousedown={startDragging}
+        ondblclick={toggleMaximize}
+      >
         <div class="header-title" data-tauri-drag-region>
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
@@ -132,7 +179,10 @@
           <span>Narad</span>
           <span class="header-sep" aria-hidden="true">/</span>
           <span class="header-view">{getActiveTitle(page.url.pathname)}</span>
-          <span class="stamp" data-od-id="offline-stamp"><i></i>Offline</span>
+          <span class="stamp {daemonConnected === false ? 'is-disconnected' : ''}" data-od-id="offline-stamp">
+            <i class={daemonConnected === false ? 'dot-warn' : 'dot-ok'}></i>
+            {daemonConnected === false ? 'Daemon offline' : 'Ready · local'}
+          </span>
         </div>
         <div class="window-controls">
           <button

@@ -12,11 +12,12 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Narad",
-        "width": 880,
-        "height": 640,
-        "minWidth": 480,
-        "minHeight": 360,
+        "width": 1100,
+        "height": 760,
+        "minWidth": 720,
+        "minHeight": 500,
         "decorations": false
       }
     ],

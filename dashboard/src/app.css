@@ -180,6 +180,20 @@ textarea {
   background: var(--desktop);
 }
 
+/* In native desktop app (Tauri), the app fills the native OS window without padding or shadow */
+.stage.is-tauri-stage {
+  min-height: 100vh;
+  height: 100vh;
+  width: 100vw;
+  max-width: 100vw;
+  max-height: 100vh;
+  padding: 0 !important;
+  margin: 0 !important;
+  display: flex;
+  background: var(--bg) !important;
+  overflow: hidden !important;
+}
+
 .stage.desktop-stage,
 .desktop-stage {
   display: block;
@@ -206,6 +220,18 @@ textarea {
   border: 1px solid var(--border);
   border-radius: var(--window-radius);
   box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+
+.window.is-tauri-win {
+  width: 100vw !important;
+  max-width: 100vw !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  border-radius: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+  flex: 1 1 auto;
   overflow: hidden;
 }
 
@@ -280,10 +306,23 @@ textarea {
   display: block;
 }
 
+.stamp i.dot-warn {
+  background: var(--warn);
+}
+
+.stamp i.dot-err {
+  background: var(--danger);
+}
+
+.stamp.is-disconnected {
+  color: var(--warn);
+}
+
 .window-controls {
   display: flex;
   align-items: center;
   gap: 2px;
+  -webkit-app-region: no-drag;
 }
 
 .wc {
@@ -295,6 +334,7 @@ textarea {
   border-radius: 8px;
   background: transparent;
   color: var(--muted);
+  -webkit-app-region: no-drag;
 }
 
 .wc:hover {
@@ -1461,6 +1501,39 @@ button.row {
 
 .hud-undo[hidden] {
   display: none !important;
+}
+
+.hud-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hud-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--fg);
+  font: 500 11px/1 var(--font-body);
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.hud-btn:hover {
+  background: color-mix(in oklch, var(--raised) 75%, var(--accent));
+  border-color: var(--accent);
+}
+
+.hud-btn-discard:hover {
+  background: color-mix(in oklch, var(--raised) 75%, var(--danger));
+  border-color: var(--danger);
 }
 
 .hud-count {

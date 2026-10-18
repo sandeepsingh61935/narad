@@ -27,16 +27,42 @@
   let menuOpen = $state<boolean>(false);
   let menuPos = $state<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  // Mock text editor
+  // Mock text editor & streaming pre-edit
   let dictatedText = $state<string>("");
+  let streamingDraft = $state<string>("");
+  let streamTimer: ReturnType<typeof setInterval> | null = null;
   const SAMPLE_PHRASE =
     "The patch drops the legacy ioctl path. After the refactor, drm_ioctl_kernel is the only entry that still takes the unlocked mutex.";
+  const STREAMING_WORDS = [
+    "The", "patch", "drops", "the", "legacy", "ioctl", "path.",
+    "After", "the", "refactor,", "drm_ioctl_kernel", "is", "the",
+    "only", "entry", "that", "still", "takes", "the", "unlocked", "mutex."
+  ];
 
   let clockStr = $state<string>("--:--");
 
   function updateClock() {
     const now = new Date();
     clockStr = `${now.getHours()}:${String(now.getMinutes()).padStart(2, "0")}`;
+  }
+
+  function startStreamingSimulation() {
+    streamingDraft = "";
+    let wordIdx = 0;
+    if (streamTimer) clearInterval(streamTimer);
+    streamTimer = setInterval(() => {
+      if (wordIdx < STREAMING_WORDS.length) {
+        streamingDraft = STREAMING_WORDS.slice(0, wordIdx + 1).join(" ");
+        wordIdx += 1;
+      }
+    }, 380);
+  }
+
+  function stopStreamingSimulation() {
+    if (streamTimer) {
+      clearInterval(streamTimer);
+      streamTimer = null;
+    }
   }
 
   function setHudState(next: HudState) {
@@ -52,18 +78,20 @@
       clearTimeout(resultTimer);
       resultTimer = null;
     }
+    stopStreamingSimulation();
 
     hudState = next;
 
     if (next === "listening") {
       listenTimer = 0;
+      startStreamingSimulation();
       listenInterval = setInterval(() => {
         listenTimer += 1;
       }, 1000);
     } else if (next === "processing") {
       processingTimer = setTimeout(() => {
         finishDictation();
-      }, 1400);
+      }, 1200);
     } else if (next === "result") {
       resultTimer = setTimeout(() => {
         hudState = "idle";
@@ -80,6 +108,8 @@
   }
 
   function finishDictation() {
+    stopStreamingSimulation();
+    streamingDraft = "";
     if (deliverMode === "copy") {
       dictatedText = "";
       try {
@@ -95,8 +125,16 @@
     setHudState("result");
   }
 
+  function discardDictation() {
+    stopStreamingSimulation();
+    streamingDraft = "";
+    setHudState("idle");
+    toast("Dictation discarded");
+  }
+
   function handleUndo() {
     dictatedText = "";
+    streamingDraft = "";
     setHudState("idle");
     toast("Insert undone");
   }
@@ -264,10 +302,32 @@
             <circle cx="12" cy="12" r="9" />
             <path d="M12 8v4M12 16h.01" />
           </svg>
-          <span class="hud-label">Microphone unavailable</span>
-          <span class="hud-meta">Check audio</span>
-        </span>
       </button>
+
+      {#if hudState === "listening"}
+        <div class="hud-actions flex items-center gap-1.5 ml-2" onclick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            class="hud-btn hud-btn-stop"
+            id="narad-stop-btn"
+            data-od-id="hud-stop-btn"
+            aria-label="Stop and Insert"
+            onclick={(e) => { e.stopPropagation(); setHudState("processing"); }}
+          >
+            ■ Stop &amp; Insert
+          </button>
+          <button
+            type="button"
+            class="hud-btn hud-btn-discard"
+            id="narad-discard-btn"
+            data-od-id="hud-discard-btn"
+            aria-label="Discard recording"
+            onclick={(e) => { e.stopPropagation(); discardDictation(); }}
+          >
+            × Discard
+          </button>
+        </div>
+      {/if}
 
       {#if hudState === "result"}
         <button
@@ -403,6 +463,9 @@
       <p>Lock order stays crtc, then plane.</p>
       <p class="insert-line">
         <span id="dictated" class="dictated {dictatedText ? 'is-landing' : ''}">{dictatedText}</span>
+        {#if streamingDraft && hudState === "listening"}
+          <span class="preedit-text text-accent underline decoration-accent decoration-2 underline-offset-4">{streamingDraft}</span>
+        {/if}
         <span class="caret" aria-hidden="true"></span>
         <span
           class="land-here {hudState === 'listening' || hudState === 'processing' ? 'is-on' : ''}"

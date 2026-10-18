@@ -13,10 +13,10 @@ use reis::{
     Interface,
 };
 
-/// Linux evdev key codes; libei `keyboard.key` expects `keycode - 8` (see reis `type-text` example).
-const KEY_LEFTCTRL: u32 = 29 - 8;
-const KEY_LEFTSHIFT: u32 = 42 - 8;
-const KEY_V: u32 = 47 - 8;
+/// Linux evdev key codes for libei.
+const KEY_LEFTCTRL: u32 = 29;
+const KEY_LEFTSHIFT: u32 = 42;
+const KEY_V: u32 = 47;
 
 struct DeviceData {
     keyboard: Option<ei::Keyboard>,

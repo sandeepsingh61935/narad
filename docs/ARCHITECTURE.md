@@ -39,7 +39,7 @@ Three processes, one contract (D-Bus interface). The daemon owns all state and i
 |---|---|---|
 | Global hotkey with **hold** and **tap** | `org.freedesktop.portal.GlobalShortcuts` | Emits `Activated` *and* `Deactivated`, so push-to-talk works. GNOME custom keybindings only fire on press. Supported by xdg-desktop-portal-gnome ≥ 48. |
 | Insert text into any app | Clipboard set + `Ctrl+V` via `org.freedesktop.portal.RemoteDesktop` (libei keyboard), with persisted restore token | `wtype` unsupported on GNOME (no virtual-keyboard protocol). `ydotool` needs root/uinput setup. Typing keysyms breaks on non-Latin scripts; paste handles any Unicode. |
-| Always-on-top floating HUD | GNOME Shell extension (`Main.layoutManager.addChrome`) | Wayland clients cannot position themselves or force always-on-top. XWayland hack is fragile. Circular ~28px anchor + companion waveform pill (Stitch Quiet Precision). |
+| Always-on-top floating HUD | GNOME Shell extension (`Main.layoutManager.addChrome`) | Wayland clients cannot position themselves or force always-on-top. XWayland hack is fragile. Circular ~28px anchor + Raycast-style companion waveform pill (Libadwaita dark + Adwaita Blue). |
 | Focused app, selected text | Same extension (`global.display.focus_window`, `St.Clipboard` PRIMARY) | No portal exposes these. |
 | Cancel with `Esc` | Extension adds a keybinding only while recording (**decision #4 locked**) | A permanent global `Esc` would break every app. Portal Esc shortcut is a non-GNOME fallback later. |
 
@@ -172,3 +172,17 @@ narad/
 ```
 
 `narad-core` has no Linux/GNOME dependencies so it can be reused on other platforms; platform specifics live in `naradd` behind traits (`HotkeySource`, `Inserter`, `DesktopBridge`).
+
+## 8. Architecture Decision Records (ADRs)
+
+### ADR-006: Libadwaita Dark Visual System, CSD Window Posture & Offline Typography
+
+- **Status:** Accepted (2026-10-18)
+- **Context:** The legacy UI prototype used "Quiet Precision" with a saffron accent (`#E08A1E`), Inter / JetBrains Mono web fonts, and dual light/dark themes. GNOME ecosystem users expect a cohesive Libadwaita dark experience, offline typography, and a Raycast-style floating companion pill HUD that integrates naturally with GNOME Shell 50 on Wayland.
+- **Decision:** Complete cutover to the Libadwaita dark visual system:
+  1. **Tokens:** Warm charcoal neutrals (`--bg: oklch(21% 0.01 72)`, `--surface: oklch(24.5% 0.01 72)`, `--raised: oklch(28.8% 0.01 72)`, `--border: oklch(36% 0.01 72)`) with 1px planar rules and no decorative glow or glass.
+  2. **Accent:** Single Adwaita Blue accent (`oklch(70% 0.125 250)` / sRGB `#3584e4`) replacing legacy saffron; used sparingly for active states, primary actions, and listening indicators.
+  3. **Typography:** Bundled offline IBM Plex Sans (display/body) and IBM Plex Mono (provenance stamps, timestamps, model IDs, counts, keycaps).
+  4. **Window Posture:** Tauri v2 Client-Side Decorations (CSD) with integrated 46px headerbar, custom window controls (minimize/maximize/close), drag region, and offline provenance badge, replacing native OS titlebars.
+  5. **Shell Compatibility:** GNOME Shell St uses exact sRGB hex mappings (`#3584e4`, `#1b1813`, `#23201b`, `#403c37`, `#efebe1`) due to St engine parser constraints.
+- **Consequences:** 100% offline consistency across distros, zero network dependencies for font assets, seamless GNOME 50 desktop integration, and removal of dual-theme maintenance overhead.

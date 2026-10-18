@@ -204,8 +204,7 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<main class="content h-full flex flex-col min-h-0 overflow-hidden" data-od-id="words">
-  <div class="content-scroll pad">
+<div class="content-scroll pad" data-od-id="words">
     <div class="words-head">
       <div>
         <h1 class="text-xl font-semibold mb-1">Custom words</h1>
@@ -261,13 +260,6 @@
       </p>
     {/if}
   </div>
-</main>
-
-<footer class="statusbar" data-od-id="statusbar">
-  <span><span class="kbd">N</span> add word</span>
-  <span><span class="kbd">Esc</span> close dialog</span>
-  <span class="spacer mono">Saved on this machine</span>
-</footer>
 
 <!-- Add / Edit Word Modal Dialog -->
 <div

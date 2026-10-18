@@ -353,14 +353,13 @@
   <title>Stats — Narad</title>
 </svelte:head>
 
-<main class="content" data-od-id="stats">
+<div class="content-scroll pad" data-od-id="stats">
   <h1 class="visually-hidden">Stats</h1>
   <div class="banner" id="pause-banner" hidden={!paused} data-od-id="pause-banner">
     History is paused. New transcripts are not counted here. Dictation still inserts at the cursor.
   </div>
 
-  <div class="content-scroll pad">
-    <div class="words-head">
+  <div class="words-head">
       <p class="small muted" id="lede" data-od-id="stats-lede">
         Counted from transcripts saved on this machine. Move the window to change the range. These numbers are not uploaded.
       </p>
@@ -617,15 +616,3 @@
       </p>
     </div>
   </div>
-</main>
-
-<footer class="statusbar" data-od-id="statusbar">
-  <span><span class="kbd">1</span> today</span>
-  <span><span class="kbd">2</span> 7 days</span>
-  <span><span class="kbd">3</span> 30 days</span>
-  <span><span class="kbd">4</span> all</span>
-  <span><span class="kbd">G</span> grain</span>
-  <span><span class="kbd">M</span> measure</span>
-  <span><span class="kbd">Esc</span> clear</span>
-  <span class="spacer mono" data-model-stamp>{modelId} · local</span>
-</footer>

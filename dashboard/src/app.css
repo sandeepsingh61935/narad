@@ -177,10 +177,13 @@ textarea {
   padding: 16px;
 }
 
-.stage.desktop-stage {
+.stage.desktop-stage,
+.desktop-stage {
+  display: block;
   position: relative;
   overflow: hidden;
   height: 100%;
+  width: 100%;
   background-image: radial-gradient(color-mix(in oklch, var(--fg) 13%, transparent) 1px, transparent 1px);
   background-size: 26px 26px;
   background-position: 0 20px;

@@ -527,7 +527,7 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<main class="content h-full flex flex-col min-h-0 overflow-hidden" data-od-id="history">
+<div class="h-full flex flex-col min-h-0 overflow-hidden" data-od-id="history">
   <div
     class="banner"
     id="pause-banner"
@@ -743,13 +743,4 @@
       {/if}
     </section>
   </div>
-</main>
-
-<footer class="statusbar" data-od-id="statusbar">
-  <span><span class="kbd">J</span> <span class="kbd">K</span> move</span>
-  <span><span class="kbd">Enter</span> insert</span>
-  <span><span class="kbd">C</span> copy</span>
-  <span><span class="kbd">Del</span> delete</span>
-  <span><span class="kbd">/</span> search</span>
-  <span class="spacer mono" data-model-stamp>{modelId} · local</span>
-</footer>
+</div>

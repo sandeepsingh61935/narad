@@ -158,7 +158,7 @@
   }
 }} />
 
-<div class="stage desktop-stage flex-1 flex flex-col relative w-full h-full min-h-0 select-none overflow-hidden" data-od-id="desktop">
+<div class="desktop-stage flex-1 flex flex-col relative w-full h-full min-h-0 select-none overflow-hidden" data-od-id="desktop">
   <!-- Top GNOME panel mockup -->
   <header class="desk-panel" data-od-id="desk-panel">
     <div class="desk-panel-side">

@@ -163,84 +163,76 @@
   <title>Speech models — Narad</title>
 </svelte:head>
 
-<main class="content" data-od-id="models">
-  <div class="content-scroll pad">
-    <p class="small muted lede">
-      Narad transcribes with a Whisper weight stored locally. Speed and memory show up here after that model runs once — Narad does not estimate them.
-    </p>
+<div class="content-scroll pad" data-od-id="models">
+  <p class="small muted lede">
+    Narad transcribes with a Whisper weight stored locally. Speed and memory show up here after that model runs once — Narad does not estimate them.
+  </p>
 
-    <h2 class="group-label" id="installed-label">On this machine</h2>
-    <div class="group" id="model-list" data-od-id="model-list" role="list">
-      {#each CATALOG as model, i (model.id)}
-        <div
-          class="row {i === focusIndex ? 'is-selected' : ''}"
-          role="listitem"
-          data-od-id="model-{model.id}"
-          onclick={(e) => {
-            if ((e.target as HTMLElement)?.closest("button")) return;
-            focusIndex = i;
-          }}
-        >
-          <div class="row-main">
-            <div class="row-title mono">{model.id}</div>
-            <div class="row-sub">{model.size} · {model.note}</div>
-          </div>
-          <div class="row-actions">
-            {#if job && job.id === model.id}
-              <div
-                class="progress"
-                role="progressbar"
-                aria-valuemin="0"
-                aria-valuemax="100"
-                aria-valuenow={job.pct}
-                aria-label="Downloading {model.id}"
-                data-od-id="download-progress"
-              >
-                <b style="width: {job.pct}%;"></b>
-              </div>
-              <button type="button" class="btn" onclick={cancelJob}>Cancel</button>
-            {:else if model.id === active}
-              <span class="mono small">Active</span>
-            {:else if installed[model.id]}
-              <button type="button" class="btn" onclick={() => setActive(model.id)}>Set active</button>
-              <button type="button" class="btn btn-quiet" onclick={() => removeModel(model.id)}>Remove</button>
-            {:else}
-              <button
-                type="button"
-                class="btn"
-                data-od-id="download-{model.id}"
-                onclick={() => startDownload(model.id)}
-              >
-                Download
-              </button>
-            {/if}
-          </div>
+  <h2 class="group-label" id="installed-label">On this machine</h2>
+  <div class="group" id="model-list" data-od-id="model-list" role="list">
+    {#each CATALOG as model, i (model.id)}
+      <div
+        class="row {i === focusIndex ? 'is-selected' : ''}"
+        role="listitem"
+        data-od-id="model-{model.id}"
+        onclick={(e) => {
+          if ((e.target as HTMLElement)?.closest("button")) return;
+          focusIndex = i;
+        }}
+      >
+        <div class="row-main">
+          <div class="row-title mono">{model.id}</div>
+          <div class="row-sub">{model.size} · {model.note}</div>
         </div>
-      {/each}
-    </div>
+        <div class="row-actions">
+          {#if job && job.id === model.id}
+            <div
+              class="progress"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={job.pct}
+              aria-label="Downloading {model.id}"
+              data-od-id="download-progress"
+            >
+              <b style="width: {job.pct}%;"></b>
+            </div>
+            <button type="button" class="btn" onclick={cancelJob}>Cancel</button>
+          {:else if model.id === active}
+            <span class="mono small">Active</span>
+          {:else if installed[model.id]}
+            <button type="button" class="btn" onclick={() => setActive(model.id)}>Set active</button>
+            <button type="button" class="btn btn-quiet" onclick={() => removeModel(model.id)}>Remove</button>
+          {:else}
+            <button
+              type="button"
+              class="btn"
+              data-od-id="download-{model.id}"
+              onclick={() => startDownload(model.id)}
+            >
+              Download
+            </button>
+          {/if}
+        </div>
+      </div>
+    {/each}
+  </div>
 
-    <h2 class="group-label section-gap">After the first transcription</h2>
-    <div class="group" data-od-id="model-bench">
-      <div class="row">
-        <span class="row-main">
-          <span class="row-title">Speed</span>
-          <span class="row-sub">Appears after the active model transcribes once on this machine.</span>
-        </span>
-        <span class="mono muted">—</span>
-      </div>
-      <div class="row">
-        <span class="row-main">
-          <span class="row-title">Memory during transcription</span>
-          <span class="row-sub">Measured locally. Not a catalog figure.</span>
-        </span>
-        <span class="mono muted">—</span>
-      </div>
+  <h2 class="group-label section-gap">After the first transcription</h2>
+  <div class="group" data-od-id="model-bench">
+    <div class="row">
+      <span class="row-main">
+        <span class="row-title">Speed</span>
+        <span class="row-sub">Appears after the active model transcribes once on this machine.</span>
+      </span>
+      <span class="mono muted">—</span>
+    </div>
+    <div class="row">
+      <span class="row-main">
+        <span class="row-title">Memory during transcription</span>
+        <span class="row-sub">Measured locally. Not a catalog figure.</span>
+      </span>
+      <span class="mono muted">—</span>
     </div>
   </div>
-</main>
-
-<footer class="statusbar" data-od-id="statusbar">
-  <span><span class="kbd">J</span> <span class="kbd">K</span> move</span>
-  <span><span class="kbd">Enter</span> download or set active</span>
-  <span class="spacer mono" data-model-stamp>{active} · local</span>
-</footer>
+</div>

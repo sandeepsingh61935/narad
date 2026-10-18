@@ -29,7 +29,13 @@ pub trait Daemon {
 
     async fn stop(&self) -> zbus::Result<()>;
 
+    /// Stop streaming dictation, apply cleanup, and commit transformed sentence.
+    async fn stop_and_insert(&self) -> zbus::Result<()>;
+
     async fn cancel(&self) -> zbus::Result<()>;
+
+    /// Discard current streaming dictation without inserting or saving to history.
+    async fn discard(&self) -> zbus::Result<()>;
 
     async fn toggle(&self, mode: &str) -> zbus::Result<()>;
 
@@ -114,6 +120,10 @@ pub trait Daemon {
 
     #[zbus(signal)]
     fn entry_added(&self, id: i64) -> zbus::Result<()>;
+
+    /// Live streaming partial transcript update.
+    #[zbus(signal)]
+    fn partial_transcript(&self, text: &str) -> zbus::Result<()>;
 
     /// Session mode for the next utterance. Writable; proxy exposes `set_mode`.
     /// The daemon accepts `plain`, `email`, `bullet`, and `code` only.

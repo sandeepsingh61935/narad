@@ -167,12 +167,6 @@ Built-in modes (editable, user can add more):
 | FR-MDL-5 | Idle unloading: LLM unloaded after N minutes idle (default 5); speech model kept loaded by default (configurable). | 3 |
 | FR-MDL-6 | A default English speech model ships with / is installed on first run so v1 works out of the box. | 1 |
 
-### 4.10 Long-form and hands-free
-
-| ID | Requirement | Phase |
-|---|---|---|
-| FR-LNG-1 | Long-form / meeting mode: continuous chunked transcription, saved as one document in history (not inserted). | 5 |
-| FR-LNG-2 | Optional speaker labels (diarization) in long-form mode. | 5 |
 
 ### 4.11 CLI
 

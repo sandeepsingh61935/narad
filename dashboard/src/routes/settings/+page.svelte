@@ -286,8 +286,7 @@
   });
 </script>
 
-<div class="content" data-od-id="settings">
-  <div class="content-scroll pad max-w-3xl mx-auto w-full">
+<div class="content-scroll pad" data-od-id="settings">
     <!-- Notice & error alerts -->
     {#if error}
       <div class="banner mb-4 text-danger border-danger/40" role="alert">
@@ -720,7 +719,6 @@
       </div>
     </div>
   </div>
-</div>
 
 <!-- Clear History Confirmation Dialog -->
 {#if showClearModal}

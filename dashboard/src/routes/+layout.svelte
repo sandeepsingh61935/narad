@@ -22,7 +22,6 @@
   const links = [
     { href: "/hud", label: "Floating HUD", icon: "hud", odId: "nav-hud", svg: `<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>` },
     { href: "/", label: "History", icon: "history", odId: "nav-history", svg: `<circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/>` },
-    { href: "/meetings", label: "Meetings", icon: "meetings", odId: "nav-meetings", svg: `<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>` },
     { href: "/stats", label: "Stats", icon: "stats", odId: "nav-stats", svg: `<path d="M4 19V9M10 19V5M16 19v-6M22 19H2"/>` },
     { href: "/models", label: "Speech models", icon: "models", odId: "nav-models", svg: `<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M18 9h4"/>` },
     { href: "/words", label: "Custom words", icon: "words", odId: "nav-words", svg: `<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/>` },
@@ -37,7 +36,6 @@
 
   function getActiveTitle(pathname: string): string {
     if (pathname.startsWith("/hud")) return "Floating HUD";
-    if (pathname.startsWith("/meetings")) return "Meetings";
     if (pathname.startsWith("/stats")) return "Stats";
     if (pathname.startsWith("/models")) return "Speech models";
     if (pathname.startsWith("/words") || pathname.startsWith("/dictionary")) return "Custom words";
@@ -122,14 +120,8 @@
   }
 </script>
 
-{#if page.url.pathname.startsWith('/hud')}
-  <div class="w-full h-screen overflow-hidden select-none">
-    {@render children()}
-    <ToastHost />
-  </div>
-{:else}
-  <div class="stage min-h-screen w-full flex items-center justify-center p-4 bg-desktop">
-    <div class="window w-full max-w-[1100px] h-[760px] max-h-[calc(100vh-32px)] flex flex-col bg-bg border border-border rounded-[var(--window-radius)] overflow-hidden select-none shadow-2xl relative">
+<div class="stage min-h-screen w-full flex items-center justify-center p-4 bg-desktop">
+  <div class="window w-[1100px] max-w-[calc(100vw-32px)] h-[760px] max-h-[calc(100vh-32px)] flex-shrink-0 flex flex-col bg-bg border border-border rounded-[var(--window-radius)] overflow-hidden select-none shadow-2xl relative">
       <header class="headerbar" data-tauri-drag-region data-od-id="headerbar">
         <div class="header-title" data-tauri-drag-region>
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -215,5 +207,4 @@
       <SetupModal bind:open={showSetupModal} />
     </div>
   </div>
-{/if}
 

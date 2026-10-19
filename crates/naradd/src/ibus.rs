@@ -68,6 +68,67 @@ pub enum PhysicalKeyAction {
     PassThrough,
     /// Pre-edit was active; it was atomically committed, and the physical key can now be applied.
     CommittedPreeditAndPassThrough { committed_text: String },
+    /// Pre-edit was active; trailing word was popped from pre-edit buffer without forwarding to app (ADR-0002).
+    WordRewind { remaining_preedit: String },
+    /// Pre-edit was active; pre-edit draft was discarded without committing (ADR-0002).
+    DiscardedPreedit,
+}
+
+impl PhysicalKeyAction {
+    /// Returns true if the physical key should pass through to the underlying application.
+    pub fn is_passthrough(&self) -> bool {
+        matches!(self, Self::PassThrough | Self::CommittedPreeditAndPassThrough { .. })
+    }
+
+    /// Returns the committed text if the pre-edit buffer was atomically committed.
+    pub fn committed_text(&self) -> Option<&str> {
+        match self {
+            Self::CommittedPreeditAndPassThrough { committed_text } => Some(committed_text),
+            _ => None,
+        }
+    }
+}
+
+/// Pops the trailing word from a text string (Word-Level Rewind per ADR-0002).
+///
+/// Trims trailing whitespace, strips trailing non-whitespace characters (the last word and any trailing punctuation),
+/// and strips any whitespace immediately preceding that word.
+pub fn pop_trailing_word(text: &str) -> &str {
+    let trimmed = text.trim_end();
+    if trimmed.is_empty() {
+        return "";
+    }
+    if let Some(last_space_idx) = trimmed.rfind(|c: char| c.is_whitespace()) {
+        trimmed[..last_space_idx].trim_end()
+    } else {
+        ""
+    }
+}
+
+/// Determines whether a physical keyval represents a printable character key.
+pub fn is_printable_key(keyval: u32) -> bool {
+    // Standard ASCII printable range (space ' ' through tilde '~')
+    if (0x20..=0x7e).contains(&keyval) {
+        return true;
+    }
+    // Latin-1 Supplement printable range
+    if (0xa0..=0xff).contains(&keyval) {
+        return true;
+    }
+    // XKB Unicode direct mapping (0x01000000 | codepoint)
+    if (keyval & 0xff000000) == 0x01000000 {
+        let codepoint = keyval & 0x00ffffff;
+        if let Some(c) = char::from_u32(codepoint) {
+            return !c.is_control();
+        }
+    }
+    // Direct Unicode codepoint below standard X11 keysym range
+    if keyval < 0xff00 {
+        if let Some(c) = char::from_u32(keyval) {
+            return !c.is_control();
+        }
+    }
+    false
 }
 
 /// Formats text considering the surrounding text context before and after the cursor.
@@ -333,15 +394,79 @@ impl IbusEngineState {
         final_text
     }
 
-    /// Handles a physical key event during input.
-    /// If pre-edit is active, atomically commits pre-edit text first so no keystrokes are dropped.
-    pub fn handle_physical_key(&mut self, _keyval: u32, _keycode: u32, _state: u32) -> PhysicalKeyAction {
-        if self.visible && !self.preedit_text.is_empty() {
-            let active = self.preedit_text.clone();
-            let committed = self.commit_text(&active);
-            PhysicalKeyAction::CommittedPreeditAndPassThrough { committed_text: committed }
-        } else {
-            PhysicalKeyAction::PassThrough
+    /// Returns true if the engine has active, visible pre-edit text.
+    pub fn is_preedit_active(&self) -> bool {
+        self.visible && !self.preedit_text.is_empty()
+    }
+
+    /// Handles a physical key event during input method operation (ADR-0002).
+    ///
+    /// - **Printable Character Keys**: When pre-edit is visible/active, atomically commits the active
+    ///   pre-edit text to the document and passes the physical key through. The dictation session and
+    ///   microphone remain open.
+    /// - **Backspace (`KEYVAL_BACKSPACE`)**:
+    ///   - When pre-edit is active, executes Word-Level Rewind: pops the trailing spoken word from the
+    ///     pre-edit buffer and updates the pre-edit underline without forwarding backspace to the app.
+    ///   - When pre-edit is empty, passes Backspace through to the document.
+    /// - **Return / Enter (`KEYVAL_RETURN`, `KEYVAL_ENTER`)**:
+    ///   - Atomically commits the pre-edit buffer and forwards the newline.
+    /// - **Escape (`KEYVAL_ESCAPE`)**:
+    ///   - Discard pre-edit buffer (`hide_preedit()`).
+    pub fn handle_physical_key(&mut self, keyval: u32, _keycode: u32, _state: u32) -> PhysicalKeyAction {
+        match keyval {
+            KEYVAL_BACKSPACE => {
+                if self.is_preedit_active() {
+                    let remaining = pop_trailing_word(&self.preedit_text);
+                    if remaining.is_empty() {
+                        self.hide_preedit();
+                        PhysicalKeyAction::WordRewind {
+                            remaining_preedit: String::new(),
+                        }
+                    } else {
+                        let len = remaining.len() as u32;
+                        self.preedit_text = remaining.to_string();
+                        self.cursor_pos = len;
+                        self.visible = true;
+                        self.preedit_attrs = vec![IbusAttribute::underline(0, len)];
+                        PhysicalKeyAction::WordRewind {
+                            remaining_preedit: self.preedit_text.clone(),
+                        }
+                    }
+                } else {
+                    PhysicalKeyAction::PassThrough
+                }
+            }
+            KEYVAL_RETURN | KEYVAL_ENTER => {
+                if self.is_preedit_active() {
+                    let active = self.preedit_text.clone();
+                    let committed = self.commit_text(&active);
+                    PhysicalKeyAction::CommittedPreeditAndPassThrough {
+                        committed_text: committed,
+                    }
+                } else {
+                    PhysicalKeyAction::PassThrough
+                }
+            }
+            KEYVAL_ESCAPE => {
+                if self.is_preedit_active() {
+                    self.hide_preedit();
+                    PhysicalKeyAction::DiscardedPreedit
+                } else {
+                    PhysicalKeyAction::PassThrough
+                }
+            }
+            _ if is_printable_key(keyval) => {
+                if self.is_preedit_active() {
+                    let active = self.preedit_text.clone();
+                    let committed = self.commit_text(&active);
+                    PhysicalKeyAction::CommittedPreeditAndPassThrough {
+                        committed_text: committed,
+                    }
+                } else {
+                    PhysicalKeyAction::PassThrough
+                }
+            }
+            _ => PhysicalKeyAction::PassThrough,
         }
     }
 
@@ -445,5 +570,182 @@ mod tests {
             format_surrounding_context("Hello ", "", "world"),
             "world"
         );
+    }
+
+    #[test]
+    fn test_simultaneous_character_typing_commits_and_passes_through() {
+        let mut state = IbusEngineState::new();
+        state.update_preedit("Live voice streaming", 20, true);
+        assert!(state.is_preedit_active());
+
+        // Typing printable character '!' while pre-edit is active
+        let action = state.handle_physical_key('!' as u32, 0, 0);
+        assert_eq!(
+            action,
+            PhysicalKeyAction::CommittedPreeditAndPassThrough {
+                committed_text: "Live voice streaming".to_string(),
+            }
+        );
+        assert_eq!(state.preedit_text, "");
+        assert!(!state.visible);
+        assert_eq!(state.committed_clause_count(), 1);
+
+        // Next character key with empty pre-edit passes through
+        let action2 = state.handle_physical_key('a' as u32, 0, 0);
+        assert_eq!(action2, PhysicalKeyAction::PassThrough);
+        assert_eq!(state.committed_clause_count(), 1);
+    }
+
+    #[test]
+    fn test_backspace_word_level_rewind_during_preedit() {
+        let mut state = IbusEngineState::new();
+        state.update_preedit("First second third", 18, true);
+        assert!(state.is_preedit_active());
+
+        // First Backspace pops "third"
+        let action1 = state.handle_physical_key(KEYVAL_BACKSPACE, 0, 0);
+        assert_eq!(
+            action1,
+            PhysicalKeyAction::WordRewind {
+                remaining_preedit: "First second".to_string(),
+            }
+        );
+        assert_eq!(state.preedit_text, "First second");
+        assert!(state.visible);
+        assert_eq!(state.cursor_pos, 12);
+        assert_eq!(state.preedit_attrs, vec![IbusAttribute::underline(0, 12)]);
+        assert_eq!(state.committed_clause_count(), 0);
+
+        // Second Backspace pops "second"
+        let action2 = state.handle_physical_key(KEYVAL_BACKSPACE, 0, 0);
+        assert_eq!(
+            action2,
+            PhysicalKeyAction::WordRewind {
+                remaining_preedit: "First".to_string(),
+            }
+        );
+        assert_eq!(state.preedit_text, "First");
+        assert!(state.visible);
+        assert_eq!(state.cursor_pos, 5);
+        assert_eq!(state.preedit_attrs, vec![IbusAttribute::underline(0, 5)]);
+
+        // Third Backspace pops "First", clearing pre-edit
+        let action3 = state.handle_physical_key(KEYVAL_BACKSPACE, 0, 0);
+        assert_eq!(
+            action3,
+            PhysicalKeyAction::WordRewind {
+                remaining_preedit: String::new(),
+            }
+        );
+        assert_eq!(state.preedit_text, "");
+        assert!(!state.visible);
+        assert!(state.preedit_attrs.is_empty());
+
+        // Fourth Backspace when pre-edit is empty passes through to document
+        let action4 = state.handle_physical_key(KEYVAL_BACKSPACE, 0, 0);
+        assert_eq!(action4, PhysicalKeyAction::PassThrough);
+        assert_eq!(state.committed_clause_count(), 0);
+    }
+
+    #[test]
+    fn test_return_commits_preedit_and_forwards_newline() {
+        let mut state = IbusEngineState::new();
+        state.update_preedit("A sentence to commit", 20, true);
+        assert!(state.is_preedit_active());
+
+        // Return key commits active pre-edit
+        let action = state.handle_physical_key(KEYVAL_RETURN, 0, 0);
+        assert_eq!(
+            action,
+            PhysicalKeyAction::CommittedPreeditAndPassThrough {
+                committed_text: "A sentence to commit".to_string(),
+            }
+        );
+        assert_eq!(state.preedit_text, "");
+        assert!(!state.visible);
+        assert_eq!(state.committed_clause_count(), 1);
+
+        // Subsequent return on empty pre-edit passes through
+        let action2 = state.handle_physical_key(KEYVAL_RETURN, 0, 0);
+        assert_eq!(action2, PhysicalKeyAction::PassThrough);
+
+        // Keypad Enter also commits active pre-edit
+        state.update_preedit("Keypad paragraph", 16, true);
+        let action3 = state.handle_physical_key(KEYVAL_ENTER, 0, 0);
+        assert_eq!(
+            action3,
+            PhysicalKeyAction::CommittedPreeditAndPassThrough {
+                committed_text: "Keypad paragraph".to_string(),
+            }
+        );
+        assert_eq!(state.committed_clause_count(), 2);
+    }
+
+    #[test]
+    fn test_escape_discards_preedit() {
+        let mut state = IbusEngineState::new();
+        state.update_preedit("Discard this speech draft", 25, true);
+        assert!(state.is_preedit_active());
+
+        // Escape discards pre-edit without committing
+        let action = state.handle_physical_key(KEYVAL_ESCAPE, 0, 0);
+        assert_eq!(action, PhysicalKeyAction::DiscardedPreedit);
+        assert_eq!(state.preedit_text, "");
+        assert!(!state.visible);
+        assert!(state.preedit_attrs.is_empty());
+        assert_eq!(state.committed_clause_count(), 0);
+
+        // Subsequent escape on empty pre-edit passes through
+        let action2 = state.handle_physical_key(KEYVAL_ESCAPE, 0, 0);
+        assert_eq!(action2, PhysicalKeyAction::PassThrough);
+    }
+
+    #[test]
+    fn test_modifier_keys_pass_through_without_committing() {
+        let mut state = IbusEngineState::new();
+        state.update_preedit("Speech draft", 12, true);
+
+        // Shift_L (0xffe1) passes through without committing or altering pre-edit
+        let action = state.handle_physical_key(0xffe1, 0, 0);
+        assert_eq!(action, PhysicalKeyAction::PassThrough);
+        assert_eq!(state.preedit_text, "Speech draft");
+        assert!(state.visible);
+        assert_eq!(state.committed_clause_count(), 0);
+
+        // Control_L (0xffe3) passes through
+        let action2 = state.handle_physical_key(0xffe3, 0, 0);
+        assert_eq!(action2, PhysicalKeyAction::PassThrough);
+        assert_eq!(state.preedit_text, "Speech draft");
+        assert_eq!(state.committed_clause_count(), 0);
+    }
+
+    #[test]
+    fn test_pop_trailing_word_cases() {
+        assert_eq!(pop_trailing_word("hello world"), "hello");
+        assert_eq!(pop_trailing_word("hello world "), "hello");
+        assert_eq!(pop_trailing_word("hello   world"), "hello");
+        assert_eq!(pop_trailing_word("hello"), "");
+        assert_eq!(pop_trailing_word(""), "");
+        assert_eq!(pop_trailing_word("   "), "");
+        assert_eq!(pop_trailing_word("one two three"), "one two");
+        assert_eq!(pop_trailing_word("hello world."), "hello");
+        assert_eq!(pop_trailing_word("hello, world!"), "hello,");
+    }
+
+    #[test]
+    fn test_is_printable_key() {
+        assert!(is_printable_key('a' as u32));
+        assert!(is_printable_key('Z' as u32));
+        assert!(is_printable_key('0' as u32));
+        assert!(is_printable_key(' ' as u32));
+        assert!(is_printable_key('!' as u32));
+        assert!(is_printable_key('.' as u32));
+        assert!(!is_printable_key(KEYVAL_BACKSPACE));
+        assert!(!is_printable_key(KEYVAL_RETURN));
+        assert!(!is_printable_key(KEYVAL_ENTER));
+        assert!(!is_printable_key(KEYVAL_ESCAPE));
+        assert!(!is_printable_key(0xffe1)); // Shift_L
+        assert!(!is_printable_key(0xffe3)); // Control_L
+        assert!(!is_printable_key(0xff51)); // Left Arrow
     }
 }

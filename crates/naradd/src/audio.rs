@@ -448,12 +448,14 @@ pub enum ProsodicEvent {
 
 impl ProsodicEvent {
     /// Returns true if this event indicates a terminal clause or sentence boundary (falling or rising intonation).
+    #[allow(dead_code)]
     pub fn is_terminal_boundary(&self) -> bool {
         matches!(self, ProsodicEvent::FallingIntonation | ProsodicEvent::RisingIntonation)
     }
 }
 
 /// Instantaneous prosodic frame features.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProsodyFrame {
     pub pitch_hz: f32,
@@ -556,26 +558,31 @@ impl ProsodyTracker {
     }
 
     /// Current sample rate in Hz.
+    #[allow(dead_code)]
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
     /// Current fundamental pitch F0 in Hz (0.0 if unvoiced).
+    #[allow(dead_code)]
     pub fn current_pitch(&self) -> f32 {
         self.last_pitch
     }
 
     /// Current frame log energy in dB.
+    #[allow(dead_code)]
     pub fn current_energy_db(&self) -> f32 {
         self.last_energy_db
     }
 
     /// Current linear regression energy decay slope (dE/dt) in dB/ms.
+    #[allow(dead_code)]
     pub fn current_energy_slope(&self) -> f32 {
         self.last_energy_slope
     }
 
     /// Pitch change over the trailing ~150 ms in Hz.
+    #[allow(dead_code)]
     pub fn pitch_delta_150ms(&self) -> f32 {
         self.last_pitch_delta
     }
@@ -586,11 +593,13 @@ impl ProsodyTracker {
     }
 
     /// Returns true if the most recent frame was classified as voiced speech.
+    #[allow(dead_code)]
     pub fn is_voiced(&self) -> bool {
         self.is_voiced
     }
 
     /// Snapshot of the latest prosodic frame features.
+    #[allow(dead_code)]
     pub fn current_frame(&self) -> ProsodyFrame {
         ProsodyFrame {
             pitch_hz: self.last_pitch,
@@ -755,9 +764,9 @@ impl ProsodyTracker {
         }
     }
 
-    fn calculate_pitch_delta_150ms(&self, current_t_ms: f32, current_f0: f32) -> f32 {
+    fn calculate_pitch_delta_150ms(&self, current_t_ms: f32, current_f0: f32) -> Option<f32> {
         if self.pitch_history_len < 2 {
-            return 0.0;
+            return None;
         }
         let target_t = current_t_ms - 150.0;
         let mut best_diff = f32::MAX;
@@ -776,13 +785,13 @@ impl ProsodyTracker {
 
         // When fewer than 100ms of voiced frames exist, do not compute delta from a premature frame
         if (current_t_ms - best_t) < 100.0 {
-            return 0.0;
+            return None;
         }
         if (current_t_ms - best_t) > 350.0 {
-            return 0.0;
+            return None;
         }
 
-        current_f0 - best_f0
+        Some(current_f0 - best_f0)
     }
 
     /// Process a single 32 ms frame (512 samples) directly without buffer duplication.
@@ -807,17 +816,21 @@ impl ProsodyTracker {
             let f0 = pitch_opt.unwrap();
             self.last_pitch = f0;
             self.push_pitch(t_ms, f0);
-            let delta_f0 = self.calculate_pitch_delta_150ms(t_ms, f0);
-            self.last_pitch_delta = delta_f0;
             self.silence_duration = Duration::ZERO;
 
-            if delta_f0 <= -35.0 && energy_slope < -0.10 {
-                Some(ProsodicEvent::FallingIntonation)
-            } else if delta_f0 >= 30.0 {
-                Some(ProsodicEvent::RisingIntonation)
-            } else if delta_f0.abs() < 18.0 {
-                Some(ProsodicEvent::LevelContinuation)
+            if let Some(delta_f0) = self.calculate_pitch_delta_150ms(t_ms, f0) {
+                self.last_pitch_delta = delta_f0;
+                if delta_f0 <= -35.0 && energy_slope < -0.10 {
+                    Some(ProsodicEvent::FallingIntonation)
+                } else if delta_f0 >= 30.0 {
+                    Some(ProsodicEvent::RisingIntonation)
+                } else if delta_f0.abs() < 18.0 {
+                    Some(ProsodicEvent::LevelContinuation)
+                } else {
+                    None
+                }
             } else {
+                self.last_pitch_delta = 0.0;
                 None
             }
         } else {

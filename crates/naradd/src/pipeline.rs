@@ -356,7 +356,8 @@ impl PipelineHandle {
                 }
                 crate::ibus::PhysicalKeyAction::WordRewind { ref remaining_preedit } => {
                     let _ = remaining_preedit;
-                    self.inner.stream_reset_requested.store(true, Ordering::SeqCst);
+                    // Do not reset the stream on word rewind; the remaining pre-edit words in ibus_engine
+                    // are preserved (ADR-0007).
                 }
                 _ => {}
             }
@@ -376,6 +377,7 @@ impl PipelineHandle {
     }
 
     /// Set surrounding text context on the active IBus engine (ADR-0004).
+    #[allow(dead_code)]
     pub fn set_ibus_surrounding_text(&self, text: &str, cursor_pos: u32, anchor_pos: u32) {
         if let Ok(mut ibus) = self.inner.ibus_engine.lock() {
             ibus.set_surrounding_text(text, cursor_pos, anchor_pos);
@@ -1014,15 +1016,45 @@ impl PipelineHandle {
                     }
                 }
 
-                // Clausal Pause Auto-Commit (ADR-0004):
-                // If silence_dur >= 2000ms (between 2.0s and 3.0s) or soft ceiling (20 words + >= 380ms silence)
-                // and there is accumulated speech in the current hypothesis:
+                // Clausal Pause Auto-Commit & Syntactic Pre-edit Soft Ceiling (ADR-0009):
                 let silence_dur = prosody_tracker.silence_duration();
                 let word_count = current_hypothesis.split_whitespace().count();
                 let clausal_pause = silence_dur >= Duration::from_millis(2000);
-                let soft_ceiling = word_count >= 20 && silence_dur >= Duration::from_millis(380);
 
-                if (clausal_pause || soft_ceiling) && !current_hypothesis.trim().is_empty() {
+                // Syntactic Pre-edit Soft Ceiling: when uncommitted pre-edit exceeds 20 words,
+                // check for terminal punctuation ('.' or '?') and commit the completed sentence,
+                // retaining subsequent clauses (ADR-0009).
+                let mut sentence_split = None;
+                if word_count >= 20 {
+                    if let Some(pos) = current_hypothesis.rfind(|c| c == '.' || c == '?') {
+                        let completed = current_hypothesis[..=pos].trim().to_string();
+                        let subsequent = current_hypothesis[pos + 1..].trim().to_string();
+                        if !completed.is_empty() {
+                            sentence_split = Some((completed, subsequent));
+                        }
+                    }
+                }
+
+                if let Some((completed, subsequent)) = sentence_split {
+                    handle.commit_clause(&completed).await;
+                    if subsequent.is_empty() {
+                        let asr_guard = handle.inner.online_asr.lock().ok();
+                        if let Some(ref g) = asr_guard {
+                            if let Some(ref engine) = **g {
+                                stream.reset(engine.recognizer());
+                            }
+                        }
+                        prosody_tracker.reset();
+                        current_hypothesis.clear();
+                        last_partial.clear();
+                    } else {
+                        current_hypothesis = subsequent.clone();
+                        last_partial = subsequent.clone();
+                        if let Ok(mut ibus) = handle.inner.ibus_engine.lock() {
+                            ibus.update_preedit(&subsequent, subsequent.len() as u32, true);
+                        }
+                    }
+                } else if clausal_pause && !current_hypothesis.trim().is_empty() {
                     let clause_raw = current_hypothesis.clone();
                     handle.commit_clause(&clause_raw).await;
 
@@ -1695,6 +1727,7 @@ impl PipelineHandle {
     ///
     /// `Ok(None)` means no row, so the caller must not emit `EntryAdded`.
     /// File transcription uses [`Self::store_file_row`], not this.
+    #[allow(dead_code)]
     fn record_dictation(
         &self,
         duration_ms: u32,
@@ -1822,6 +1855,7 @@ impl PipelineHandle {
             .map_err(|e| e.to_string())
     }
 
+    #[allow(dead_code)]
     fn commit_dictation(
         &self,
         duration_ms: u32,
@@ -3612,8 +3646,8 @@ mod tests {
         assert_eq!(pipe.ibus_engine_state().preedit_text, "hello world");
         assert!(pipe.ibus_engine_state().is_preedit_active());
         assert!(
-            pipe.inner.stream_reset_requested.load(Ordering::SeqCst),
-            "stream_reset_requested should be set when physical key rewinds preedit"
+            !pipe.inner.stream_reset_requested.load(Ordering::SeqCst),
+            "stream_reset_requested should NOT be set on word rewind (ADR-0007)"
         );
 
         // 3. Escape key discards pre-edit
@@ -3689,12 +3723,12 @@ mod tests {
     }
 
     #[test]
-    fn plain_mode_pipeline_prunes_speech_repairs() {
+    fn plain_mode_pipeline_leaves_speech_repairs_verbatim() {
         let (_dir, pipe) = test_pipe();
         let res = pipe
             .accepted_transcript("meet at four no wait five pm", "plain")
             .expect("transcript");
-        assert_eq!(res.text, "meet at five pm");
+        assert_eq!(res.text, "meet at four no wait five pm");
         assert!(!res.applied);
         assert!(!res.flagged);
     }

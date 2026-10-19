@@ -1,4 +1,5 @@
 //! Local calendar bounds for history filters and stats (FR-HIS-3, FR-HIS-8).
+#![allow(dead_code)]
 
 /// Bounds for `created_at`. `to_ms` is the next local midnight and is exclusive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

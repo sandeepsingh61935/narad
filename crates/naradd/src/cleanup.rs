@@ -252,7 +252,15 @@ pub fn apply_cleanup_with_guard(raw: &str, mode: &str, guard: &GroundingGuard) -
         };
     }
 
-    if mode.eq_ignore_ascii_case("plain") || mode.eq_ignore_ascii_case("code") {
+    if mode.eq_ignore_ascii_case("plain") {
+        return CleanupResult {
+            text: raw.to_string(),
+            flagged: false,
+            applied: false,
+        };
+    }
+
+    if mode.eq_ignore_ascii_case("code") {
         return CleanupResult {
             text: prune_speech_repairs(raw),
             flagged: false,
@@ -1280,10 +1288,10 @@ mod tests {
     }
 
     #[test]
-    fn plain_and_code_mode_prune_speech_repairs() {
+    fn plain_leaves_verbatim_and_code_mode_prunes_speech_repairs() {
         let raw = "meet at four no wait five pm";
         let res = apply_cleanup(raw, "plain");
-        assert_eq!(res.text, "meet at five pm");
+        assert_eq!(res.text, "meet at four no wait five pm");
         assert!(!res.applied);
         assert!(!res.flagged);
 

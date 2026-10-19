@@ -362,12 +362,14 @@ impl ContextBiasingTrie {
     }
 
     /// Add a custom token mapping directly.
+    #[allow(dead_code)]
     pub fn add_token(&mut self, token: &str, id: i32) {
         self.token_to_id.insert(token.to_string(), id);
         self.id_to_token.insert(id, token.to_string());
     }
 
     /// Lookup token ID for a string piece.
+    #[allow(dead_code)]
     pub fn get_token_id(&self, token: &str) -> Option<i32> {
         self.token_to_id.get(token).copied()
     }
@@ -485,13 +487,25 @@ impl ContextBiasingTrie {
     }
 
     /// Total number of nodes in the Trie.
+    #[allow(dead_code)]
     pub fn node_count(&self) -> usize {
         self.nodes.len()
     }
 
     /// Phrases registered in this Trie.
+    #[allow(dead_code)]
     pub fn phrases(&self) -> &[(String, f32)] {
         &self.phrases
+    }
+
+    /// Format phrases for sherpa-onnx hotwords (e.g. "APPLE/BANANA/CHERRY").
+    pub fn to_sherpa_hotwords(&self) -> String {
+        self.phrases
+            .iter()
+            .map(|(phrase, _score)| phrase.trim())
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("/")
     }
 
     /// Wrap this Trie in an Arc for lock-free pointer swapping (ADR-0003).
@@ -550,6 +564,13 @@ pub struct ProsodicPunctuationAction {
 }
 
 impl ProsodicPunctuationAction {
+    pub fn new(mark: char) -> Self {
+        Self {
+            mark,
+            capitalize_next: mark == '.' || mark == '?' || mark == '!',
+        }
+    }
+
     pub fn period() -> Self {
         Self {
             mark: '.',
@@ -609,6 +630,7 @@ impl ProsodicPunctuationTrigger {
         self.mode = mode.to_string();
     }
 
+    #[allow(dead_code)]
     pub fn mode(&self) -> &str {
         &self.mode
     }
@@ -623,6 +645,7 @@ impl ProsodicPunctuationTrigger {
         self.triggered_in_current_pause = false;
     }
 
+    #[allow(dead_code)]
     pub fn reset_all(&mut self) {
         self.reset();
         self.capitalize_next = false;
@@ -850,6 +873,7 @@ impl OnlineAsrStream {
     }
 
     /// Create a new stream with a specific context trie.
+    #[allow(dead_code)]
     pub fn new_with_trie(stream: OnlineStream, trie: Arc<ContextBiasingTrie>) -> Self {
         Self {
             stream,
@@ -866,6 +890,7 @@ impl OnlineAsrStream {
     }
 
     /// Access active context biasing trie.
+    #[allow(dead_code)]
     pub fn context_trie(&self) -> Option<&Arc<ContextBiasingTrie>> {
         self.context_trie.as_ref()
     }
@@ -894,6 +919,7 @@ impl OnlineAsrStream {
     }
 
     /// Advance Prefix Trie state with token_id and return additive logit boost.
+    #[allow(dead_code)]
     pub fn step_biasing(&mut self, token_id: i32) -> f32 {
         if let Some(trie) = &self.context_trie {
             let (next, boost) = trie.step(self.trie_state, token_id);
@@ -909,6 +935,11 @@ impl OnlineAsrStream {
         self.stream.accept_waveform(sample_rate as i32, samples);
     }
 
+    fn format_hypothesis(&self, text: &str) -> String {
+        let action = self.prosody_mark.map(ProsodicPunctuationAction::new);
+        format_streaming_punctuation_with_prosody(text, action)
+    }
+
     /// Decode available audio frames and return the latest punctuation-mapped hypothesis,
     /// or None if no non-empty hypothesis is available yet.
     pub fn decode(&mut self, recognizer: &OnlineRecognizer) -> Option<String> {
@@ -920,13 +951,7 @@ impl OnlineAsrStream {
         if trimmed.is_empty() {
             None
         } else {
-            let mut formatted = format_streaming_punctuation(trimmed);
-            if let Some(mark) = self.prosody_mark {
-                if !formatted.ends_with(|c| c == '.' || c == '?' || c == '!' || c == ',') {
-                    formatted.push(mark);
-                }
-            }
-            Some(formatted)
+            Some(self.format_hypothesis(trimmed))
         }
     }
 
@@ -938,16 +963,7 @@ impl OnlineAsrStream {
         }
         let result = recognizer
             .get_result(&self.stream)
-            .map(|r| {
-                let trimmed = r.text.trim();
-                let mut formatted = format_streaming_punctuation(trimmed);
-                if let Some(mark) = self.prosody_mark {
-                    if !formatted.ends_with(|c| c == '.' || c == '?' || c == '!' || c == ',') {
-                        formatted.push(mark);
-                    }
-                }
-                formatted
-            })
+            .map(|r| self.format_hypothesis(r.text.trim()))
             .unwrap_or_default();
         self.prosody_trigger.reset();
         self.prosody_mark = None;
@@ -1104,11 +1120,34 @@ impl OnlineAsrEngine {
 
     /// Create a new online recognition stream, inheriting the active context biasing trie.
     pub fn create_stream(&self) -> Result<OnlineAsrStream> {
-        let stream = self.recognizer.create_stream();
+        let stream = if let Some(trie) = &self.context_trie {
+            let hotwords = trie.to_sherpa_hotwords();
+            if !hotwords.is_empty() {
+                self.recognizer.create_stream_with_hotwords(&hotwords)
+            } else {
+                self.recognizer.create_stream()
+            }
+        } else {
+            self.recognizer.create_stream()
+        };
         let mut asr_stream = OnlineAsrStream::new(stream);
         if let Some(trie) = &self.context_trie {
             asr_stream.set_context_trie(Arc::clone(trie));
         }
+        Ok(asr_stream)
+    }
+
+    /// Create a new online recognition stream with an explicit context biasing trie.
+    #[allow(dead_code)]
+    pub fn create_stream_with_trie(&self, trie: Arc<ContextBiasingTrie>) -> Result<OnlineAsrStream> {
+        let hotwords = trie.to_sherpa_hotwords();
+        let stream = if !hotwords.is_empty() {
+            self.recognizer.create_stream_with_hotwords(&hotwords)
+        } else {
+            self.recognizer.create_stream()
+        };
+        let mut asr_stream = OnlineAsrStream::new(stream);
+        asr_stream.set_context_trie(trie);
         Ok(asr_stream)
     }
 
@@ -1118,6 +1157,7 @@ impl OnlineAsrEngine {
     }
 
     /// Access the active context biasing trie.
+    #[allow(dead_code)]
     pub fn context_trie(&self) -> Option<&Arc<ContextBiasingTrie>> {
         self.context_trie.as_ref()
     }

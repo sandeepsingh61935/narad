@@ -19,7 +19,8 @@ pub(crate) fn write_retained_wav(dir: &Path, id: i64, samples: &[f32]) -> Result
 
 /// Remove crash leftovers named `*.wav.partial` directly in `dir`.
 /// A missing directory is already clean. Finished `*.wav` files stay.
-pub(crate) fn clear_partial_audio(dir: &Path) -> Result<(), String> {
+#[allow(dead_code)]
+pub fn clear_partial_audio(dir: &Path) -> Result<(), String> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),

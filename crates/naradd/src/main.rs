@@ -1,23 +1,6 @@
-//! Narad daemon entrypoint: config, warm ASR, D-Bus, hotkeys, dictation pipeline.
-
-mod asr;
-mod audio;
-pub mod cleanup;
-mod config;
-mod denoise;
-mod history_days;
-mod hotkeys;
-mod insert;
-pub mod ibus;
-mod ipc;
-pub mod longform;
-mod paths;
-mod pipeline;
-mod retained;
-mod text;
-pub mod wakeword;
-pub mod hardware;
-pub mod mcp;
+use naradd::{
+    asr, config, hotkeys, ibus, ipc, paths, pipeline, retained,
+};
 
 use anyhow::{Context, Result};
 use config::{load_or_create, resolve_config_path, NaradConfig};

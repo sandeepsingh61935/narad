@@ -107,6 +107,8 @@ struct PipelineInner {
     processing: AtomicBool,
     /// One file transcription at a time. Dictate start refuses while this is set.
     transcribing: AtomicBool,
+    /// Reset decoder stream and prosody tracker on next pump tick (e.g. physical key arbitration).
+    stream_reset_requested: AtomicBool,
     /// `$XDG_DATA_HOME/narad/audio`. Created on the first retained write.
     audio_dir: PathBuf,
 }
@@ -170,6 +172,7 @@ impl PipelineHandle {
                 conn: OnceLock::new(),
                 processing: AtomicBool::new(false),
                 transcribing: AtomicBool::new(false),
+                stream_reset_requested: AtomicBool::new(false),
                 audio_dir,
             }),
         }
@@ -348,6 +351,7 @@ impl PipelineHandle {
                 if let Ok(mut st) = self.inner.state.lock() {
                     st.clausal_commits.push(committed_text.clone());
                 }
+                self.inner.stream_reset_requested.store(true, Ordering::SeqCst);
             }
             action
         } else {
@@ -689,6 +693,7 @@ impl PipelineHandle {
                 st.utterance_mode = st.mode.clone();
             }
             st.cancel.store(false, Ordering::SeqCst);
+            self.inner.stream_reset_requested.store(false, Ordering::SeqCst);
             snapshot_focus_at_start(&mut st);
         }
 
@@ -832,6 +837,23 @@ impl PipelineHandle {
         });
     }
 
+    /// Builds a ContextBiasingTrie populated with vocabulary and app profile terms (ADR-0003).
+    fn build_context_trie(
+        config: &NaradConfig,
+        focused_app: Option<&str>,
+    ) -> Arc<crate::asr::ContextBiasingTrie> {
+        let mut trie = crate::asr::ContextBiasingTrie::new();
+        let app_prof = focused_app.and_then(|app| config.find_profile(app));
+        let vocab_phrases: Vec<&str> = config
+            .vocabulary
+            .iter()
+            .flat_map(|r| [r.spoken.as_str(), r.written.as_str()])
+            .filter(|s| !s.is_empty())
+            .collect();
+        trie.populate_context(app_prof, &vocab_phrases, None);
+        trie.into_shared()
+    }
+
     /// Pumps audio frames incrementally into OnlineAsrStream and emits PartialTranscript.
     fn spawn_streaming_pump(&self, listen_gen: u64) {
         let handle = self.clone();
@@ -868,20 +890,7 @@ impl PipelineHandle {
                 .and_then(|st| st.focused_app.clone());
             let mut last_focused_app = initial_app.clone();
 
-            let mut trie = crate::asr::ContextBiasingTrie::new();
-            let app_prof = initial_app
-                .as_deref()
-                .and_then(|app| handle.inner.config.find_profile(app));
-            let vocab_phrases: Vec<&str> = handle
-                .inner
-                .config
-                .vocabulary
-                .iter()
-                .flat_map(|r| [r.spoken.as_str(), r.written.as_str()])
-                .filter(|s| !s.is_empty())
-                .collect();
-            trie.populate_context(app_prof, &vocab_phrases, None);
-            let shared_trie = trie.into_shared();
+            let shared_trie = PipelineHandle::build_context_trie(&handle.inner.config, initial_app.as_deref());
             stream.set_context_trie(Arc::clone(&shared_trie));
             if let Ok(mut asr_guard) = handle.inner.online_asr.lock() {
                 if let Some(engine) = asr_guard.as_mut() {
@@ -901,6 +910,19 @@ impl PipelineHandle {
                     break;
                 }
 
+                // Check for physical key event arbitration stream reset
+                if handle.inner.stream_reset_requested.swap(false, Ordering::SeqCst) {
+                    let asr_guard = handle.inner.online_asr.lock().ok();
+                    if let Some(ref g) = asr_guard {
+                        if let Some(ref engine) = **g {
+                            stream.reset(engine.recognizer());
+                        }
+                    }
+                    prosody_tracker.reset();
+                    current_hypothesis.clear();
+                    last_partial.clear();
+                }
+
                 // Dynamic Context Biasing Trie refresh if focused_app changed (ADR-0003)
                 let current_app = handle
                     .inner
@@ -910,20 +932,7 @@ impl PipelineHandle {
                     .and_then(|st| st.focused_app.clone());
                 if current_app != last_focused_app {
                     last_focused_app = current_app.clone();
-                    let mut refreshed_trie = crate::asr::ContextBiasingTrie::new();
-                    let app_prof = current_app
-                        .as_deref()
-                        .and_then(|app| handle.inner.config.find_profile(app));
-                    let vocab_phrases: Vec<&str> = handle
-                        .inner
-                        .config
-                        .vocabulary
-                        .iter()
-                        .flat_map(|r| [r.spoken.as_str(), r.written.as_str()])
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                    refreshed_trie.populate_context(app_prof, &vocab_phrases, None);
-                    let shared = refreshed_trie.into_shared();
+                    let shared = PipelineHandle::build_context_trie(&handle.inner.config, current_app.as_deref());
                     stream.set_context_trie(Arc::clone(&shared));
                     if let Ok(mut asr_guard) = handle.inner.online_asr.lock() {
                         if let Some(engine) = asr_guard.as_mut() {
@@ -951,10 +960,6 @@ impl PipelineHandle {
                                 stream.feed_prosodic_event(ev);
                             }
                         }
-                    }
-                    let silence_dur = prosody_tracker.silence_duration();
-                    if silence_dur > Duration::ZERO {
-                        stream.feed_prosodic_pause(silence_dur);
                     }
                     stream.accept_waveform(audio::TARGET_SAMPLE_RATE as u32, &poll.fresh);
                     let partial = {
@@ -1067,6 +1072,24 @@ impl PipelineHandle {
             .is_ok()
         {
             return Ok(());
+        }
+
+        if self.is_listening() {
+            let trailing_preedit = self
+                .inner
+                .ibus_engine
+                .lock()
+                .ok()
+                .and_then(|ibus| {
+                    if ibus.is_preedit_active() {
+                        Some(ibus.preedit_text.clone())
+                    } else {
+                        None
+                    }
+                });
+            if let Some(trailing) = trailing_preedit {
+                self.commit_clause(&trailing).await;
+            }
         }
 
         let (capture, started, mode, cancel_flag, selection_context, clausal_commits) = {
@@ -3521,6 +3544,19 @@ mod tests {
         assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::INSERTED);
         assert!(!pipe.ibus_engine_state().is_preedit_active(), "stop must hide pre-edit");
         assert!(pipe.ibus_engine_state().preedit_text.is_empty());
+
+        let entries = pipe.inner.store.lock().expect("store").list(0, 10).expect("list");
+        assert_eq!(entries.len(), 1);
+        assert!(
+            entries[0].final_text.contains("persisted clause."),
+            "history should contain earlier clause: {}",
+            entries[0].final_text
+        );
+        assert!(
+            entries[0].final_text.to_lowercase().contains("transient ending"),
+            "history should contain committed trailing pre-edit: {}",
+            entries[0].final_text
+        );
     }
 
     #[test]
@@ -3543,6 +3579,10 @@ mod tests {
         );
         assert_eq!(pipe.clausal_commits(), vec!["typed speech"]);
         assert!(!pipe.ibus_engine_state().is_preedit_active());
+        assert!(
+            pipe.inner.stream_reset_requested.load(Ordering::SeqCst),
+            "stream_reset_requested should be set when physical key commits preedit"
+        );
 
         // 2. Backspace executes word-level rewind on active pre-edit
         if let Ok(mut ibus) = pipe.inner.ibus_engine.lock() {

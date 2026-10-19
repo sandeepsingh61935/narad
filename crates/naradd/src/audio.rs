@@ -430,11 +430,13 @@ pub const PROSODY_MIN_LAG: usize = 32;
 pub const PROSODY_MAX_LAG: usize = 320;
 /// Absolute dip threshold theta for YIN CMNDF.
 pub const YIN_THRESHOLD: f32 = 0.15;
+/// Minimum log energy in dB for a frame to be considered voiced speech.
+pub const PROSODY_MIN_VOICED_ENERGY_DB: f32 = -45.0;
 
 /// High-level prosodic event emitted by pitch/energy classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProsodicEvent {
-    /// Terminal declarative drop: Delta F0 <= -35 Hz and dE/dt < -0.10 dB/ms (or energy decay fallback).
+    /// Terminal declarative drop: Delta F0 <= -35 Hz and dE/dt < -0.10 dB/ms.
     FallingIntonation,
     /// Terminal interrogative rise: Delta F0 >= +30 Hz.
     RisingIntonation,
@@ -445,9 +447,9 @@ pub enum ProsodicEvent {
 }
 
 impl ProsodicEvent {
-    /// Returns true if this event indicates a terminal clause or sentence boundary.
+    /// Returns true if this event indicates a terminal clause or sentence boundary (falling or rising intonation).
     pub fn is_terminal_boundary(&self) -> bool {
-        matches!(self, ProsodicEvent::FallingIntonation)
+        matches!(self, ProsodicEvent::FallingIntonation | ProsodicEvent::RisingIntonation)
     }
 }
 
@@ -467,7 +469,8 @@ pub struct ProsodyFrame {
 #[derive(Debug)]
 pub struct ProsodyTracker {
     sample_rate: u32,
-    ring_buffer: [f32; 2048],
+    ring_buffer: [f32; 4096],
+    ring_read_pos: usize,
     ring_write_pos: usize,
     ring_len: usize,
     energy_history: [(f32, f32); 5],
@@ -499,7 +502,8 @@ impl ProsodyTracker {
     pub fn with_sample_rate(sample_rate: u32) -> Self {
         Self {
             sample_rate,
-            ring_buffer: [0.0; 2048],
+            ring_buffer: [0.0; 4096],
+            ring_read_pos: 0,
             ring_write_pos: 0,
             ring_len: 0,
             energy_history: [(0.0, 0.0); 5],
@@ -518,6 +522,7 @@ impl ProsodyTracker {
 
     /// Reset internal state, histories, and ring buffer.
     pub fn reset(&mut self) {
+        self.ring_read_pos = 0;
         self.ring_write_pos = 0;
         self.ring_len = 0;
         self.energy_history_len = 0;
@@ -531,33 +536,23 @@ impl ProsodyTracker {
         self.is_voiced = false;
     }
 
-    /// Push samples into the internal ring buffer without processing.
+    /// Push samples into the internal FIFO ring buffer without processing.
     pub fn push_samples(&mut self, samples: &[f32]) {
+        let cap = self.ring_buffer.len();
         for &s in samples {
             self.ring_buffer[self.ring_write_pos] = s;
-            self.ring_write_pos = (self.ring_write_pos + 1) % self.ring_buffer.len();
-            if self.ring_len < self.ring_buffer.len() {
+            self.ring_write_pos = (self.ring_write_pos + 1) % cap;
+            if self.ring_len < cap {
                 self.ring_len += 1;
+            } else {
+                self.ring_read_pos = (self.ring_read_pos + 1) % cap;
             }
         }
     }
 
-    /// Number of valid samples currently held in the ring buffer.
+    /// Number of unconsumed samples currently held in the ring buffer.
     pub fn ring_len(&self) -> usize {
         self.ring_len
-    }
-
-    /// Extract the latest 512 samples from the ring buffer into `out`.
-    pub fn copy_latest_frame(&self, out: &mut [f32; PROSODY_FRAME_SIZE]) -> bool {
-        if self.ring_len < PROSODY_FRAME_SIZE {
-            return false;
-        }
-        let cap = self.ring_buffer.len();
-        let start = (self.ring_write_pos + cap - PROSODY_FRAME_SIZE) % cap;
-        for i in 0..PROSODY_FRAME_SIZE {
-            out[i] = self.ring_buffer[(start + i) % cap];
-        }
-        true
     }
 
     /// Current sample rate in Hz.
@@ -778,17 +773,22 @@ impl ProsodyTracker {
                 best_t = t;
             }
         }
-        if (current_t_ms - best_t).abs() > 350.0 {
+
+        // When fewer than 100ms of voiced frames exist, do not compute delta from a premature frame
+        if (current_t_ms - best_t) < 100.0 {
             return 0.0;
         }
+        if (current_t_ms - best_t) > 350.0 {
+            return 0.0;
+        }
+
         current_f0 - best_f0
     }
 
-    /// Process a single 32 ms frame (512 samples) and return any classified prosodic event.
+    /// Process a single 32 ms frame (512 samples) directly without buffer duplication.
     ///
     /// Executes with zero heap allocations on the hot path.
     pub fn process_frame(&mut self, frame: &[f32]) -> Option<ProsodicEvent> {
-        self.push_samples(frame);
         let frame_duration_ms = (PROSODY_FRAME_SIZE as f32 / self.sample_rate as f32) * 1000.0;
         let t_ms = self.current_time_ms + frame_duration_ms;
         self.current_time_ms = t_ms;
@@ -799,8 +799,8 @@ impl ProsodyTracker {
         let energy_slope = self.calculate_energy_slope();
         self.last_energy_slope = energy_slope;
 
-        let (pitch_opt, has_dip) = self.compute_pitch_and_cmndf_dip(frame);
-        let is_voiced = pitch_opt.is_some() && energy_db > -45.0;
+        let (pitch_opt, _has_dip) = self.compute_pitch_and_cmndf_dip(frame);
+        let is_voiced = pitch_opt.is_some() && energy_db > PROSODY_MIN_VOICED_ENERGY_DB;
         self.is_voiced = is_voiced;
 
         if is_voiced {
@@ -822,30 +822,30 @@ impl ProsodyTracker {
             }
         } else {
             self.last_pitch = 0.0;
-            self.silence_duration += Duration::from_secs_f32(frame_duration_ms / 1000.0);
-
-            // Energy decay fallback: when CMNDF has no dip (unvoiced/noise) but dE/dt < -0.15 dB/ms with silence >= 450ms, classify as terminal boundary
-            if !has_dip && energy_slope < -0.15 && self.silence_duration >= Duration::from_millis(450) {
-                Some(ProsodicEvent::FallingIntonation)
-            } else {
-                Some(ProsodicEvent::Silence(self.silence_duration))
-            }
+            let frame_duration_us = ((PROSODY_FRAME_SIZE as u64) * 1_000_000) / (self.sample_rate as u64);
+            self.silence_duration += Duration::from_micros(frame_duration_us);
+            Some(ProsodicEvent::Silence(self.silence_duration))
         }
     }
 
-    /// Process a streaming audio chunk of arbitrary size, consuming frames from the ring buffer.
+    /// Process a streaming audio chunk of arbitrary size, consuming frames from the ring buffer FIFO.
     pub fn process_chunk(&mut self, samples: &[f32]) -> Vec<ProsodicEvent> {
-        let mut events = Vec::new();
         self.push_samples(samples);
+        let mut events = Vec::new();
         let mut frame_buf = [0.0f32; PROSODY_FRAME_SIZE];
+        let cap = self.ring_buffer.len();
+
         while self.ring_len >= PROSODY_FRAME_SIZE {
-            if self.copy_latest_frame(&mut frame_buf) {
-                if let Some(ev) = self.process_frame(&frame_buf) {
-                    events.push(ev);
-                }
+            for i in 0..PROSODY_FRAME_SIZE {
+                frame_buf[i] = self.ring_buffer[(self.ring_read_pos + i) % cap];
             }
-            break;
+            if let Some(ev) = self.process_frame(&frame_buf) {
+                events.push(ev);
+            }
+            self.ring_read_pos = (self.ring_read_pos + PROSODY_FRAME_SIZE) % cap;
+            self.ring_len -= PROSODY_FRAME_SIZE;
         }
+
         events
     }
 }
@@ -860,6 +860,29 @@ mod tests {
         (0..n_samples)
             .map(|i| (2.0 * PI * freq * (i as f32) / sample_rate).sin())
             .collect()
+    }
+
+    #[test]
+    fn test_process_chunk_fifo_buffer() {
+        let mut tracker = ProsodyTracker::new();
+
+        // 300 samples: less than 512, no frame should be processed yet
+        let chunk1 = vec![0.1f32; 300];
+        let events1 = tracker.process_chunk(&chunk1);
+        assert_eq!(tracker.ring_len(), 300);
+        assert!(events1.is_empty(), "Should not emit with < 512 samples");
+
+        // 400 samples: 300 + 400 = 700 >= 512, 1 frame processed, 188 samples left
+        let chunk2 = vec![0.1f32; 400];
+        let events2 = tracker.process_chunk(&chunk2);
+        assert_eq!(tracker.ring_len(), 700 - 512);
+        assert_eq!(events2.len(), 1, "Should have processed 1 frame");
+
+        // 900 samples: 188 + 900 = 1088 >= 1024, 2 frames processed, 64 samples left
+        let chunk3 = vec![0.1f32; 900];
+        let events3 = tracker.process_chunk(&chunk3);
+        assert_eq!(tracker.ring_len(), 1088 - 1024);
+        assert_eq!(events3.len(), 2, "Should have processed 2 frames");
     }
 
     #[test]
@@ -987,27 +1010,17 @@ mod tests {
     }
 
     #[test]
-    fn test_energy_decay_fallback() {
+    fn test_unvoiced_silence_duration() {
         let mut tracker = ProsodyTracker::new();
-        tracker.current_time_ms = 128.0;
-        tracker.energy_history = [
-            (0.0, 0.0),
-            (32.0, -10.0),
-            (64.0, -20.0),
-            (96.0, -35.0),
-            (128.0, -50.0),
-        ];
-        tracker.energy_history_len = 5;
-        tracker.silence_duration = Duration::from_millis(460);
-
         let silence_frame = vec![0.0f32; PROSODY_FRAME_SIZE];
-        let event = tracker.process_frame(&silence_frame);
-        assert_eq!(
-            event,
-            Some(ProsodicEvent::FallingIntonation),
-            "Energy decay fallback must classify as terminal boundary (FallingIntonation)"
-        );
-        assert!(event.unwrap().is_terminal_boundary());
+
+        let event1 = tracker.process_frame(&silence_frame);
+        assert_eq!(event1, Some(ProsodicEvent::Silence(Duration::from_millis(32))));
+        assert_eq!(tracker.silence_duration(), Duration::from_millis(32));
+
+        let event2 = tracker.process_frame(&silence_frame);
+        assert_eq!(event2, Some(ProsodicEvent::Silence(Duration::from_millis(64))));
+        assert_eq!(tracker.silence_duration(), Duration::from_millis(64));
     }
 
     #[test]

@@ -981,13 +981,7 @@ fn test_acoustic_friction_case_3_conversational_speech_repair() {
     assert_eq!(repaired, "let's meet at five pm");
 
     let cleaned = clean_text(raw);
-    assert!(
-        cleaned == "Let's meet at five pm."
-            || cleaned == "Let's meet at 5:00 PM."
-            || cleaned == "meet at five pm",
-        "Cleaned text unexpected: {}",
-        cleaned
-    );
+    assert_eq!(cleaned, "Let's meet at five pm.");
 
     // Also verify without leading contraction
     let raw_simple = "meet at four no wait five pm";
@@ -1017,12 +1011,20 @@ fn test_acoustic_friction_case_4_homophone_resolution() {
     let formatted = apply_commands(raw_canonical);
     assert_eq!(formatted, "They're going to put their bags over there");
 
-    let raw_confused = "they're going to put their bags over there";
-    let cleaned = clean_text(raw_confused);
+    // Verify full pipeline disambiguation on ambiguous raw input
+    let raw_ambiguous = "there going to put there bags over their";
+    let formatted_ambiguous = apply_commands(raw_ambiguous);
+    assert_eq!(
+        formatted_ambiguous,
+        "they're going to put their bags over there"
+    );
+
+    let cleaned = clean_text(&formatted_ambiguous);
     assert_eq!(cleaned, "They're going to put their bags over there.");
 
     // Verify GroundingGuard safely whitelists this homophone resolution without flagging
-    let guard_res = apply_cleanup("there going to put there bags over their", "clean");
+    let guard_res = apply_cleanup(&formatted_ambiguous, "clean");
+    assert_eq!(guard_res.text, "They're going to put their bags over there.");
     assert!(
         !guard_res.flagged,
         "Homophone resolution must not be flagged by GroundingGuard"
@@ -1142,8 +1144,8 @@ fn test_five_friction_points_end_to_end_parity() {
 
     // Case 4: Homophone resolution
     assert_eq!(
-        apply_commands("They're going to put their bags over there"),
-        "They're going to put their bags over there"
+        clean_text(&apply_commands("there going to put there bags over their")),
+        "They're going to put their bags over there."
     );
 
     // Case 5: Prosodic question vs period

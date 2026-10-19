@@ -347,11 +347,18 @@ impl PipelineHandle {
     ) -> crate::ibus::PhysicalKeyAction {
         if let Ok(mut engine) = self.inner.ibus_engine.lock() {
             let action = engine.handle_physical_key(keyval, keycode, state);
-            if let crate::ibus::PhysicalKeyAction::CommittedPreeditAndPassThrough { ref committed_text } = action {
-                if let Ok(mut st) = self.inner.state.lock() {
-                    st.clausal_commits.push(committed_text.clone());
+            match &action {
+                crate::ibus::PhysicalKeyAction::CommittedPreeditAndPassThrough { ref committed_text } => {
+                    if let Ok(mut st) = self.inner.state.lock() {
+                        st.clausal_commits.push(committed_text.clone());
+                    }
+                    self.inner.stream_reset_requested.store(true, Ordering::SeqCst);
                 }
-                self.inner.stream_reset_requested.store(true, Ordering::SeqCst);
+                crate::ibus::PhysicalKeyAction::WordRewind { ref remaining_preedit } => {
+                    let _ = remaining_preedit;
+                    self.inner.stream_reset_requested.store(true, Ordering::SeqCst);
+                }
+                _ => {}
             }
             action
         } else {
@@ -1375,7 +1382,11 @@ impl PipelineHandle {
             &replacements,
             &vocabulary,
         );
-        Some(crate::cleanup::apply_cleanup(&pre_cleanup, effective_mode))
+        let mut cleanup_res = crate::cleanup::apply_cleanup(&pre_cleanup, effective_mode);
+        if effective_mode.eq_ignore_ascii_case("code") {
+            cleanup_res.text = crate::text::format_mode_punctuation(&cleanup_res.text, effective_mode);
+        }
+        Some(cleanup_res)
     }
 
     /// Finishes transcript processing without audio recording (used in tests and commands).
@@ -3585,6 +3596,7 @@ mod tests {
         );
 
         // 2. Backspace executes word-level rewind on active pre-edit
+        pipe.inner.stream_reset_requested.store(false, Ordering::SeqCst);
         if let Ok(mut ibus) = pipe.inner.ibus_engine.lock() {
             ibus.update_preedit("hello world again", 17, true);
         }
@@ -3599,6 +3611,10 @@ mod tests {
         );
         assert_eq!(pipe.ibus_engine_state().preedit_text, "hello world");
         assert!(pipe.ibus_engine_state().is_preedit_active());
+        assert!(
+            pipe.inner.stream_reset_requested.load(Ordering::SeqCst),
+            "stream_reset_requested should be set when physical key rewinds preedit"
+        );
 
         // 3. Escape key discards pre-edit
         let action3 = pipe.handle_physical_key(crate::ibus::KEYVAL_ESCAPE, 0, 0);
@@ -3656,6 +3672,41 @@ mod tests {
         // Reset clears accumulated silence duration
         tracker.reset();
         assert_eq!(tracker.silence_duration(), Duration::ZERO);
+    }
+
+    #[test]
+    fn code_mode_pipeline_formats_punctuation() {
+        let (_dir, pipe) = test_pipe();
+        let res = pipe
+            .accepted_transcript("std :: vector", "code")
+            .expect("transcript");
+        assert_eq!(res.text, "std::vector");
+
+        let res2 = pipe
+            .accepted_transcript("let x : i32 ;", "code")
+            .expect("transcript");
+        assert_eq!(res2.text, "let x: i32;");
+    }
+
+    #[test]
+    fn plain_mode_pipeline_prunes_speech_repairs() {
+        let (_dir, pipe) = test_pipe();
+        let res = pipe
+            .accepted_transcript("meet at four no wait five pm", "plain")
+            .expect("transcript");
+        assert_eq!(res.text, "meet at five pm");
+        assert!(!res.applied);
+        assert!(!res.flagged);
+    }
+
+    #[test]
+    fn homophone_disambiguation_pipeline_end_to_end() {
+        let (_dir, pipe) = test_pipe();
+        let raw = "there going to put there bags over their";
+        let res = pipe
+            .accepted_transcript(raw, "clean")
+            .expect("transcript");
+        assert_eq!(res.text, "They're going to put their bags over there.");
     }
 }
 

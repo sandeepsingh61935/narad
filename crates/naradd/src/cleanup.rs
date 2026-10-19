@@ -254,7 +254,7 @@ pub fn apply_cleanup_with_guard(raw: &str, mode: &str, guard: &GroundingGuard) -
 
     if mode.eq_ignore_ascii_case("plain") || mode.eq_ignore_ascii_case("code") {
         return CleanupResult {
-            text: raw.to_string(),
+            text: prune_speech_repairs(raw),
             flagged: false,
             applied: false,
         };
@@ -789,7 +789,8 @@ fn split_into_items(raw: &str) -> Vec<String> {
 
 /// Bullet mode heuristics: structures items into bullets (`• ...`).
 pub fn bullet_text(raw: &str) -> String {
-    let items = split_into_items(raw);
+    let without_repairs = prune_speech_repairs(raw);
+    let items = split_into_items(&without_repairs);
     let bullets: Vec<String> = items
         .into_iter()
         .map(|item| {
@@ -1276,6 +1277,20 @@ mod tests {
         assert_eq!(res_upper.text, raw);
         assert!(!res_upper.applied);
         assert!(!res_upper.flagged);
+    }
+
+    #[test]
+    fn plain_and_code_mode_prune_speech_repairs() {
+        let raw = "meet at four no wait five pm";
+        let res = apply_cleanup(raw, "plain");
+        assert_eq!(res.text, "meet at five pm");
+        assert!(!res.applied);
+        assert!(!res.flagged);
+
+        let res_code = apply_cleanup(raw, "code");
+        assert_eq!(res_code.text, "meet at five pm");
+        assert!(!res_code.applied);
+        assert!(!res_code.flagged);
     }
 
     #[test]

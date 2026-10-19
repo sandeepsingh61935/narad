@@ -12,7 +12,7 @@ A phase is not “all daemon work, then a UI pass.” The HUD and the dashboard 
    - `distill`, then `critique`, then `audit`
    - `clarify` when the labels are the defect
    - `harden` when empty, error, or permission states are the defect
-   - `shape` once, before beat 1, only for a surface this phase introduces (the Phase 3 catalog, the Phase 4 mode editor, the Phase 5 meeting document)
+   - `shape` once, before beat 1, only for a surface this phase introduces (the Phase 3 catalog, the Phase 4 mode editor)
    - `bolder`, `delight`, and `overdrive` are out of scope for Narad
 
 Impeccable’s web detector and `live` apply to dashboard Svelte. The HUD is the GNOME extension; review it against DESIGN §3, not the HTML detector.
@@ -89,14 +89,11 @@ Daemon + hotkey (hold/tap) + floating HUD + record + VAD + ASR + paste insert + 
 
 **Impeccable:** `shape` the mode editor once. Then the three beats. Duplicate a built-in mode; the editor does not add a Save button.
 
-## Phase 5 — Hands-free and long-form
+## Phase 5 — Hands-free
 
 - Wake word (FR-ACT-6)
-- Long-form / meeting mode with optional speaker labels (FR-LNG-1/2)
 
-**UI in this phase:** wake-word off by default, with a HUD cue while it is listening for the word; meeting mode as one history document, not live insertion.
-
-**Impeccable:** `shape` the meeting document once. HUD cue reviewed against DESIGN §3.
+**UI in this phase:** wake-word off by default, with a HUD cue while it is listening for the word. HUD cue reviewed against DESIGN §3.
 
 ## Later
 

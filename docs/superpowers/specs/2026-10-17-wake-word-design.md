@@ -16,7 +16,7 @@ Per `docs/REQUIREMENTS.md`:
 - **NFR-P-1**: Low latency wake-word detection with CPU-optimized int8 models.
 
 Per `docs/ROADMAP.md`:
-- "UI in this phase: wake-word off by default, with a HUD cue while it is listening for the word; meeting mode as one history document, not live insertion."
+- "UI in this phase: wake-word off by default, with a HUD cue while it is listening for the word."
 
 ---
 

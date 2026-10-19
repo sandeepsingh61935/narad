@@ -44,9 +44,14 @@ Three processes, one contract (D-Bus interface), plus local agentic integration 
 | Need | Choice | Reason / rejected alternatives |
 |---|---|---|
 | Global hotkey with **hold** and **tap** | `org.freedesktop.portal.GlobalShortcuts` | Emits `Activated` *and* `Deactivated`, so push-to-talk works. GNOME custom keybindings only fire on press. Supported by xdg-desktop-portal-gnome ≥ 48. |
+<<<<<<< HEAD
+| Insert text into any app | Clipboard set + `Ctrl+V` via `org.freedesktop.portal.RemoteDesktop` (libei keyboard), with persisted restore token | `wtype` unsupported on GNOME (no virtual-keyboard protocol). `ydotool` needs root/uinput setup. Typing keysyms breaks on non-Latin scripts; paste handles any Unicode. |
+| Always-on-top floating HUD | GNOME Shell extension (`Main.layoutManager.addChrome`) | Wayland clients cannot position themselves or force always-on-top. XWayland hack is fragile. Circular ~28px anchor + Raycast-style companion waveform pill (Libadwaita dark + Adwaita Blue). |
+=======
 | Streaming inline text at cursor | Native IBus Input Method Engine (`org.freedesktop.IBus.Engine`) | Words appear underlined directly at the blinking cursor as spoken without simulated key-presses or clipboard clobbering. Supported natively across GTK, Qt, Chromium, and Electron apps. |
 | Fallback text insertion (non-IBus / terminals) | Clipboard set + `Ctrl+V` / `Ctrl+Shift+V` via `org.freedesktop.portal.RemoteDesktop` (libei keyboard) | Used when IBus is absent or target app is a raw terminal without pre-edit support. `wtype` unsupported on GNOME. `ydotool` requires root/uinput setup. |
 | Always-on-top floating HUD | GNOME Shell extension (`Main.layoutManager.addChrome`) | Wayland clients cannot position themselves or force always-on-top. XWayland hack is fragile. Circular ~28px anchor + companion waveform pill (Stitch Quiet Precision). |
+>>>>>>> main
 | Focused app, selected text | Same extension (`global.display.focus_window`, `St.Clipboard` PRIMARY) | No portal exposes these. |
 | Screen and UI context harvesting | AT-SPI2 Accessibility Bus (`org.a11y.Bus`) | Allows harvesting focused field text and surrounding words locally for vocabulary biasing without screenshots or cloud OCR. |
 | Cancel with `Esc` | Extension adds a keybinding only while recording (**decision #4 locked**) | A permanent global `Esc` would break every app. Portal Esc shortcut is a non-GNOME fallback later. |
@@ -224,6 +229,17 @@ Detailed records live in individual documents under [`docs/adr/`](./adr/):
 - **[ADR-0007: Dual-Buffer IME Keystroke Arbitration with Word-Level Backspace Rewind](./adr/0007-dual-buffer-ime-keystroke-arbitration.md)**: Typing printable keys commits active pre-edit and passes through without stopping dictation; physical Backspace pops trailing spoken word.
 - **[ADR-0008: Lock-Free Dynamic Hotword Biasing via Atomic Trie Swapping](./adr/0008-lock-free-dynamic-hotword-biasing.md)**: Active application hotwords and contacts compiled into dynamic prefix tries and passed to recognizer streams without mutating model weights.
 - **[ADR-0009: Spoken Punctuation Precedence and Syntactic Pre-edit Soft Ceiling](./adr/0009-punctuation-precedence-and-preedit-ceiling.md)**: Spoken commands atomically supersede prosodic marks; pre-edit soft ceiling triggers clause commit on sentence boundaries when exceeding 20 words.
+
+### ADR-006: Libadwaita Dark Visual System, CSD Window Posture & Offline Typography
+- **Status:** Accepted (2026-10-18)
+- **Context:** The legacy UI prototype used "Quiet Precision" with a saffron accent (`#E08A1E`), Inter / JetBrains Mono web fonts, and dual light/dark themes. GNOME ecosystem users expect a cohesive Libadwaita dark experience, offline typography, and a Raycast-style floating companion pill HUD that integrates naturally with GNOME Shell 50 on Wayland.
+- **Decision:** Complete cutover to the Libadwaita dark visual system:
+  1. **Tokens:** Warm charcoal neutrals (`--bg: oklch(21% 0.01 72)`, `--surface: oklch(24.5% 0.01 72)`, `--raised: oklch(28.8% 0.01 72)`, `--border: oklch(36% 0.01 72)`) with 1px planar rules and no decorative glow or glass.
+  2. **Accent:** Single Adwaita Blue accent (`oklch(70% 0.125 250)` / sRGB `#3584e4`) replacing legacy saffron; used sparingly for active states, primary actions, and listening indicators.
+  3. **Typography:** Bundled offline IBM Plex Sans (display/body) and IBM Plex Mono (provenance stamps, timestamps, model IDs, counts, keycaps).
+  4. **Window Posture:** Tauri v2 Client-Side Decorations (CSD) with integrated 46px headerbar, custom window controls (minimize/maximize/close), drag region, and offline provenance badge, replacing native OS titlebars.
+  5. **Shell Compatibility:** GNOME Shell St uses exact sRGB hex mappings (`#3584e4`, `#1b1813`, `#23201b`, `#403c37`, `#efebe1`) due to St engine parser constraints.
+- **Consequences:** 100% offline consistency across distros, zero network dependencies for font assets, seamless GNOME 50 desktop integration, and removal of dual-theme maintenance overhead.
 
 ---
 

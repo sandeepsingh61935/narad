@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -11,10 +11,6 @@ import {
 } from "./models.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const layoutSource = readFileSync(
-  join(here, "../routes/settings/+layout.svelte"),
-  "utf8"
-);
 const pageSource = readFileSync(
   join(here, "../routes/settings/models/+page.svelte"),
   "utf8"
@@ -55,9 +51,9 @@ test("isModelActive correctly compares with config", () => {
   assert.equal(isModelActive("", config), false);
 });
 
-test("settings layout links to /settings/models", () => {
-  assert.match(layoutSource, /\/settings\/models/);
-  assert.match(layoutSource, /Models/);
+test("speech models page exists in routes", () => {
+  const modelsPath = join(here, "../routes/models/+page.svelte");
+  assert.equal(existsSync(modelsPath), true);
 });
 
 test("models page lists active model, catalog, and sentence case copy", () => {

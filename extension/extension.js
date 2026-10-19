@@ -108,11 +108,11 @@ export default class NaradExtension extends Extension {
         this._column.spacing = 4;
 
         this._row = new St.BoxLayout({
-            style_class: 'narad-hud',
+            style_class: 'narad-hud is-idle',
             vertical: false,
             y_align: Clutter.ActorAlign.CENTER,
         });
-        this._row.spacing = 10;
+        this._row.spacing = 8;
 
         this._anchor = new St.Bin({
             style_class: 'narad-hud-anchor',
@@ -139,6 +139,7 @@ export default class NaradExtension extends Extension {
             y_align: Clutter.ActorAlign.CENTER,
         });
         this._anchorGlyph = new St.Label({
+            style_class: 'ok-icon',
             text: '✓',
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,
@@ -155,7 +156,7 @@ export default class NaradExtension extends Extension {
         this._pill.spacing = 8;
 
         this._wave = new St.BoxLayout({
-            style_class: 'narad-hud-wave',
+            style_class: 'bars narad-hud-wave',
             vertical: false,
             y_align: Clutter.ActorAlign.CENTER,
             visible: false,
@@ -164,8 +165,8 @@ export default class NaradExtension extends Extension {
         this._waveBars = [];
         for (let i = 0; i < 4; i++) {
             const bar = new St.Widget({
-                style_class: 'narad-hud-wave-bar',
-                width: 2,
+                style_class: 'bars-bar narad-hud-wave-bar',
+                width: 3,
                 height: 4 + i * 2,
             });
             this._waveBars.push(bar);
@@ -173,42 +174,43 @@ export default class NaradExtension extends Extension {
         }
 
         this._pillIcon = new St.Icon({
+            style_class: 'spinner narad-hud-spinner',
             icon_name: 'emblem-synchronizing-symbolic',
             icon_size: 14,
             visible: false,
         });
         this._pillPrimary = new St.Label({
-            style_class: 'narad-hud-text',
+            style_class: 'hud-label narad-hud-text',
             text: '',
         });
         this._pillSep1 = new St.Label({
-            style_class: 'narad-hud-text-muted',
+            style_class: 'hud-meta narad-hud-text-muted',
             text: '·',
             visible: false,
         });
         this._pillSecondary = new St.Label({
-            style_class: 'narad-hud-text-accent',
+            style_class: 'hud-meta narad-hud-text-accent',
             text: '',
             visible: false,
         });
         this._pillSep2 = new St.Label({
-            style_class: 'narad-hud-text-muted',
+            style_class: 'hud-meta narad-hud-text-muted',
             text: '·',
             visible: false,
         });
         this._pillTertiary = new St.Label({
-            style_class: 'narad-hud-text-muted',
+            style_class: 'hud-meta narad-hud-text-muted',
             text: '',
             visible: false,
         });
         this._pillDot = new St.Widget({
-            style_class: 'narad-hud-wave-bar',
+            style_class: 'hud-dot narad-hud-wave-bar',
             width: 6,
             height: 6,
             visible: false,
         });
         this._pillKeycap = new St.Label({
-            style_class: 'narad-hud-keycap',
+            style_class: 'narad-hud-keycap kbd',
             text: 'Ctrl+V',
             visible: false,
         });
@@ -610,6 +612,7 @@ export default class NaradExtension extends Extension {
 
     _buildDotMenu() {
         this._menu = new PopupMenu.PopupMenu(this._anchor, 0.5, St.Side.TOP);
+        this._menu.actor.add_style_class_name('popover');
         Main.uiGroup.add_child(this._menu.actor);
         this._menu.actor.hide();
         this._menuManager = new PopupMenu.PopupMenuManager(this._root);
@@ -627,7 +630,7 @@ export default class NaradExtension extends Extension {
             const item = new PopupMenu.PopupMenuItem(mode);
             const accel = new St.Label({
                 text: modeShortcuts[mode],
-                style_class: 'narad-hud-keycap',
+                style_class: 'narad-hud-keycap kbd',
                 x_align: Clutter.ActorAlign.END,
                 x_expand: true,
             });
@@ -1029,11 +1032,13 @@ export default class NaradExtension extends Extension {
         this._syncEscGrab(state);
         this._syncInputSource(state);
 
+        this._row.style_class = `narad-hud is-${state}`;
         this._anchor.style_class = 'narad-hud-anchor';
         this._pill.style_class = 'narad-hud-pill';
         this._pill.visible = false;
         this._wave.visible = false;
         this._pillIcon.visible = false;
+        this._pillIcon.style_class = 'spinner narad-hud-spinner';
         this._pillSep1.visible = false;
         this._pillSecondary.visible = false;
         this._pillSep2.visible = false;
@@ -1043,8 +1048,8 @@ export default class NaradExtension extends Extension {
         this._stopBtn.visible = false;
         this._discardBtn.visible = false;
         this._hint.visible = false;
-        this._pillPrimary.style_class = 'narad-hud-text';
-        this._pillSecondary.style_class = 'narad-hud-text-accent';
+        this._pillPrimary.style_class = 'hud-label narad-hud-text';
+        this._pillSecondary.style_class = 'hud-meta narad-hud-text-accent';
 
         switch (state) {
         case 'idle':
@@ -1055,12 +1060,13 @@ export default class NaradExtension extends Extension {
             this._anchor.add_style_class_name('narad-hud-anchor-listening');
             this._pill.add_style_class_name('narad-hud-pill-listening');
             this._anchorIcon.icon_name = 'audio-input-microphone-symbolic';
+            this._anchorIcon.style_class = '';
             this._setAnchorChild(this._anchorIcon);
             this._pill.visible = true;
             this._pillPrimary.text = `${this._mode || DEFAULT_MODE} · EN`;
             this._pillSep1.visible = true;
             this._pillSecondary.visible = true;
-            this._pillSecondary.style_class = 'narad-hud-text-muted';
+            this._pillSecondary.style_class = 'hud-meta narad-hud-text-muted';
             this._elapsedSec = 0;
             this._pillSecondary.text = '0:00';
             this._pillDot.visible = true;
@@ -1079,39 +1085,43 @@ export default class NaradExtension extends Extension {
         case 'processing':
             this._anchor.add_style_class_name('narad-hud-anchor-processing');
             this._anchorIcon.icon_name = 'emblem-synchronizing-symbolic';
+            this._anchorIcon.style_class = 'spinner narad-hud-spinner';
             this._setAnchorChild(this._anchorIcon);
             this._pill.visible = true;
             this._pillIcon.icon_name = 'emblem-synchronizing-symbolic';
+            this._pillIcon.style_class = 'spinner narad-hud-spinner';
             this._pillIcon.visible = true;
             this._pillPrimary.text = 'Transcribing…';
             this._pillSep1.visible = true;
             this._pillSecondary.visible = true;
-            this._pillSecondary.style_class = 'narad-hud-text-muted';
+            this._pillSecondary.style_class = 'hud-meta narad-hud-text-muted';
             this._pillSecondary.text = `${this._mode || DEFAULT_MODE} · EN`;
             break;
 
         case 'inserted':
             this._anchor.add_style_class_name('narad-hud-anchor-copied');
+            this._anchorGlyph.style_class = 'ok-icon';
             this._anchorGlyph.text = '✓';
             this._setAnchorChild(this._anchorGlyph);
             this._pill.visible = true;
             this._pill.add_style_class_name('narad-hud-pill-copied');
-            this._pillPrimary.style_class = 'narad-hud-text-success';
+            this._pillPrimary.style_class = 'hud-label narad-hud-text-success';
             this._pillPrimary.text = 'Inserted';
             this._scheduleIdle(OUTCOME_IDLE_MS);
             break;
 
         case 'copied':
             this._anchor.add_style_class_name('narad-hud-anchor-copied');
+            this._anchorGlyph.style_class = 'ok-icon';
             this._anchorGlyph.text = '✓';
             this._setAnchorChild(this._anchorGlyph);
             this._pill.visible = true;
             this._pill.add_style_class_name('narad-hud-pill-copied');
-            this._pillPrimary.style_class = 'narad-hud-text-success';
+            this._pillPrimary.style_class = 'hud-label narad-hud-text-success';
             this._pillPrimary.text = 'Copied to clipboard';
             this._pillSep1.visible = true;
             this._pillSecondary.visible = true;
-            this._pillSecondary.style_class = 'narad-hud-text-muted';
+            this._pillSecondary.style_class = 'hud-meta narad-hud-text-muted';
             this._pillSecondary.text = 'No text field focused';
             this._pillKeycap.text = this._outcomeDetail() || 'Ctrl+V';
             this._pillKeycap.visible = true;
@@ -1120,11 +1130,12 @@ export default class NaradExtension extends Extension {
 
         case 'cancelled':
             this._anchor.add_style_class_name('narad-hud-anchor-cancelled');
+            this._anchorGlyph.style_class = 'hud-meta narad-hud-text-muted';
             this._anchorGlyph.text = '✕';
             this._setAnchorChild(this._anchorGlyph);
             this._pill.visible = true;
             this._pill.add_style_class_name('narad-hud-pill-cancelled');
-            this._pillPrimary.style_class = 'narad-hud-text-muted';
+            this._pillPrimary.style_class = 'hud-label narad-hud-text-muted';
             this._pillPrimary.text = 'Cancelled';
             this._scheduleIdle(OUTCOME_IDLE_MS);
             break;
@@ -1132,16 +1143,17 @@ export default class NaradExtension extends Extension {
         case 'undone': {
             const deleted = this._outcomeDetail();
             this._anchor.add_style_class_name('narad-hud-anchor-copied');
+            this._anchorGlyph.style_class = 'ok-icon';
             this._anchorGlyph.text = '↶';
             this._setAnchorChild(this._anchorGlyph);
             this._pill.visible = true;
             this._pill.add_style_class_name('narad-hud-pill-copied');
-            this._pillPrimary.style_class = 'narad-hud-text-success';
+            this._pillPrimary.style_class = 'hud-label narad-hud-text-success';
             this._pillPrimary.text = 'Undone';
             if (deleted) {
                 this._pillSep1.visible = true;
                 this._pillSecondary.visible = true;
-                this._pillSecondary.style_class = 'narad-hud-text-muted';
+                this._pillSecondary.style_class = 'hud-meta narad-hud-text-muted';
                 this._pillSecondary.text = deleted;
             }
             this._scheduleIdle(OUTCOME_IDLE_MS);
@@ -1152,15 +1164,16 @@ export default class NaradExtension extends Extension {
             const why = this._outcomeDetail();
             this._anchor.add_style_class_name('narad-hud-anchor-error');
             this._anchorIcon.icon_name = 'dialog-warning-symbolic';
+            this._anchorIcon.style_class = '';
             this._setAnchorChild(this._anchorIcon);
             this._pill.visible = true;
             this._pill.add_style_class_name('narad-hud-pill-error');
-            this._pillPrimary.style_class = 'narad-hud-text-error';
+            this._pillPrimary.style_class = 'hud-label narad-hud-text-error';
             this._pillPrimary.text = why || 'Microphone unavailable';
             if (!why) {
                 this._pillSep1.visible = true;
                 this._pillSecondary.visible = true;
-                this._pillSecondary.style_class = 'narad-hud-text-muted';
+                this._pillSecondary.style_class = 'hud-meta narad-hud-text-muted';
                 this._pillSecondary.text = 'Check audio settings';
             }
             this._scheduleIdle(3200);
@@ -1217,14 +1230,14 @@ export default class NaradExtension extends Extension {
             this._pill.add_style_class_name('narad-hud-pill-paused');
             this._pillIcon.icon_name = 'media-playback-pause-symbolic';
             this._pillIcon.visible = true;
-            this._pillPrimary.style_class = 'narad-hud-text-muted';
+            this._pillPrimary.style_class = 'hud-meta narad-hud-text-muted';
             this._pillPrimary.text = pauseText;
             return;
         }
 
         this._pillSep2.visible = true;
         this._pillTertiary.visible = true;
-        this._pillTertiary.style_class = 'narad-hud-text-muted';
+        this._pillTertiary.style_class = 'hud-meta narad-hud-text-muted';
         this._pillTertiary.text = pauseText;
     }
 
@@ -1238,10 +1251,10 @@ export default class NaradExtension extends Extension {
         this._levelDriven = true;
         const level = Math.max(0, Math.min(1, Number(rms) || 0));
         for (let i = 0; i < this._waveBars.length; i++) {
-            const base = 4 + i * 3;
+            const base = 4 + i * 2.5;
             this._waveBars[i].height = Math.max(
                 2,
-                Math.floor(2 + base * level * (0.55 + 0.45 * Math.random())),
+                Math.min(14, Math.floor(2 + base * level * (0.55 + 0.45 * Math.random()))),
             );
         }
     }
@@ -1266,7 +1279,7 @@ export default class NaradExtension extends Extension {
             if (this._levelDriven)
                 return GLib.SOURCE_CONTINUE;
             for (let i = 0; i < this._waveBars.length; i++)
-                this._waveBars[i].height = 4 + Math.floor(Math.random() * 12);
+                this._waveBars[i].height = 4 + Math.floor(Math.random() * 10);
             return GLib.SOURCE_CONTINUE;
         });
     }

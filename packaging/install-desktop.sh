@@ -85,6 +85,9 @@ if ! pgrep -x naradd >/dev/null 2>&1; then
   fi
 fi
 
+# Ensure smooth rendering on Linux Wayland (Intel/Nvidia hybrid / Mesa)
+export WEBKIT_DISABLE_DMABUF_RENDERER=1
+
 exec "${HOME}/.local/bin/narad-dashboard-bin" "$@"
 EOF
 chmod 0755 "$DASHBOARD_LAUNCHER"

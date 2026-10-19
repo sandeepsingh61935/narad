@@ -1,3 +1,5 @@
+//! Narad daemon entrypoint: config, warm ASR, D-Bus, hotkeys, dictation pipeline.
+
 use naradd::{
     asr, config, hotkeys, ibus, ipc, paths, pipeline, retained,
 };

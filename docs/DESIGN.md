@@ -1,93 +1,156 @@
-# Narad — UX Guidelines
+# Narad — Design & UX Guidelines
 
-How Narad should behave and be structured. Visual tokens come from Quiet Precision (warm charcoal, saffron `#E08A1E`, Inter, JetBrains Mono, libadwaita radii, no glow or glass). Prompts that produced the Stitch export: [STITCH_PROMPTS.md](STITCH_PROMPTS.md).
+How Narad behaves and looks. The visual contract is defined by the **Libadwaita Dark Visual System** (`brand-spec.md`, `DESIGN-HANDOFF.md`, `DESIGN-MANIFEST.json`, and ADR-006): a warm-charcoal Libadwaita desktop canvas, 1px planar rules, Adwaita Blue accent used sparingly, bundled offline IBM Plex typography, and a Raycast-style floating companion pill overlay rendered by GNOME Shell.
 
-**Visual / surface authority:** the 28px circular anchor and the companion pill while dictating, as drawn in the Stitch export `quiet_precision/DESIGN.md` and `narad_floating_hud_component_sheet/`. That export is not behavior authority. Where a Stitch screen disagrees with this file or [REQUIREMENTS.md](REQUIREMENTS.md), those docs win. Visual polish runs inside the phase that owns the surface, after the control uses live daemon state ([ROADMAP.md](ROADMAP.md), “How a phase ships”).
+## 1. Design Principles
 
-## 1. Principles
+1. **The floating HUD is the product.** Most interactions never open the dashboard window. Design the always-on-top indicator and its dictation feedback first; the dashboard is a quiet archive, model manager, and control room.
+2. **Quiet chrome, singular focus.** The window chrome stays quiet with neutral charcoal surfaces; the listening pill is the only loud instrument. A single blue accent appears at most twice per screen.
+3. **Feedback before latency.** The user must know within a blink that recording started, stopped, and where the text went.
+4. **Keyboard first.** Every action is reachable without a mouse, primary actions show their keycaps, and shortcuts are visible next to their targets.
+5. **Never block.** Toasts with Undo affordance instead of blocking confirmation dialogs; no modal interruptions on the dictation hot path.
+6. **Provenance and trust are visible.** Offline status, active model ID, local elapsed time, and utterance fates are always inspectable. No audio or text leaves the user's machine.
+7. **Progressive disclosure.** Sensible defaults work out of the box; advanced configurations exist but stay out of the way.
 
-1. **The floating HUD is the product.** Most usage never opens the dashboard. Design the always-on-top indicator and its dictation feedback first; the dashboard is a quiet archive and control room.
-2. **Feedback before latency.** The user must know within a blink that recording started, stopped, and where the text went.
-3. **Keyboard first.** Every action is reachable without a mouse, and shortcuts are shown next to the actions they trigger.
-4. **Never block.** Toasts with Undo instead of confirmation dialogs; nothing modal on the dictation path.
-5. **Trust is visible.** Local-only status, loaded models, and what happened to each utterance are always discoverable.
-6. **Progressive disclosure.** Defaults work; advanced options exist but stay out of the way.
+## 2. Design Tokens
 
-## 2. Core flows to design (not just screens)
+The visual system uses warm-charcoal neutrals warmed off Adwaita's cool gray, paired with Adwaita Blue. 1px planar borders replace decorative gradients, glass, glow, or neon.
 
-| Flow | Steps | Must answer for the user |
-|---|---|---|
-| Dictate (hold) | press → listening → release → processing → inserted | Is it hearing me? Did it finish? Where did the text go? |
-| Dictate (tap) | tap → listening → silence auto-stop or tap → inserted | When will it stop? How do I stop/cancel? |
-| Cancel | listening → Esc → discarded | Was anything saved or typed? (No.) |
-| No text field focused | processing → copied to clipboard | Where is my text? |
-| Correct a mistake | open dashboard → find entry → edit → "add to dictionary?" | Will it get this right next time? |
-| Undo / paste last | hotkey → text removed / re-inserted | What exactly was undone? |
-| Selection command | select text → hotkey → speak instruction → replaced | What will be changed? Can I revert? |
-| Switch mode | HUD menu / mode hotkey / spoken prefix | Which mode am I in right now? |
-| First run | permission → shortcut → model → try it | Is it set up? What do I press? |
-| Install a model | browse → download → verify → set active | Size, speed on *my* machine, is it safe? |
-| Translate | speak A → text in B | Which language pair is active? |
+### Color Tokens
 
-## 3. Floating HUD (primary surface)
+| Token | OKLCH Value | sRGB Hex Fallback | Purpose / Usage |
+|---|---|---|---|
+| `--desktop` | `oklch(15.5% 0.012 65)` | `#100b07` | Stage behind the window / desktop surface |
+| `--bg` | `oklch(21% 0.01 72)` | `#1b1813` | Main Libadwaita window canvas background |
+| `--surface` | `oklch(24.5% 0.01 72)` | `#23201b` | Sidebar, input fields, popovers, grouped containers |
+| `--raised` | `oklch(28.8% 0.01 72)` | `#2e2a26` | Card backgrounds, list selections, active items |
+| `--fg` | `oklch(94% 0.014 85)` | `#efebe1` | Primary text and foreground glyphs |
+| `--muted` | `oklch(72% 0.016 78)` | `#aaa49a` | Secondary text, shortcut keycaps, metadata |
+| `--border` | `oklch(36% 0.01 72)` | `#403c37` | 1px planar boundaries, dividers, card borders |
+| `--accent` | `oklch(70% 0.125 250)` | `#3584e4` | Adwaita Blue: active navigation icons, primary buttons, listening waveform bars |
+| `--ok` | `oklch(72% 0.10 155)` | `#6fb789` | Status: inserted success, positive feedback |
+| `--warn` | `oklch(80% 0.10 85)` | `#dbb970` | Status: warning, attention required |
+| `--danger` | `oklch(66% 0.15 28)` | `#df695c` | Status: error, destructive actions |
 
-Stitch model: a **compact circular anchor** (~28px) that stays out of the way when idle, plus a **companion frosted HUD pill** that appears while dictating / processing / confirming outcome. Visual tokens: Quiet Precision (warm charcoal surfaces, saffron `#E08A1E` accent, Inter + JetBrains Mono, libadwaita radii, planar borders — no decorative AI glow meshes).
+> [!NOTE]
+> GNOME Shell St uses exact sRGB hex mappings (`#3584e4`, `#1b1813`, `#23201b`, `#403c37`, `#efebe1`) because St lacks `oklch()` color-space support.
 
-| State | Anchor | Companion HUD |
-|---|---|---|
-| **Idle** | Neutral 28px circle; hover shows hotkey hint | None |
-| **Listening** | Saffron fill + mic icon + volume pulse ring | Waveform bars · mode · language pair · elapsed time |
-| **Processing** | Spinner ring around core | “Transcribing…” · active model id |
-| **Inserted** | Brief success cue | Optional short confirmation, then collapse to idle |
-| **Copied** | Check / success fill | “Copied to clipboard” · reason (e.g. no focus) · paste keycap |
-| **Cancelled** | Returns to idle; no history entry | Brief “Cancelled” or none |
-| **Error** | Alert glyph / crimson treatment | Plain error + one recovery action (e.g. “Check audio settings”) |
-| **History paused** | Distinct paused cue | Optional “History paused” |
-| **Hidden** | Not drawn; hotkeys still work | — |
+### Geometry, Radii & Posture
 
-Status must never rely on color alone — pair it with an icon, a shape, or a label. Reduced-motion: replace waveform bounce / pulse ring with a static listening glyph and a non-animated spinner alternative.
+- **Window Canvas:** Width `min(1120px, 100%)`, height `min(760px, calc(100vh - 32px))`, border radius `12px` (`--window-radius`).
+- **Controls & Cards:** Border radius `8px` (`--radius`).
+- **HUD Posture:** 9999px full pill radius only on the floating HUD overlay and search input.
+- **Rules & Planar Borders:** Strict 1px planar borders (`var(--border)`). No decorative drop shadows or glow (`--shadow-pop: none`).
+- **Client-Side Decorations (CSD):** 46px integrated headerbar with window drag area, title, offline provenance stamp, and window controls (`wc-min`, `wc-max`, `wc-close`).
 
-Other surfaces:
+### Motion & Easing
 
-| Surface | States |
-|---|---|
-| History | empty (first use) · loading · results · no search results · entry selected · editing · multi-select · audio playing |
-| Models | none installed · downloading (progress, cancel) · verifying · installed · active · download failed · benchmark running/results |
-| App-wide | daemon stopped · GNOME extension missing (HUD unavailable, hotkey still works) · microphone missing · permission denied · AI model unloaded (idle) |
+- **Enter Duration:** `--dur: 180ms` with easing `--ease: cubic-bezier(0.23, 1, 0.32, 1)`.
+- **Exit Duration:** `--dur-out: 140ms`.
+- **Reduced Motion:** When `prefers-reduced-motion: reduce` is detected, animations (waveform bar bounce, spinner rotation, pulse rings) are replaced with static glyphs and immediate opacity transitions.
 
-## 4. Interaction rules
+## 3. Typography Contract
 
-- **Keyboard map (dashboard):** `Ctrl+K` command palette · `/` focus search · `J/K` next/prev entry · `Enter` re-insert · `C` copy · `E` edit · `P` pin · `Del` delete (Undo toast) · `Esc` close pane/palette.
-- **Command palette** reaches every action, mode, model, setting, and history search.
-- **Edit to correct:** editing an entry suggests adding changed words to the dictionary.
-- **Undo over confirm:** destructive actions happen immediately with an Undo toast. Only "Delete all history" asks for typed confirmation.
-- **Latency honesty:** modes with AI cleanup show their measured extra delay.
-- **Mode always visible:** current mode (and language pair when relevant) shown on the companion HUD while listening/processing and in the dashboard status area.
-- **Raw is never lost:** any cleaned/translated entry can be toggled to its raw transcript.
-- **HUD etiquette:** draggable (anchor), snaps to screen edges, remembers position, hides in fullscreen apps; companion pill must not cover the text the user is typing into.
-- **Context menu (right-click anchor):** active mode selector, open dashboard, pause history, hide HUD, quit — with keycap accelerators (Stitch Adwaita popover).
-- **Downloads:** show source, size, and verification result; this is the only network action and the UI says so.
+Narad packages offline fonts directly into the application distribution, ensuring 100% offline visual consistency without external CDN requests.
 
-## 5. Information hierarchy
+- **Display & Body Font:**
+  `"IBM Plex Sans", "Cantarell", "Adwaita Sans", "Noto Sans", sans-serif`
+  Base sizing: 15px / 1.5 line height, letter-spacing 0, antialiased.
+- **Monospace Font:**
+  `"IBM Plex Mono", "Noto Sans Mono", ui-monospace, monospace`
+  Used for model IDs, timestamps, keyboard shortcuts (`.kbd`), provenance stamps, tabular statistics, and code dictation output.
+- **Tabular Figures:** Numbers in timers, counts, and stats use tabular figures (`font-variant-numeric: tabular-nums`) with tight tracking.
 
-- **History row:** text preview first; then time, app, mode; duration and models are secondary.
-- **Entry detail:** final text → actions (copy, re-insert) → raw/final toggle → audio → metadata.
-- **Stats:** one headline number (time saved), then trends, then breakdowns.
-- **Models:** "what's active and how fast it is on this machine" before the catalog.
-- **Settings:** grouped by user intent (Shortcuts, Microphone, Modes, Words, Privacy), not by internal component.
+## 4. Raycast-Style Floating HUD (Primary Surface)
 
-## 6. Content and tone
+The primary surface is an always-on-top GNOME Shell companion overlay (`Main.layoutManager.addChrome`). When idle, it rests as an unobtrusive 28px circular anchor. When dictating or processing, it expands smoothly into a Raycast-style floating pill displaying microphone level, waveform bars, elapsed time, mode, and insertion feedback.
 
-- Plain, short, sentence case. No hype, no "AI magic".
-- Buttons are verbs: "Re-insert", "Download", "Run benchmark".
-- Errors state what happened and what to do: "Microphone unavailable. Choose another in Settings → Audio."
-- Design with realistic and stress-case content: long dictations, Hindi/Devanagari text, mixed Hinglish, code, very short one-word entries, thousands of entries.
+### HUD State Machine
 
-## 7. Accessibility
+| State | Anchor / Visual | Companion Pill Content | Interaction & Feedback |
+|---|---|---|---|
+| **Idle** | Neutral 28px circular anchor with microphone glyph (`.hud.is-idle`) | Collapsed; hover reveals global hotkey hint (`Ctrl+Alt+Space`) | Click toggles dictation; right-click opens Adwaita popover menu. |
+| **Listening** | Adwaita Blue fill + active mic icon | 4 animated waveform bars in Adwaita Blue (`--accent`), "Listening" label, mode stamp ("Hold" / "Tap"), and elapsed timer (`0:00`) | Hold release or second tap stops; `Esc` cancels and discards audio. |
+| **Transcribing** | Spinner ring around core icon (`.spinner`) | "Transcribing" label, active local model stamp (e.g. `small · local` or `parakeet · local`) | Inference active; audio stream closed. |
+| **Inserted** | Success checkmark in `--ok` green | "Inserted at cursor" label, brief Undo button affordance (`.hud-undo`) | Outcome confirmed; text placed via clipboard + paste portal. |
+| **Copied** | Success checkmark in `--ok` green | "Copied to clipboard" label, reason note (e.g. "No focused input"), and paste keycap hint (`Ctrl+V`) | Triggered if no editable cursor was detected. |
+| **Cancelled** | Collapses back to idle anchor | Brief "Cancelled" toast or silent collapse; no transcript or audio saved | Triggered by pressing `Esc` during recording. |
+| **Error** | Alert glyph in `--danger` red | Plain error description (e.g. "Microphone unavailable") + single recovery action | Status paired with icon; right-click offers audio device settings. |
+| **Paused** | Paused indicator badge on anchor | "History paused" banner / badge | Transcriptions still insert at cursor but are not written to history. |
 
-- Visible keyboard focus on every interactive element.
-- No information by color alone.
-- Comfortable pointer targets, including the HUD anchor (~28px minimum with hover affordance).
-- Layout holds at larger text sizes and narrow window widths.
-- Reduced-motion alternative for listening waveform / pulse.
-- Screen-reader announcements for recording start/stop and insertion result.
+### Anchor Context Menu (Right-Click)
+
+A Libadwaita popover menu anchored to the floating pill:
+- **Hold to talk** (`1`): Set activation posture to push-to-talk.
+- **Tap to toggle** (`2`): Set activation posture to toggle recording.
+- **Pause history** (`P`): Toggle recording transcripts to SQLite.
+- **Open dashboard** (`Enter`): Bring the Tauri dashboard to focus.
+- **Stats** (`S`): Open local statistics view.
+- **Quit** (`Q`): Terminate the daemon and extension HUD.
+
+## 5. The 9 Core Screens
+
+The application UI is structured across 9 distinct user-facing surfaces (`DESIGN-MANIFEST.json`):
+
+1. **Launcher / Overview (`index.html`):**
+   The central desktop hub. Displays an overview of Narad's offline capabilities, active model stamp (`small · local`), an interactive miniature HUD preview widget, and links to all primary surfaces.
+2. **Floating HUD (`narad-hud.html`):**
+   Full desktop stage demonstrating the 28px circular anchor, active waveform companion pill, right-click menu, focused editor interaction, and live state transitions.
+3. **Master-Detail History (`narad-history.html`):**
+   Dual-pane transcript browser. Left pane houses search filter (`/`) and transcript list; right pane shows transcript details, audio player with interactive scrubber waveform (`.wave`), raw speech vs AI-cleaned text toggle, and "Keep clip" retention control.
+4. **Local Statistics (`narad-stats.html`):**
+   Honest local analytics: word counts, speaking duration, audio clips kept, delivery destination breakdown (target apps), and custom vocabulary hits. No speculative "time saved" or vanity metrics.
+5. **Speech Models (`narad-models.html`):**
+   Local model catalog and manager. Inspect installed ASR models (Parakeet CTC 110M default, Whisper variants), download progress, SHA-256 verification status, on-disk size, and benchmark execution.
+6. **Custom Words (`narad-words.html`):**
+   Domain vocabulary and acronym dictionary (e.g., `drm_ioctl_kernel`, `Libadwaita`, `oklch`, `Wayland`). Maps spoken phonetics to precise written terms to bias speech decoding.
+7. **Settings (`narad-settings.html`):**
+   System preferences grouped by intent: activation mode (hold vs tap), global shortcuts, insertion target (insert at cursor vs copy to clipboard), audio input device picker, and autostart on login.
+8. **First-run Setup (`narad-setup.html`):**
+   Frictionless 3-step setup wizard: microphone permission and input detection, shortcut confirmation, and a 3-second live dictation test.
+9. **Dictation Sequence (`narad-dictation.html`):**
+   Interactive walkthrough and motion timeline demonstrating the 14-second desktop dictation cycle from shortcut press to caret delivery.
+
+## 6. Interaction & Keyboard Map
+
+Narad adheres to a strict keyboard-first posture. Every primary action displays its keycap (`.kbd`).
+
+### Global Shortcuts
+
+- **Dictate (Hold / Tap):** `Ctrl+Alt+Space` (configurable)
+- **Cancel Recording:** `Esc` (registered only while recording is active)
+- **Selection Command:** `Ctrl+Alt+R` (speak instruction on selected text)
+- **Paste Last Transcription:** `Ctrl+Alt+V`
+- **Undo Last Insertion:** `Ctrl+Alt+Z`
+- **Mode Quick Switch:** `Ctrl+Alt+1..9`
+
+### Master-Detail History Navigation
+
+- `/`: Focus search input
+- `J` or `ArrowDown`: Select next transcript in list
+- `K` or `ArrowUp`: Select previous transcript in list
+- `Enter`: Re-insert selected transcript at current cursor
+- `C`: Copy selected transcript to clipboard
+- `Del` or `Backspace`: Delete transcript (triggers non-blocking Undo toast)
+- `Esc`: Clear search input focus or close detail view
+
+### Global Dashboard & Popover Controls
+
+- `Ctrl+K`: Global command palette
+- `1` / `2`: Select Hold / Tap mode in HUD menu
+- `P`: Toggle Pause History in HUD menu
+- `Esc`: Dismiss HUD popover or active modal
+
+## 7. Information Hierarchy & Provenance
+
+- **Provenance Stamp:** Every surface displays provenance in monospace (`IBM Plex Mono`): model identifier, timestamp, local/offline indicator, and shortcut keycaps (`data-model-stamp`, `data-od-id="offline-stamp"`).
+- **History Detail Hierarchy:** Final text first → primary action ("Insert at cursor" in Adwaita Blue) → raw/cleaned version toggle → audio scrubber player → metadata line (target app, time, model).
+- **Honest Analytics:** Only real, measured counts are recorded. The interface never invents speculative "time saved" or "typing speed" approximations.
+
+## 8. Accessibility Rules
+
+- **No Status by Color Alone:** Every state change pairs color with an icon glyph, a shape alteration, or a textual label.
+- **High-Contrast Focus Indicators:** All interactive elements (`button`, `input`, `a`, `.nav-item`, `.row`) provide visible focus rings using 2px high-contrast outlines.
+- **Screen Reader Support:** Recording state changes and insertion results announce status via `aria-live="polite"` live regions (`role="status"`). Menus and listboxes use standard WAI-ARIA attributes (`role="menu"`, `role="listbox"`, `aria-checked`, `aria-pressed`).
+- **Target Sizes:** Minimum interactive hit target size is 28px with generous hover and padding envelopes.
+- **Reduced Motion:** Complete support for `prefers-reduced-motion: reduce`: waveform bars stay static, spinner rotation is replaced with a static loader icon, and animations default to subtle opacity changes.

@@ -95,7 +95,9 @@ pub fn boilerplate_for_mode(mode: &str) -> &'static [&'static str] {
 
 /// Extract normalized word tokens for grounding analysis.
 pub fn tokenize_words(text: &str) -> Vec<String> {
-    text.split_whitespace()
+    let normalized = text.replace('’', "'");
+    normalized
+        .split_whitespace()
         .map(|tok| {
             let trimmed = tok.trim_matches(|c: char| {
                 !c.is_alphanumeric() && c != '•' && c != '-' && c != '*'
@@ -104,6 +106,62 @@ pub fn tokenize_words(text: &str) -> Vec<String> {
         })
         .filter(|tok| !tok.is_empty())
         .collect()
+}
+
+/// Homophone equivalence classes where cross-substitutions represent valid phonetic/syntactic corrections
+/// rather than ungrounded novel-word hallucinations (ADR-0001).
+pub const HOMOPHONE_CLASSES: &[&[&str]] = &[
+    &["there", "their", "they're", "theyre"],
+    &["to", "too", "two"],
+    &["cache", "cash"],
+    &["hear", "here"],
+    &["its", "it's"],
+];
+
+/// Checks if a candidate word is a valid homophone equivalent to any word in `raw_words`.
+pub fn is_homophone_equivalent(word: &str, raw_words: &HashSet<String>) -> bool {
+    let word_norm = word.replace('’', "'").to_lowercase();
+    for class in HOMOPHONE_CLASSES {
+        let is_in_class = class.iter().any(|&member| {
+            member.eq_ignore_ascii_case(&word_norm)
+                || member.replace('\'', "").eq_ignore_ascii_case(&word_norm.replace('\'', ""))
+        });
+        if is_in_class {
+            let has_raw_member = class.iter().any(|&member| {
+                raw_words.contains(member)
+                    || raw_words.contains(&member.replace('\'', ""))
+                    || raw_words.iter().any(|rw| {
+                        let rw_norm = rw.replace('’', "'");
+                        rw_norm.eq_ignore_ascii_case(member)
+                            || rw_norm.replace('\'', "").eq_ignore_ascii_case(&member.replace('\'', ""))
+                    })
+            });
+            if has_raw_member {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Checks if a candidate word is an allowed grammar correction (e.g. contraction expansion)
+/// or homophone equivalent grounded in `raw_words`.
+pub fn is_grounded_grammar_or_homophone(word: &str, raw_words: &HashSet<String>) -> bool {
+    if is_homophone_equivalent(word, raw_words) {
+        return true;
+    }
+    for &(contraction, expansion) in CONTRACTIONS {
+        let norm_contraction = contraction.replace('\'', "");
+        if raw_words.contains(contraction)
+            || raw_words.contains(&norm_contraction)
+            || raw_words.iter().any(|rw| rw.replace('’', "'").eq_ignore_ascii_case(contraction))
+        {
+            if expansion.split_whitespace().any(|part| part.eq_ignore_ascii_case(word)) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 impl GroundingGuard {
@@ -141,7 +199,7 @@ impl GroundingGuard {
                 continue;
             }
             non_boilerplate_count += 1;
-            if !raw_words.contains(&word) {
+            if !raw_words.contains(&word) && !is_grounded_grammar_or_homophone(&word, &raw_words) {
                 novel_words.push(word);
             }
         }
@@ -392,9 +450,305 @@ fn standardize_sentence(text: &str) -> String {
     final_text
 }
 
-/// Clean mode heuristics: strips fillers, repetitions, and standardizes spacing/punctuation.
+const REPAIR_PATTERNS: &[&str] = &[
+    "sorry, i meant",
+    "sorry i meant",
+    "sorry, i mean",
+    "sorry i mean",
+    "actually, no",
+    "actually no",
+    "strike that",
+    "scratch that",
+    "wait, no",
+    "wait no",
+    "no, wait",
+    "no wait",
+];
+
+const CLAUSAL_BOUNDARY_WORDS: &[&str] = &[
+    // Prepositions
+    "at", "in", "on", "for", "to", "from", "with", "by", "about",
+    "into", "through", "over", "under", "between", "during", "before",
+    "after", "of", "towards", "toward", "upon", "within", "without",
+    // Conjunctions & Subordinators
+    "and", "but", "or", "nor", "yet", "so", "because", "although",
+    "though", "if", "since", "unless", "while", "that", "which",
+    "than", "as", "whether",
+    // Auxiliary & Copular verbs
+    "is", "are", "was", "were", "be", "been", "am", "has", "have", "had",
+    "will", "would", "shall", "should", "can", "could", "may", "might", "must",
+    // Common Action & Transitive Verbs
+    "meet", "want", "need", "see", "call", "send", "turn", "take",
+    "give", "get", "make", "choose", "pick", "schedule", "like",
+    "prefer", "bring", "buy", "order", "visit", "find", "go", "come",
+    "say", "tell", "think", "thought", "wrote", "write", "read", "set",
+];
+
+fn split_last_sentence_boundary(left: &str) -> (&str, &str) {
+    let chars: Vec<(usize, char)> = left.char_indices().collect();
+    for (i, &(byte_idx, c)) in chars.iter().enumerate().rev() {
+        if c == '\n' {
+            return (&left[..=byte_idx], &left[byte_idx + 1..]);
+        }
+        if c == '.' || c == '!' || c == '?' {
+            let next_is_ws = i + 1 == chars.len() || chars[i + 1].1.is_whitespace();
+            if next_is_ws {
+                let end_boundary = if i + 1 < chars.len() && chars[i + 1].1.is_whitespace() {
+                    chars[i + 1].0 + chars[i + 1].1.len_utf8()
+                } else {
+                    byte_idx + c.len_utf8()
+                };
+                return (&left[..end_boundary], &left[end_boundary..]);
+            }
+        }
+    }
+    ("", left)
+}
+
+fn find_first_repair_marker(text: &str) -> Option<(usize, usize)> {
+    let lower = text.to_ascii_lowercase();
+    let mut earliest: Option<(usize, usize)> = None;
+
+    for &pattern in REPAIR_PATTERNS {
+        let mut start_search = 0;
+        while let Some(rel_pos) = lower[start_search..].find(pattern) {
+            let pos = start_search + rel_pos;
+            let end = pos + pattern.len();
+
+            let left_ok = if pos == 0 {
+                true
+            } else {
+                let prev_char = text[..pos].chars().next_back().unwrap();
+                !prev_char.is_alphanumeric()
+            };
+
+            let right_ok = if end == text.len() {
+                true
+            } else {
+                let next_char = text[end..].chars().next().unwrap();
+                !next_char.is_alphanumeric()
+            };
+
+            if left_ok && right_ok {
+                let mut actual_end = end;
+                let rem = &text[end..];
+                for c in rem.chars() {
+                    if c == ',' || c == '-' || c == ';' || c.is_whitespace() {
+                        actual_end += c.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+
+                if earliest.map_or(true, |(earliest_pos, _)| pos < earliest_pos) {
+                    earliest = Some((pos, actual_end));
+                }
+                break;
+            }
+
+            start_search = pos + 1;
+        }
+    }
+
+    earliest
+}
+
+/// Prunes false starts and conversational speech repairs (FR-TXT-10).
+///
+/// Detects conversational backtrack markers ("no wait", "wait no", "actually no",
+/// "sorry I meant", "strike that", "scratch that") and excises the abandoned
+/// constituent phrase back to the preceding clausal or punctuation boundary while
+/// preserving the corrected right-hand clause.
+///
+/// # Examples
+/// ```
+/// use naradd::cleanup::prune_speech_repairs;
+/// assert_eq!(prune_speech_repairs("meet at four no wait five pm"), "meet at five pm");
+/// assert_eq!(prune_speech_repairs("twenty three no wait twenty four"), "twenty four");
+/// ```
+pub fn prune_speech_repairs(text: &str) -> String {
+    let mut current = text.to_string();
+
+    for _ in 0..10 {
+        let Some((pos, end)) = find_first_repair_marker(&current) else {
+            break;
+        };
+
+        let left = &current[..pos];
+        let right = current[end..].trim_start_matches(|c: char| {
+            c.is_whitespace() || c == ',' || c == '-' || c == ':' || c == ';'
+        });
+
+        if right.is_empty() {
+            let trimmed_left = left.trim_end_matches(|c: char| {
+                c.is_whitespace() || c == ',' || c == '-' || c == ':' || c == ';'
+            });
+            current = trimmed_left.to_string();
+            continue;
+        }
+
+        let trimmed_left = left.trim_end_matches(|c: char| {
+            c.is_whitespace() || c == ',' || c == '-' || c == ':' || c == ';'
+        });
+
+        if trimmed_left.is_empty() {
+            current = right.to_string();
+            continue;
+        }
+
+        let (sentence_prefix, clause) = split_last_sentence_boundary(trimmed_left);
+        let clause_tokens: Vec<&str> = clause.split_whitespace().collect();
+
+        if clause_tokens.is_empty() {
+            let mut res = sentence_prefix.to_string();
+            if !res.is_empty() && !res.ends_with(' ') && !res.ends_with('\n') {
+                res.push(' ');
+            }
+            res.push_str(right);
+            current = res;
+            continue;
+        }
+
+        if clause_tokens.len() == 1 {
+            let left_is_cap = trimmed_left.chars().next().map_or(false, |c| c.is_uppercase())
+                || clause.chars().next().map_or(false, |c| c.is_uppercase());
+            if sentence_prefix.is_empty() {
+                if left_is_cap {
+                    let mut right_chars = right.chars();
+                    if let Some(first) = right_chars.next() {
+                        let mut cap = String::new();
+                        cap.extend(first.to_uppercase());
+                        cap.push_str(right_chars.as_str());
+                        current = cap;
+                        continue;
+                    }
+                }
+                current = right.to_string();
+            } else {
+                let mut res = sentence_prefix.to_string();
+                if !res.ends_with(' ') && !res.ends_with('\n') {
+                    res.push(' ');
+                }
+                if left_is_cap {
+                    let mut right_chars = right.chars();
+                    if let Some(first) = right_chars.next() {
+                        let mut cap = String::new();
+                        cap.extend(first.to_uppercase());
+                        cap.push_str(right_chars.as_str());
+                        res.push_str(&cap);
+                        current = res;
+                        continue;
+                    }
+                }
+                res.push_str(right);
+                current = res;
+            }
+            continue;
+        }
+
+        let mut boundary_idx = None;
+        for i in (0..clause_tokens.len() - 1).rev() {
+            let tok_clean = clause_tokens[i]
+                .trim_matches(|c: char| !c.is_alphanumeric())
+                .to_ascii_lowercase();
+
+            if clause_tokens[i].ends_with(',')
+                || clause_tokens[i].ends_with(';')
+                || clause_tokens[i].ends_with(':')
+            {
+                boundary_idx = Some(i);
+                break;
+            }
+
+            if CLAUSAL_BOUNDARY_WORDS.contains(&tok_clean.as_str()) {
+                boundary_idx = Some(i);
+                break;
+            }
+        }
+
+        let preserved_tokens = match boundary_idx {
+            Some(b_idx) => {
+                let mut p_tokens = clause_tokens[0..=b_idx].to_vec();
+                let right_tokens: Vec<&str> = right.split_whitespace().collect();
+
+                let max_check = p_tokens.len().min(right_tokens.len());
+                let mut overlap = 0;
+                for k in 1..=max_check {
+                    let p_slice = &p_tokens[p_tokens.len() - k..];
+                    let r_slice = &right_tokens[..k];
+                    let matches = p_slice.iter().zip(r_slice.iter()).all(|(p, r)| {
+                        let p_c = p.trim_matches(|c: char| !c.is_alphanumeric()).to_ascii_lowercase();
+                        let r_c = r.trim_matches(|c: char| !c.is_alphanumeric()).to_ascii_lowercase();
+                        p_c == r_c
+                    });
+                    if matches {
+                        overlap = k;
+                    }
+                }
+                p_tokens.truncate(p_tokens.len() - overlap);
+                p_tokens
+            }
+            None => Vec::new(),
+        };
+
+        if preserved_tokens.is_empty() {
+            let left_is_cap = trimmed_left.chars().next().map_or(false, |c| c.is_uppercase())
+                || clause.chars().next().map_or(false, |c| c.is_uppercase());
+            if sentence_prefix.is_empty() {
+                if left_is_cap {
+                    let mut right_chars = right.chars();
+                    if let Some(first) = right_chars.next() {
+                        let mut cap = String::new();
+                        cap.extend(first.to_uppercase());
+                        cap.push_str(right_chars.as_str());
+                        current = cap;
+                        continue;
+                    }
+                }
+                current = right.to_string();
+            } else {
+                let mut res = sentence_prefix.to_string();
+                if !res.ends_with(' ') && !res.ends_with('\n') {
+                    res.push(' ');
+                }
+                if left_is_cap {
+                    let mut right_chars = right.chars();
+                    if let Some(first) = right_chars.next() {
+                        let mut cap = String::new();
+                        cap.extend(first.to_uppercase());
+                        cap.push_str(right_chars.as_str());
+                        res.push_str(&cap);
+                        current = res;
+                        continue;
+                    }
+                }
+                res.push_str(right);
+                current = res;
+            }
+        } else {
+            let preserved_clause = preserved_tokens.join(" ");
+            let mut full_prefix = sentence_prefix.to_string();
+            if !full_prefix.is_empty() && !full_prefix.ends_with(' ') && !full_prefix.ends_with('\n') {
+                full_prefix.push(' ');
+            }
+            full_prefix.push_str(&preserved_clause);
+
+            let mut res = full_prefix;
+            if !res.is_empty() && !res.ends_with(' ') && !res.ends_with('\n') {
+                res.push(' ');
+            }
+            res.push_str(right);
+            current = res;
+        }
+    }
+
+    current
+}
+
+/// Clean mode heuristics: strips speech repairs, fillers, repetitions, and standardizes spacing/punctuation.
 pub fn clean_text(raw: &str) -> String {
-    let without_fillers = strip_fillers(raw);
+    let without_repairs = prune_speech_repairs(raw);
+    let without_fillers = strip_fillers(&without_repairs);
     let without_repetitions = remove_repetitions(&without_fillers);
     standardize_sentence(&without_repetitions)
 }
@@ -1374,6 +1728,137 @@ mod tests {
             extract_spoken_mode_prefix("code: let x = 42;"),
             Some(("code", "let x = 42;"))
         );
+    }
+
+    #[test]
+    fn test_prune_speech_repairs_single_words() {
+        assert_eq!(prune_speech_repairs("meet at four no wait five pm"), "meet at five pm");
+        assert_eq!(prune_speech_repairs("meet at four wait no five pm"), "meet at five pm");
+        assert_eq!(prune_speech_repairs("meet at four actually no five pm"), "meet at five pm");
+        assert_eq!(prune_speech_repairs("meet at four sorry I meant five pm"), "meet at five pm");
+        assert_eq!(prune_speech_repairs("meet at four strike that five pm"), "meet at five pm");
+        assert_eq!(prune_speech_repairs("meet at four scratch that five pm"), "meet at five pm");
+        assert_eq!(prune_speech_repairs("call John no wait Mary"), "call Mary");
+        assert_eq!(prune_speech_repairs("I want coffee actually no tea"), "I want tea");
+        assert_eq!(prune_speech_repairs("turn left wait no right"), "turn right");
+        assert_eq!(prune_speech_repairs("send email to Alice sorry I meant Bob"), "send email to Bob");
+    }
+
+    #[test]
+    fn test_prune_speech_repairs_multi_word_phrases() {
+        assert_eq!(prune_speech_repairs("twenty three no wait twenty four"), "twenty four");
+        assert_eq!(prune_speech_repairs("one hundred twenty actually no one hundred thirty"), "one hundred thirty");
+        assert_eq!(prune_speech_repairs("meet at four thirty no wait five fifteen pm"), "meet at five fifteen pm");
+        assert_eq!(prune_speech_repairs("flight to New York wait no San Francisco"), "flight to San Francisco");
+        assert_eq!(prune_speech_repairs("schedule for next Monday sorry I meant next Tuesday"), "schedule for next Tuesday");
+        assert_eq!(prune_speech_repairs("the price is ten dollars scratch that twenty dollars"), "the price is twenty dollars");
+        assert_eq!(prune_speech_repairs("we need twenty three wait no twenty four apples"), "we need twenty four apples");
+    }
+
+    #[test]
+    fn test_prune_speech_repairs_boundaries_and_repetition() {
+        assert_eq!(
+            prune_speech_repairs("The flight is confirmed. Meet at four no wait five pm"),
+            "The flight is confirmed. Meet at five pm"
+        );
+        assert_eq!(
+            prune_speech_repairs("First item. Twenty three no wait twenty four"),
+            "First item. Twenty four"
+        );
+        assert_eq!(
+            prune_speech_repairs("meet at four, no wait, five pm"),
+            "meet at five pm"
+        );
+        assert_eq!(
+            prune_speech_repairs("meet at four no wait at five pm"),
+            "meet at five pm"
+        );
+        assert_eq!(
+            prune_speech_repairs("flight to New York no wait to San Francisco"),
+            "flight to San Francisco"
+        );
+        assert_eq!(
+            prune_speech_repairs("normal sentence without repairs"),
+            "normal sentence without repairs"
+        );
+        assert_eq!(
+            prune_speech_repairs("meet at three no wait four actually no five pm"),
+            "meet at five pm"
+        );
+    }
+
+    #[test]
+    fn test_clean_mode_applies_speech_repair_pruning() {
+        let res = apply_cleanup("meet at four no wait five pm", "clean");
+        assert_eq!(res.text, "Meet at five pm.");
+        assert!(res.applied);
+        assert!(!res.flagged);
+
+        let res_phrase = apply_cleanup("twenty three no wait twenty four", "clean");
+        assert_eq!(res_phrase.text, "Twenty four.");
+        assert!(res_phrase.applied);
+        assert!(!res_phrase.flagged);
+    }
+
+    #[test]
+    fn test_grounding_guard_homophone_substitutions_whitelisted() {
+        let guard = GroundingGuard::default();
+
+        // 1. there / their / they're
+        let raw1 = "they went to there house over their";
+        let cleaned1 = "They went to their house over there.";
+        assert!(guard.check_grounding(raw1, cleaned1, "clean").is_ok());
+        let res1 = guard.validate(raw1, cleaned1, "clean");
+        assert!(res1.applied);
+        assert!(!res1.flagged);
+
+        // 2. to / too / two
+        let raw2 = "I have to items and you have to items to";
+        let cleaned2 = "I have two items and you have two items too.";
+        assert!(guard.check_grounding(raw2, cleaned2, "clean").is_ok());
+
+        // 3. cache / cash
+        let raw3 = "clear the CPU cash before paying in cache";
+        let cleaned3 = "Clear the CPU cache before paying in cash.";
+        assert!(guard.check_grounding(raw3, cleaned3, "clean").is_ok());
+
+        // 4. hear / here
+        let raw4 = "can you here me over hear";
+        let cleaned4 = "Can you hear me over here.";
+        assert!(guard.check_grounding(raw4, cleaned4, "clean").is_ok());
+
+        // 5. its / it's
+        let raw5 = "its time for the cat to lick it's paws";
+        let cleaned5 = "It's time for the cat to lick its paws.";
+        assert!(guard.check_grounding(raw5, cleaned5, "clean").is_ok());
+
+        // Grammar contraction expansion
+        let raw_grammar = "I don't know and won't go";
+        let cleaned_grammar = "I do not know and will not go.";
+        assert!(guard.check_grounding(raw_grammar, cleaned_grammar, "clean").is_ok());
+    }
+
+    #[test]
+    fn test_grounding_guard_catches_hallucinations_and_malicious_novel_words() {
+        let guard = GroundingGuard::default();
+
+        let raw = "meet at five pm today";
+        let hallucinated = "Meet at five pm today and buy some bitcoin cryptocurrency.";
+        let check = guard.check_grounding(raw, hallucinated, "clean");
+        assert!(matches!(check, Err(GroundingViolation::NovelWordsExceeded { .. })));
+
+        let res = guard.validate(raw, hallucinated, "clean");
+        assert_eq!(res.text, raw);
+        assert!(res.flagged);
+        assert!(!res.applied);
+
+        // Disallow ungrounded injection of homophones not present in raw
+        let raw_clean = "the quick brown fox";
+        let ungrounded_homophone = "The quick brown fox cache cash there their.";
+        assert!(matches!(
+            guard.check_grounding(raw_clean, ungrounded_homophone, "clean"),
+            Err(GroundingViolation::NovelWordsExceeded { .. })
+        ));
     }
 }
 

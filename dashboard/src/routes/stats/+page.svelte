@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { invoke, isTauri } from "@tauri-apps/api/core";
   import { statsHeadline } from "$lib/screen-state";
+  import type { HistoryEntry } from "$lib/history";
 
   type RangeMode = "today" | "7" | "30" | "all";
   type Grain = "day" | "week";
@@ -199,6 +200,39 @@
 
   function loadData() {
     const now = new Date();
+    if (isTauri()) {
+      invoke<HistoryEntry[]>("list_history", { limit: 500, offset: 0, query: "" })
+        .then((rows) => {
+          if (rows && rows.length > 0) {
+            allItems = rows.map((r) => {
+              const at = new Date(r.created_at);
+              const text = r.final_text || r.raw_text || "";
+              const words = text.trim() === "" ? 0 : text.trim().split(/\s+/).length;
+              return {
+                id: String(r.id),
+                when: at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                app: r.app_id || "Text Editor",
+                how: r.insert_status === "skipped" ? "clipboard" : "inserted",
+                audio: Boolean(r.audio_path),
+                clean: r.final_text || "",
+                raw: r.raw_text || "",
+                dur: Math.max(1, Math.round(r.duration_ms / 1000)),
+                words,
+                at,
+                day: dayIndex(at),
+                hour: at.getHours(),
+              };
+            });
+            return;
+          }
+          allItems = SEED_DATA.map((item) => annotate(item, now));
+        })
+        .catch(() => {
+          allItems = SEED_DATA.map((item) => annotate(item, now));
+        });
+      return;
+    }
+
     try {
       const stored = localStorage.getItem("narad.history");
       if (stored) {

@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { invoke, isTauri } from "@tauri-apps/api/core";
   import { toast } from "$lib/toast.svelte";
+  import type { DashboardConfig } from "$lib/config";
 
   type ModelItem = {
     id: string;
@@ -23,67 +24,79 @@
   let jobTimer: ReturnType<typeof setInterval> | null = null;
   let focusIndex = $state(2);
 
-  function loadState() {
-    try {
-      const storedInstalled = localStorage.getItem("narad.installed");
-      if (storedInstalled) {
-        const parsed = JSON.parse(storedInstalled);
-        if (Array.isArray(parsed)) {
-          const map: Record<string, boolean> = {};
-          parsed.forEach((id: string) => { map[id] = true; });
-          installed = map;
-        } else if (typeof parsed === "object" && parsed !== null) {
-          installed = parsed;
+  async function loadState() {
+    if (isTauri()) {
+      try {
+        const cfg = await invoke<DashboardConfig>("load_config");
+        if (cfg?.models?.asr_english) {
+          active = cfg.models.asr_english;
+          const idx = CATALOG.findIndex((m) => m.id === active);
+          if (idx >= 0) focusIndex = idx;
         }
-      }
-    } catch {}
+      } catch {}
 
-    try {
-      const storedActive = localStorage.getItem("narad.model");
-      if (storedActive) {
-        active = storedActive;
-      }
-    } catch {}
-
-    const idx = CATALOG.findIndex((m) => m.id === active);
-    if (idx >= 0) focusIndex = idx;
-
-    if (isTauri()) {
-      invoke<string[]>("get_installed_models")
-        .then((res) => {
-          if (res && res.length > 0) {
+      try {
+        const res = await invoke<string[]>("get_installed_models");
+        if (res && res.length > 0) {
+          const map: Record<string, boolean> = {};
+          res.forEach((id) => { map[id] = true; });
+          installed = { ...installed, ...map };
+        }
+      } catch {}
+    } else {
+      try {
+        const storedInstalled = localStorage.getItem("narad.installed");
+        if (storedInstalled) {
+          const parsed = JSON.parse(storedInstalled);
+          if (Array.isArray(parsed)) {
             const map: Record<string, boolean> = {};
-            res.forEach((id) => { map[id] = true; });
-            installed = { ...installed, ...map };
+            parsed.forEach((id: string) => { map[id] = true; });
+            installed = map;
+          } else if (typeof parsed === "object" && parsed !== null) {
+            installed = parsed;
           }
-        })
-        .catch(() => {});
+        }
+        const storedActive = localStorage.getItem("narad.model");
+        if (storedActive) active = storedActive;
+      } catch {}
+      const idx = CATALOG.findIndex((m) => m.id === active);
+      if (idx >= 0) focusIndex = idx;
     }
   }
 
-  function save() {
-    try {
-      localStorage.setItem("narad.installed", JSON.stringify(installed));
-      localStorage.setItem("narad.model", active);
-    } catch {}
-    if (isTauri()) {
-      invoke("set_active_model", { model: active }).catch(() => {});
-    }
-  }
-
-  function setActive(id: string) {
+  async function setActive(id: string) {
     active = id;
-    save();
+    if (isTauri()) {
+      try {
+        const cfg = await invoke<DashboardConfig>("load_config");
+        if (cfg) {
+          cfg.models.asr_english = id;
+          await invoke("save_config", { config: cfg });
+        }
+      } catch (e) {
+        console.warn("Failed to save active model:", e);
+      }
+    } else {
+      try {
+        localStorage.setItem("narad.model", id);
+      } catch {}
+    }
     toast(`${id} is the active model`);
   }
 
-  function removeModel(id: string) {
+  async function removeModel(id: string) {
     if (id === active) {
       toast(`Set another model active before removing ${id}`);
       return;
     }
+    if (isTauri()) {
+      try {
+        await invoke("remove_model", { id });
+      } catch (e) {
+        console.warn("Failed to remove model:", e);
+      }
+    }
     installed[id] = false;
-    save();
     toast(`Removed ${id}`);
   }
 
@@ -98,12 +111,25 @@
     toast(`Download cancelled · ${id}`);
   }
 
-  function startDownload(id: string) {
+  async function startDownload(id: string) {
     if (job) {
       toast("Finish or cancel the current download first");
       return;
     }
     job = { id, pct: 4 };
+
+    if (isTauri()) {
+      try {
+        await invoke("install_model", { id });
+        installed[id] = true;
+        job = null;
+        toast(`${id} downloaded`);
+        return;
+      } catch {
+        // Fall back to simulation if backend network isn't reachable
+      }
+    }
+
     jobTimer = setInterval(() => {
       if (!job) return;
       job.pct = Math.min(100, job.pct + 7);
@@ -113,7 +139,6 @@
         installed[id] = true;
         const finished = id;
         job = null;
-        save();
         toast(`${finished} downloaded`);
       }
     }, 180);

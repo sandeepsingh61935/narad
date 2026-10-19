@@ -150,14 +150,32 @@
     menuOpen = true;
   }
 
-  function selectMode(m: string) {
+  async function selectMode(m: string) {
     activeMode = m;
     menuOpen = false;
+    if (isTauri()) {
+      try {
+        const cfg = await invoke<DashboardConfig>("load_config");
+        if (cfg) {
+          cfg.general.active_mode = m;
+          await invoke("save_config", { config: cfg });
+        }
+      } catch (e) {
+        console.warn("Failed to save mode:", e);
+      }
+    }
     toast(`Mode set to ${m}`);
   }
 
-  function togglePause() {
+  async function togglePause() {
     paused = !paused;
+    if (isTauri()) {
+      try {
+        await invoke("set_paused", { paused });
+      } catch (e) {
+        console.warn("Failed to set paused on daemon:", e);
+      }
+    }
     toast(paused ? "History paused" : "History resumed");
   }
 
@@ -171,6 +189,11 @@
       const cfg = await invoke<DashboardConfig>("load_config");
       activeMode = cfg.general.active_mode || "plain";
       modelLabel = cfg.models.asr_english || "parakeet-ctc-110m-int8";
+      const status = await invoke<{ paused: boolean; mode: string }>("session_status");
+      if (status) {
+        paused = status.paused;
+        if (status.mode) activeMode = status.mode;
+      }
     } catch {
       // ignore
     }

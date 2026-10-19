@@ -56,59 +56,93 @@
     return path === href || path.startsWith(`${href}/`);
   }
 
-  function getActiveTitle(pathname: string): string {
-    if (pathname.startsWith("/hud")) return "Floating HUD";
-    if (pathname.startsWith("/stats")) return "Stats";
-    if (pathname.startsWith("/models")) return "Speech models";
-    if (pathname.startsWith("/words") || pathname.startsWith("/dictionary")) return "Custom words";
-    if (pathname.startsWith("/settings")) return "Settings";
-    return "History";
-  }
+  type RouteMeta = {
+    title: string;
+    sidebarFooter: string;
+    statusbarSpacer: string;
+    shortcuts: { kbd: string; label: string }[];
+  };
 
-  function getSidebarFooter(pathname: string): string {
-    if (pathname.startsWith("/words") || pathname.startsWith("/dictionary")) return "Applied on the next transcription";
-    if (pathname.startsWith("/settings")) return "Changes apply immediately";
-    if (pathname.startsWith("/models")) return "Weights never leave this machine";
-    if (pathname.startsWith("/stats")) return "Counts stay on this machine";
-    return "small · local";
-  }
-
-  function getStatusShortcuts(pathname: string): { kbd: string; label: string }[] {
-    if (pathname.startsWith("/words") || pathname.startsWith("/dictionary")) {
-      return [
-        { kbd: "N", label: "add word" },
-        { kbd: "Esc", label: "close dialog" },
-      ];
-    }
-    if (pathname.startsWith("/settings")) {
-      return [];
-    }
-    if (pathname.startsWith("/models")) {
-      return [
-        { kbd: "J", label: "" },
-        { kbd: "K", label: "move" },
-        { kbd: "Enter", label: "download or set active" },
-      ];
-    }
-    if (pathname.startsWith("/stats")) {
-      return [
+  const ROUTE_CONFIG: Record<string, RouteMeta> = {
+    "/hud": {
+      title: "Floating HUD",
+      sidebarFooter: "small · local",
+      statusbarSpacer: "small · local",
+      shortcuts: [],
+    },
+    "/stats": {
+      title: "Stats",
+      sidebarFooter: "Counts stay on this machine",
+      statusbarSpacer: "All metrics computed locally",
+      shortcuts: [
         { kbd: "1", label: "today" },
         { kbd: "2", label: "7 days" },
         { kbd: "3", label: "30 days" },
         { kbd: "4", label: "all" },
-      ];
+      ],
+    },
+    "/models": {
+      title: "Speech models",
+      sidebarFooter: "Weights never leave this machine",
+      statusbarSpacer: "small · local",
+      shortcuts: [
+        { kbd: "J", label: "" },
+        { kbd: "K", label: "move" },
+        { kbd: "Enter", label: "download or set active" },
+      ],
+    },
+    "/words": {
+      title: "Custom words",
+      sidebarFooter: "Applied on the next transcription",
+      statusbarSpacer: "Saved on this machine",
+      shortcuts: [
+        { kbd: "N", label: "add word" },
+        { kbd: "Esc", label: "close dialog" },
+      ],
+    },
+    "/settings": {
+      title: "Settings",
+      sidebarFooter: "Changes apply immediately",
+      statusbarSpacer: "Changes apply immediately",
+      shortcuts: [],
+    },
+    "/": {
+      title: "History",
+      sidebarFooter: "small · local",
+      statusbarSpacer: "small · local",
+      shortcuts: [
+        { kbd: "J", label: "" },
+        { kbd: "K", label: "move" },
+        { kbd: "Enter", label: "insert" },
+        { kbd: "C", label: "copy" },
+        { kbd: "Del", label: "delete" },
+        { kbd: "/", label: "search" },
+      ],
+    },
+  };
+
+  function getRouteMeta(pathname: string): RouteMeta {
+    if (pathname.startsWith("/dictionary")) return ROUTE_CONFIG["/words"];
+    for (const [prefix, meta] of Object.entries(ROUTE_CONFIG)) {
+      if (prefix !== "/" && pathname.startsWith(prefix)) return meta;
     }
-    if (pathname.startsWith("/hud")) {
-      return [];
-    }
-    return [
-      { kbd: "J", label: "" },
-      { kbd: "K", label: "move" },
-      { kbd: "Enter", label: "insert" },
-      { kbd: "C", label: "copy" },
-      { kbd: "Del", label: "delete" },
-      { kbd: "/", label: "search" },
-    ];
+    return ROUTE_CONFIG["/"];
+  }
+
+  function getActiveTitle(pathname: string): string {
+    return getRouteMeta(pathname).title;
+  }
+
+  function getSidebarFooter(pathname: string): string {
+    return getRouteMeta(pathname).sidebarFooter;
+  }
+
+  function getStatusShortcuts(pathname: string): { kbd: string; label: string }[] {
+    return getRouteMeta(pathname).shortcuts;
+  }
+
+  function getStatusSpacer(pathname: string): string {
+    return getRouteMeta(pathname).statusbarSpacer;
   }
 
   async function minimize() {
@@ -241,15 +275,7 @@
           <span><span class="kbd">{item.kbd}</span> {item.label}</span>
         {/each}
         <span class="spacer mono">
-          {#if page.url.pathname.startsWith('/words') || page.url.pathname.startsWith('/dictionary')}
-            Saved on this machine
-          {:else if page.url.pathname.startsWith('/stats')}
-            All metrics computed locally
-          {:else if page.url.pathname.startsWith('/settings')}
-            Changes apply immediately
-          {:else}
-            small · local
-          {/if}
+          {getStatusSpacer(page.url.pathname)}
         </span>
       </footer>
       <ToastHost />

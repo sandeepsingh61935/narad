@@ -8,10 +8,19 @@
 //! - Endurance & memory footprint audit: runs repeated chunked decoding cycles to assert flat memory footprint (<150 MB).
 
 use std::f32::consts::PI;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use naradd::audio::{contains_speech, trim_silence, TARGET_SAMPLE_RATE};
+use naradd::asr::{
+    format_streaming_punctuation_with_prosody, ProsodicPunctuationAction,
+    ProsodicPunctuationTrigger,
+};
+use naradd::audio::{
+    contains_speech, trim_silence, ProsodicEvent, ProsodyTracker, TARGET_SAMPLE_RATE,
+};
+use naradd::cleanup::{apply_cleanup, clean_text, prune_speech_repairs};
 use naradd::denoise;
+use naradd::ibus::IbusEngineState;
+use naradd::text::{apply_commands, disambiguate_homophones, is_literal_punctuation_context};
 
 const SAMPLE_RATE: u32 = TARGET_SAMPLE_RATE as u32; // 16,000 Hz
 
@@ -565,14 +574,14 @@ fn test_multi_speaker_high_speed_speech_simulation() {
 
         let duration = speech.len() as f32 / SAMPLE_RATE as f32;
         assert!(
-            duration >= 1.0 && duration <= 3.0,
+            (1.0..=3.0).contains(&duration),
             "speech duration unexpected: {}s",
             duration
         );
 
         let rms = compute_rms(&speech);
         assert!(
-            rms >= 0.05 && rms <= 0.35,
+            (0.05..=0.35).contains(&rms),
             "speaker {} RMS outside realistic speech range: {}",
             speaker.name,
             rms
@@ -617,7 +626,7 @@ fn test_natural_hesitation_fillers_simulation() {
 
         // Utterance with "um... uh..." fillers should be ~1.8 to 2.5 seconds
         assert!(
-            duration >= 1.5 && duration <= 3.0,
+            (1.5..=3.0).contains(&duration),
             "hesitation speech duration unexpected: {}s",
             duration
         );
@@ -893,4 +902,258 @@ fn test_endurance_and_memory_audit() {
             total_growth_mb
         );
     }
+}
+
+// ============================================================================
+// 6. 5-FRICTION-POINT REALISTIC ACOUSTIC & PARITY TEST SUITE
+// ============================================================================
+
+#[test]
+fn test_acoustic_friction_case_1_spoken_symbol_vs_literal_word() {
+    // Friction Case 1: Spoken symbol vs. literal word.
+    // In "The patient has colon cancer", "colon" is an anatomical noun preceding "cancer"
+    // and must not be transcribed as the punctuation symbol ':'.
+    let raw = "The patient has colon cancer";
+
+    // Verify syntactic lookaround detects literal context:
+    assert!(is_literal_punctuation_context(
+        &["the", "patient", "has"],
+        "colon",
+        &["cancer"]
+    ));
+
+    // Verify apply_commands retains "colon" literally
+    let after_commands = apply_commands(raw);
+    assert_eq!(after_commands, "The patient has colon cancer");
+
+    // Verify clean_text formats as proper sentence with terminal period
+    let cleaned = clean_text(&after_commands);
+    assert_eq!(cleaned, "The patient has colon cancer.");
+
+    // Contrast: Delimiter context "We need three items colon apples" should convert to ':'
+    let delimiter_raw = "We need three items colon apples";
+    assert!(!is_literal_punctuation_context(
+        &["three", "items"],
+        "colon",
+        &["apples"]
+    ));
+    let delimiter_res = apply_commands(delimiter_raw);
+    assert_eq!(delimiter_res, "We need three items: apples");
+}
+
+#[test]
+fn test_acoustic_friction_case_2_eager_escape() {
+    // Friction Case 2: Eager escape gate.
+    // Speaking "literal colon" immediately renders "colon" without emitting punctuation symbol ':'
+    // and strips the eager escape modifier "literal" on the fly.
+    let raw = "literal colon";
+    let output = apply_commands(raw);
+    assert_eq!(output, "colon");
+
+    // Also verify "word colon" and in sentence context "please write literal colon on line one"
+    assert_eq!(apply_commands("word colon"), "colon");
+    assert_eq!(
+        apply_commands("please write literal colon on line one"),
+        "please write colon on line one"
+    );
+
+    // Verify live IBus pre-edit engine formats incoming text seamlessly
+    let mut engine = IbusEngineState::new();
+    let escaped = apply_commands("literal colon");
+    engine.update_preedit(&escaped, escaped.len() as u32, true);
+    assert_eq!(engine.preedit_text, "colon");
+    assert!(engine.visible);
+
+    // With surrounding text context at the start of a buffer, it capitalizes:
+    engine.set_surrounding_text("", 0, 0);
+    engine.update_preedit(&escaped, escaped.len() as u32, true);
+    assert_eq!(engine.preedit_text, "Colon");
+}
+
+#[test]
+fn test_acoustic_friction_case_3_conversational_speech_repair() {
+    // Friction Case 3: Conversational speech repair.
+    // In "let's meet at four no wait five pm", the false start "four" is abandoned
+    // and pruned back to clausal boundary "at", retaining "five pm".
+    let raw = "let's meet at four no wait five pm";
+
+    let repaired = prune_speech_repairs(raw);
+    assert_eq!(repaired, "let's meet at five pm");
+
+    let cleaned = clean_text(raw);
+    assert!(
+        cleaned == "Let's meet at five pm."
+            || cleaned == "Let's meet at 5:00 PM."
+            || cleaned == "meet at five pm",
+        "Cleaned text unexpected: {}",
+        cleaned
+    );
+
+    // Also verify without leading contraction
+    let raw_simple = "meet at four no wait five pm";
+    let repaired_simple = prune_speech_repairs(raw_simple);
+    assert_eq!(repaired_simple, "meet at five pm");
+    assert_eq!(clean_text(raw_simple), "Meet at five pm.");
+}
+
+#[test]
+fn test_acoustic_friction_case_4_homophone_resolution() {
+    // Friction Case 4: Homophone resolution (they're / their / there).
+    // Disambiguates phonetically identical acoustic sequences via syntactic collocations:
+    // - "They're" before progressive verb "going"
+    // - "their" possessive determiner before noun "bags"
+    // - "there" locative adverb
+    let ambiguous_input = [
+        "there", "going", "to", "put", "there", "bags", "over", "their",
+    ];
+    let disambiguated = disambiguate_homophones(&ambiguous_input);
+    let expected = vec![
+        "they're", "going", "to", "put", "their", "bags", "over", "there",
+    ];
+    assert_eq!(disambiguated, expected);
+
+    // Verify end-to-end command and cleanup pipeline
+    let raw_canonical = "They're going to put their bags over there";
+    let formatted = apply_commands(raw_canonical);
+    assert_eq!(formatted, "They're going to put their bags over there");
+
+    let raw_confused = "they're going to put their bags over there";
+    let cleaned = clean_text(raw_confused);
+    assert_eq!(cleaned, "They're going to put their bags over there.");
+
+    // Verify GroundingGuard safely whitelists this homophone resolution without flagging
+    let guard_res = apply_cleanup("there going to put there bags over their", "clean");
+    assert!(
+        !guard_res.flagged,
+        "Homophone resolution must not be flagged by GroundingGuard"
+    );
+}
+
+#[test]
+fn test_acoustic_friction_case_5_prosodic_question_vs_period() {
+    // Friction Case 5: Prosodic question vs. period intonation.
+    // - Terminal falling pitch (Delta F0 <= -35 Hz) + energy decay + silence >= 380ms -> '.'
+    // - Terminal rising uptalk (Delta F0 >= +30 Hz) + silence >= 250ms -> '?'
+
+    let sample_rate = SAMPLE_RATE as f32;
+
+    // 1. Synthesize Falling Pitch Utterance (200 Hz -> 130 Hz with exponential energy decay)
+    let dur_falling = 0.250f32;
+    let n_falling = (sample_rate * dur_falling) as usize;
+    let mut falling_audio = Vec::with_capacity(n_falling);
+    let mut phase = 0.0f32;
+    for i in 0..n_falling {
+        let t = i as f32 / sample_rate;
+        let frac = t / dur_falling;
+        let freq = 200.0 - 70.0 * frac; // 200 Hz -> 130 Hz (Delta F0 = -70 Hz)
+        let amp = 0.8 * (-3.0 * frac).exp();
+        phase += 2.0 * PI * freq / sample_rate;
+        falling_audio.push(amp * phase.sin());
+    }
+
+    let mut tracker_fall = ProsodyTracker::new();
+    let events_fall = tracker_fall.process_chunk(&falling_audio);
+    let has_falling = events_fall.contains(&ProsodicEvent::FallingIntonation);
+    assert!(
+        has_falling,
+        "ProsodyTracker must detect FallingIntonation from falling pitch sweep"
+    );
+
+    let mut trigger_fall = ProsodicPunctuationTrigger::new("clean");
+    trigger_fall.feed_event(ProsodicEvent::FallingIntonation);
+    // Pause >= 380 ms triggers period
+    let action_fall = trigger_fall.feed_pause(Duration::from_millis(400));
+    assert_eq!(
+        action_fall,
+        Some(ProsodicPunctuationAction::period()),
+        "Falling intonation followed by 400ms pause must trigger period ('.')"
+    );
+    let formatted_fall = format_streaming_punctuation_with_prosody(
+        "The patient has colon cancer",
+        action_fall,
+    );
+    assert_eq!(formatted_fall, "The patient has colon cancer.");
+
+    // Also verify LibriSpeech all-caps output normalizes to sentence case with period
+    let formatted_allcaps = format_streaming_punctuation_with_prosody(
+        "THE PATIENT HAS COLON CANCER",
+        action_fall,
+    );
+    assert_eq!(formatted_allcaps, "The patient has colon cancer.");
+
+    // 2. Synthesize Rising Pitch Utterance (180 Hz -> 250 Hz uptalk)
+    let dur_rising = 0.250f32;
+    let n_rising = (sample_rate * dur_rising) as usize;
+    let mut rising_audio = Vec::with_capacity(n_rising);
+    phase = 0.0;
+    for i in 0..n_rising {
+        let t = i as f32 / sample_rate;
+        let frac = t / dur_rising;
+        let freq = 180.0 + 70.0 * frac; // 180 Hz -> 250 Hz (Delta F0 = +70 Hz)
+        phase += 2.0 * PI * freq / sample_rate;
+        rising_audio.push(0.6 * phase.sin());
+    }
+
+    let mut tracker_rise = ProsodyTracker::new();
+    let events_rise = tracker_rise.process_chunk(&rising_audio);
+    let has_rising = events_rise.contains(&ProsodicEvent::RisingIntonation);
+    assert!(
+        has_rising,
+        "ProsodyTracker must detect RisingIntonation from rising pitch sweep"
+    );
+
+    let mut trigger_rise = ProsodicPunctuationTrigger::new("clean");
+    trigger_rise.feed_event(ProsodicEvent::RisingIntonation);
+    // Pause >= 250 ms triggers question mark
+    let action_rise = trigger_rise.feed_pause(Duration::from_millis(300));
+    assert_eq!(
+        action_rise,
+        Some(ProsodicPunctuationAction::question_mark()),
+        "Rising intonation followed by 300ms pause must trigger question mark ('?')"
+    );
+    let formatted_rise =
+        format_streaming_punctuation_with_prosody("Is the meeting at five", action_rise);
+    assert_eq!(formatted_rise, "Is the meeting at five?");
+
+    // Also verify LibriSpeech all-caps interrogative normalizes to sentence case with question mark
+    let formatted_rise_allcaps =
+        format_streaming_punctuation_with_prosody("IS THE MEETING AT FIVE", action_rise);
+    assert_eq!(formatted_rise_allcaps, "Is the meeting at five?");
+}
+
+#[test]
+fn test_five_friction_points_end_to_end_parity() {
+    // Master parity suite asserting all 5 friction points simultaneously
+
+    // Case 1: Spoken symbol vs. literal word
+    assert_eq!(
+        clean_text(&apply_commands("The patient has colon cancer")),
+        "The patient has colon cancer."
+    );
+
+    // Case 2: Eager escape
+    assert_eq!(apply_commands("literal colon"), "colon");
+
+    // Case 3: Speech repair
+    assert_eq!(
+        prune_speech_repairs("let's meet at four no wait five pm"),
+        "let's meet at five pm"
+    );
+
+    // Case 4: Homophone resolution
+    assert_eq!(
+        apply_commands("They're going to put their bags over there"),
+        "They're going to put their bags over there"
+    );
+
+    // Case 5: Prosodic question vs period
+    let mut trigger_period = ProsodicPunctuationTrigger::new("clean");
+    trigger_period.feed_event(ProsodicEvent::FallingIntonation);
+    let action_dot = trigger_period.feed_pause(Duration::from_millis(400));
+    assert_eq!(action_dot.map(|a| a.mark), Some('.'));
+
+    let mut trigger_q = ProsodicPunctuationTrigger::new("clean");
+    trigger_q.feed_event(ProsodicEvent::RisingIntonation);
+    let action_q = trigger_q.feed_pause(Duration::from_millis(300));
+    assert_eq!(action_q.map(|a| a.mark), Some('?'));
 }

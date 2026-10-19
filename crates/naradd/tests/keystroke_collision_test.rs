@@ -13,7 +13,7 @@ use std::time::Duration;
 use narad_core::store::HistoryStore;
 use naradd::config::NaradConfig;
 use naradd::ibus::{
-    IbusEngineState, PhysicalKeyAction, KEYVAL_BACKSPACE, KEYVAL_RETURN,
+    IbusEngineState, PhysicalKeyAction, KEYVAL_BACKSPACE, KEYVAL_ESCAPE, KEYVAL_RETURN,
 };
 use naradd::pipeline::PipelineHandle;
 use tempfile::tempdir;
@@ -60,6 +60,15 @@ impl CollisionWidget {
             PhysicalKeyAction::PassThrough => {
                 // No pre-edit was active: physical key executes directly
                 self.apply_physical_key(keyval, key_char);
+            }
+            PhysicalKeyAction::WordRewind { remaining_preedit: _ } => {
+                // Pre-edit was active: trailing word was popped from pre-edit buffer
+                // without forwarding backspace to app (ADR-0002).
+                // Engine state has already updated pre-edit text and underline attributes.
+            }
+            PhysicalKeyAction::DiscardedPreedit => {
+                // Pre-edit was active: pre-edit draft was discarded without committing (ADR-0002).
+                // Engine state has already cleared pre-edit text.
             }
         }
     }
@@ -136,24 +145,64 @@ fn test_physical_backspace_collision_during_speech_streaming() {
     widget.stream_partial_speech("hello world");
     assert_eq!(widget.engine.preedit_text, "Hello world");
     assert!(widget.engine.visible);
+    assert_eq!(widget.buffer, "");
 
-    // User hits physical Backspace during streaming
+    // User hits physical Backspace during streaming: executes Word-Level Rewind (ADR-0002)
+    // Pops trailing word "world", remaining pre-edit is "Hello"
     widget.inject_physical_key(KEYVAL_BACKSPACE, None);
 
-    // Assert: "Hello world" was committed atomically, and Backspace deleted 'd' -> "Hello worl"
     assert!(
-        !widget.engine.visible,
-        "Pre-edit must be cleared after Backspace collision"
+        widget.engine.visible,
+        "Pre-edit must remain visible with remaining word after Word-Level Rewind"
     );
     assert_eq!(
-        widget.buffer, "Hello worl",
-        "Pre-edit must cleanly commit and Backspace must delete last character"
+        widget.engine.preedit_text, "Hello",
+        "Pre-edit must retain remaining word without forwarding backspace to app"
+    );
+    assert_eq!(
+        widget.buffer, "",
+        "Document buffer must remain untouched during Word-Level Rewind"
     );
     assert_eq!(widget.dropped_keystrokes, 0);
 
-    // User hits Backspace again
+    // User hits Backspace again: pops "Hello", pre-edit is now empty
     widget.inject_physical_key(KEYVAL_BACKSPACE, None);
-    assert_eq!(widget.buffer, "Hello wor");
+    assert!(
+        !widget.engine.visible,
+        "Pre-edit must be hidden after all words rewound"
+    );
+    assert_eq!(widget.engine.preedit_text, "");
+    assert_eq!(widget.buffer, "");
+
+    // Prepare committed text in buffer to verify subsequent Backspace passes through
+    widget.buffer = "Committed text".to_string();
+    widget.cursor_pos = 14;
+    widget.engine.set_surrounding_text(&widget.buffer, 14, 14);
+
+    // User hits Backspace with empty pre-edit: passes through to document buffer
+    widget.inject_physical_key(KEYVAL_BACKSPACE, None);
+    assert_eq!(widget.buffer, "Committed tex");
+    assert_eq!(widget.cursor_pos, 13);
+    assert_eq!(widget.dropped_keystrokes, 0);
+}
+
+#[test]
+fn test_physical_escape_discard_during_speech_streaming() {
+    let mut widget = CollisionWidget::new();
+
+    // Streaming pre-edit: "Draft sentence to cancel"
+    widget.stream_partial_speech("draft sentence to cancel");
+    assert_eq!(widget.engine.preedit_text, "Draft sentence to cancel");
+    assert!(widget.engine.visible);
+
+    // User hits physical Escape
+    widget.inject_physical_key(KEYVAL_ESCAPE, None);
+
+    // Pre-edit discarded without committing to document buffer
+    assert!(!widget.engine.visible);
+    assert_eq!(widget.engine.preedit_text, "");
+    assert_eq!(widget.buffer, "");
+    assert_eq!(widget.dropped_keystrokes, 0);
 }
 
 #[test]

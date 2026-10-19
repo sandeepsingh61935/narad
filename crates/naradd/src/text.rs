@@ -337,6 +337,8 @@ fn is_their_trigger(next: &str) -> bool {
             | "old"
             | "best"
             | "favorite"
+            | "bag"
+            | "bags"
     )
 }
 

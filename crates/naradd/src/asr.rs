@@ -540,13 +540,7 @@ impl ContextBiasingTrie {
 }
 
 /// Acoustic prosodic event emitted by prosody tracking (FR-ASR-9, ADR-0001, ADR-0004).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ProsodicEvent {
-    FallingIntonation,
-    RisingIntonation,
-    LevelContinuation,
-    Silence(Duration),
-}
+pub use crate::audio::ProsodicEvent;
 
 /// Prosodic punctuation action resulting from intonation and pause duration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

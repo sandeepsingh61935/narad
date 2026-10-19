@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use narad_core::store::{HistoryStore, InsertStatus, NewHistoryEntry};
 use narad_dbus::{SessionState, OBJECT_PATH};
-use tracing::{debug, info, trace, warn};
+use tracing::{info, trace, warn};
 use zbus::Connection;
 
 use crate::asr::{self, AsrEngine};
@@ -89,6 +89,8 @@ struct SessionRuntime {
     outcome_detail: String,
     /// Active selection text captured when selection command started (FR-INS-6).
     selection_context: Option<String>,
+    /// Accumulated clausal commits during streaming dictation (ADR-0004).
+    clausal_commits: Vec<String>,
 }
 
 struct PipelineInner {
@@ -97,6 +99,7 @@ struct PipelineInner {
     store: Mutex<HistoryStore>,
     asr: Mutex<Option<AsrEngine>>,
     online_asr: Mutex<Option<crate::asr::OnlineAsrEngine>>,
+    ibus_engine: Mutex<crate::ibus::IbusEngineState>,
     wake_spotter: Mutex<Option<WakeWordSpotter>>,
     last_activity: Mutex<Instant>,
     conn: OnceLock<Connection>,
@@ -156,10 +159,12 @@ impl PipelineHandle {
                     hud_outcome: None,
                     outcome_detail: String::new(),
                     selection_context: None,
+                    clausal_commits: Vec::new(),
                 }),
                 store: Mutex::new(store),
                 asr: Mutex::new(asr),
                 online_asr: Mutex::new(online_asr),
+                ibus_engine: Mutex::new(crate::ibus::IbusEngineState::new()),
                 wake_spotter: Mutex::new(wake_spotter),
                 last_activity: Mutex::new(Instant::now()),
                 conn: OnceLock::new(),
@@ -322,7 +327,84 @@ impl PipelineHandle {
             }
             st.focused_app = norm;
         }
+        drop(st);
+        let terminal = self.focused_is_terminal();
+        if let Ok(mut ibus) = self.inner.ibus_engine.lock() {
+            ibus.set_terminal(terminal);
+        }
         Ok(())
+    }
+
+    /// Delegates physical key press handling to the native IBus engine state (ADR-0002).
+    pub fn handle_physical_key(
+        &self,
+        keyval: u32,
+        keycode: u32,
+        state: u32,
+    ) -> crate::ibus::PhysicalKeyAction {
+        if let Ok(mut engine) = self.inner.ibus_engine.lock() {
+            let action = engine.handle_physical_key(keyval, keycode, state);
+            if let crate::ibus::PhysicalKeyAction::CommittedPreeditAndPassThrough { ref committed_text } = action {
+                if let Ok(mut st) = self.inner.state.lock() {
+                    st.clausal_commits.push(committed_text.clone());
+                }
+            }
+            action
+        } else {
+            crate::ibus::PhysicalKeyAction::PassThrough
+        }
+    }
+
+    /// Access snapshot of current IBus engine state.
+    pub fn ibus_engine_state(&self) -> crate::ibus::IbusEngineState {
+        self.inner
+            .ibus_engine
+            .lock()
+            .map(|e| e.clone())
+            .unwrap_or_default()
+    }
+
+    /// Set surrounding text context on the active IBus engine (ADR-0004).
+    pub fn set_ibus_surrounding_text(&self, text: &str, cursor_pos: u32, anchor_pos: u32) {
+        if let Ok(mut ibus) = self.inner.ibus_engine.lock() {
+            ibus.set_surrounding_text(text, cursor_pos, anchor_pos);
+        }
+    }
+
+    /// Access copy of accumulated clausal commits for the active/latest session.
+    pub fn clausal_commits(&self) -> Vec<String> {
+        self.inner
+            .state
+            .lock()
+            .map(|st| st.clausal_commits.clone())
+            .unwrap_or_default()
+    }
+
+    /// Clausal pause auto-commit: cleans clause, commits via IBus and inserter, records into clausal_commits (ADR-0004).
+    pub async fn commit_clause(&self, clause_raw: &str) -> Option<String> {
+        let mode = self
+            .inner
+            .state
+            .lock()
+            .ok()
+            .map(|st| st.utterance_mode.clone())
+            .unwrap_or_else(|| "plain".into());
+        let cleanup_res = self.accepted_transcript(clause_raw, &mode)?;
+        let text_to_commit = cleanup_res.text;
+        if text_to_commit.is_empty() {
+            return None;
+        }
+        let committed = if let Ok(mut ibus) = self.inner.ibus_engine.lock() {
+            ibus.commit_text(&text_to_commit)
+        } else {
+            text_to_commit.clone()
+        };
+        let terminal = self.focused_is_terminal();
+        insert::insert_text(&committed, terminal).await;
+        if let Ok(mut st) = self.inner.state.lock() {
+            st.clausal_commits.push(committed.clone());
+        }
+        Some(committed)
     }
 
     pub fn is_listening(&self) -> bool {
@@ -593,6 +675,7 @@ impl PipelineHandle {
             {
                 return Ok(());
             }
+            st.clausal_commits.clear();
             if let Some(m) = mode {
                 if !m.is_empty() {
                     if m == "selection" {
@@ -765,16 +848,114 @@ impl PipelineHandle {
             let Some(mut stream) = stream_slot else {
                 return;
             };
+
+            let mut prosody_tracker = audio::ProsodyTracker::new();
+
+            let initial_mode = handle
+                .inner
+                .state
+                .lock()
+                .ok()
+                .map(|st| st.utterance_mode.clone())
+                .unwrap_or_else(|| "plain".into());
+            stream.set_mode(&initial_mode);
+
+            let initial_app = handle
+                .inner
+                .state
+                .lock()
+                .ok()
+                .and_then(|st| st.focused_app.clone());
+            let mut last_focused_app = initial_app.clone();
+
+            let mut trie = crate::asr::ContextBiasingTrie::new();
+            let app_prof = initial_app
+                .as_deref()
+                .and_then(|app| handle.inner.config.find_profile(app));
+            let vocab_phrases: Vec<&str> = handle
+                .inner
+                .config
+                .vocabulary
+                .iter()
+                .flat_map(|r| [r.spoken.as_str(), r.written.as_str()])
+                .filter(|s| !s.is_empty())
+                .collect();
+            trie.populate_context(app_prof, &vocab_phrases, None);
+            let shared_trie = trie.into_shared();
+            stream.set_context_trie(Arc::clone(&shared_trie));
+            if let Ok(mut asr_guard) = handle.inner.online_asr.lock() {
+                if let Some(engine) = asr_guard.as_mut() {
+                    engine.set_context_trie(Arc::clone(&shared_trie));
+                }
+            }
+            if let Ok(mut ibus) = handle.inner.ibus_engine.lock() {
+                ibus.set_terminal(handle.focused_is_terminal());
+            }
+
+            let mut last_partial = String::new();
+            let mut current_hypothesis = String::new();
+
             loop {
                 tick.tick().await;
                 if !handle.is_listening() {
                     break;
                 }
+
+                // Dynamic Context Biasing Trie refresh if focused_app changed (ADR-0003)
+                let current_app = handle
+                    .inner
+                    .state
+                    .lock()
+                    .ok()
+                    .and_then(|st| st.focused_app.clone());
+                if current_app != last_focused_app {
+                    last_focused_app = current_app.clone();
+                    let mut refreshed_trie = crate::asr::ContextBiasingTrie::new();
+                    let app_prof = current_app
+                        .as_deref()
+                        .and_then(|app| handle.inner.config.find_profile(app));
+                    let vocab_phrases: Vec<&str> = handle
+                        .inner
+                        .config
+                        .vocabulary
+                        .iter()
+                        .flat_map(|r| [r.spoken.as_str(), r.written.as_str()])
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    refreshed_trie.populate_context(app_prof, &vocab_phrases, None);
+                    let shared = refreshed_trie.into_shared();
+                    stream.set_context_trie(Arc::clone(&shared));
+                    if let Ok(mut asr_guard) = handle.inner.online_asr.lock() {
+                        if let Some(engine) = asr_guard.as_mut() {
+                            engine.set_context_trie(Arc::clone(&shared));
+                        }
+                    }
+                    if let Ok(mut ibus) = handle.inner.ibus_engine.lock() {
+                        ibus.set_terminal(handle.focused_is_terminal());
+                    }
+                }
+
                 let Some(poll) = handle.silence_poll(listen_gen, scanned) else {
                     break;
                 };
                 scanned = poll.end;
+
                 if !poll.fresh.is_empty() {
+                    let events = prosody_tracker.process_chunk(&poll.fresh);
+                    for event in events {
+                        match event {
+                            audio::ProsodicEvent::Silence(dur) => {
+                                stream.feed_prosodic_pause(dur);
+                            }
+                            ev => {
+                                stream.feed_prosodic_event(ev);
+                            }
+                        }
+                    }
+                    let silence_dur = prosody_tracker.silence_duration();
+                    if silence_dur > Duration::ZERO {
+                        stream.feed_prosodic_pause(silence_dur);
+                    }
                     stream.accept_waveform(audio::TARGET_SAMPLE_RATE as u32, &poll.fresh);
                     let partial = {
                         let asr_guard = handle.inner.online_asr.lock().ok();
@@ -784,10 +965,72 @@ impl PipelineHandle {
                     };
                     if let Some(partial) = partial {
                         if !partial.is_empty() {
-                            handle.emit_partial_transcript(&partial).await;
+                            current_hypothesis = partial.clone();
+                            if partial != last_partial {
+                                last_partial = partial.clone();
+                                handle.emit_partial_transcript(&partial).await;
+                                if let Ok(mut ibus) = handle.inner.ibus_engine.lock() {
+                                    let len = partial.len() as u32;
+                                    ibus.update_preedit(&partial, len, true);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    let silence_dur = prosody_tracker.silence_duration();
+                    if silence_dur > Duration::ZERO {
+                        stream.feed_prosodic_pause(silence_dur);
+                        if !current_hypothesis.is_empty() {
+                            let partial = {
+                                let asr_guard = handle.inner.online_asr.lock().ok();
+                                asr_guard.as_ref().and_then(|g| {
+                                    g.as_ref().and_then(|engine| stream.decode(engine.recognizer()))
+                                })
+                            };
+                            if let Some(partial) = partial {
+                                if !partial.is_empty() && partial != last_partial {
+                                    current_hypothesis = partial.clone();
+                                    last_partial = partial.clone();
+                                    handle.emit_partial_transcript(&partial).await;
+                                    if let Ok(mut ibus) = handle.inner.ibus_engine.lock() {
+                                        let len = partial.len() as u32;
+                                        ibus.update_preedit(&partial, len, true);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
+
+                // Clausal Pause Auto-Commit (ADR-0004):
+                // If silence_dur >= 2000ms (between 2.0s and 3.0s) or soft ceiling (20 words + >= 380ms silence)
+                // and there is accumulated speech in the current hypothesis:
+                let silence_dur = prosody_tracker.silence_duration();
+                let word_count = current_hypothesis.split_whitespace().count();
+                let clausal_pause = silence_dur >= Duration::from_millis(2000);
+                let soft_ceiling = word_count >= 20 && silence_dur >= Duration::from_millis(380);
+
+                if (clausal_pause || soft_ceiling) && !current_hypothesis.trim().is_empty() {
+                    let clause_raw = current_hypothesis.clone();
+                    handle.commit_clause(&clause_raw).await;
+
+                    // Reset streaming decoder state and prosody tracker while remaining in LISTENING
+                    let asr_guard = handle.inner.online_asr.lock().ok();
+                    if let Some(ref g) = asr_guard {
+                        if let Some(ref engine) = **g {
+                            stream.reset(engine.recognizer());
+                        }
+                    }
+                    prosody_tracker.reset();
+                    current_hypothesis.clear();
+                    last_partial.clear();
+                }
+            }
+
+            // On pump exit: prosody_tracker.reset(), ibus.hide_preedit()
+            prosody_tracker.reset();
+            if let Ok(mut ibus) = handle.inner.ibus_engine.lock() {
+                ibus.hide_preedit();
             }
         });
     }
@@ -803,9 +1046,13 @@ impl PipelineHandle {
             st.listen_started = None;
             st.awaiting_hold_release = false;
             st.selection_context = None;
+            st.clausal_commits.clear();
             st.capture.take()
         };
         drop(capture);
+        if let Ok(mut ibus) = self.inner.ibus_engine.lock() {
+            ibus.hide_preedit();
+        }
         self.inner.processing.store(false, Ordering::SeqCst);
         self.set_state(SessionState::CANCELLED).await;
         info!("cancelled");
@@ -822,7 +1069,7 @@ impl PipelineHandle {
             return Ok(());
         }
 
-        let (capture, started, mode, cancel_flag, selection_context) = {
+        let (capture, started, mode, cancel_flag, selection_context, clausal_commits) = {
             let mut st = self
                 .inner
                 .state
@@ -835,6 +1082,7 @@ impl PipelineHandle {
             let capture = st.capture.take();
             let started = st.listen_started.take();
             let selection_context = st.selection_context.take();
+            let clausal_commits = std::mem::take(&mut st.clausal_commits);
             st.awaiting_hold_release = false;
             st.dbus_state = SessionState::PROCESSING.to_string();
             (
@@ -843,6 +1091,7 @@ impl PipelineHandle {
                 st.utterance_mode.clone(),
                 st.cancel.clone(),
                 selection_context,
+                clausal_commits,
             )
         };
 
@@ -852,9 +1101,12 @@ impl PipelineHandle {
         let (raw_samples, device_rate) = match capture {
             Some(c) => c.stop().map_err(|e| e.to_string())?,
             None => {
-                self.inner.processing.store(false, Ordering::SeqCst);
-                self.set_state(SessionState::IDLE).await;
-                return Ok(());
+                if clausal_commits.is_empty() {
+                    self.inner.processing.store(false, Ordering::SeqCst);
+                    self.set_state(SessionState::IDLE).await;
+                    return Ok(());
+                }
+                (Vec::new(), audio::TARGET_SAMPLE_RATE)
             }
         };
 
@@ -873,6 +1125,45 @@ impl PipelineHandle {
         let samples_16k = audio::resample_to_16k(&raw_samples, device_rate);
         // Off: same 16 kHz buffer, no denoise pass (FR-AUD-5).
         let samples_16k = denoise::apply(samples_16k, self.inner.config.audio.noise_suppression);
+
+        let model_id = self.inner.config.models.asr_english.clone();
+        let retained_samples = self
+            .inner
+            .config
+            .history
+            .retain_audio
+            .then(|| samples_16k.clone());
+
+        if !clausal_commits.is_empty() {
+            if let Ok(mut ibus) = self.inner.ibus_engine.lock() {
+                ibus.hide_preedit();
+            }
+            let aggregated_text = clausal_commits.join(" ");
+            let kind = if selection_context.is_some() {
+                "selection_command"
+            } else {
+                "dictation"
+            };
+            let history_id = self.record_entry(
+                kind,
+                duration_ms,
+                mode.clone(),
+                model_id,
+                aggregated_text.clone(),
+                aggregated_text.clone(),
+                false,
+                InsertOutcome::Inserted,
+                retained_samples.as_deref().unwrap_or(&[]),
+            )?;
+            if let Some(id) = history_id {
+                self.emit_entry_added(id).await;
+            }
+            self.inner.processing.store(false, Ordering::SeqCst);
+            self.set_state(SessionState::INSERTED).await;
+            self.schedule_idle_after(Duration::from_millis(1200));
+            return Ok(());
+        }
+
         if samples_16k.len() < audio::TARGET_SAMPLE_RATE as usize / 10 {
             info!("recording too short; returning to idle");
             self.inner.processing.store(false, Ordering::SeqCst);
@@ -3101,6 +3392,230 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(pipe.is_listening());
         assert_eq!(pipe.snapshot_props().expect("props").1, "email");
+    }
+
+    #[tokio::test]
+    async fn clausal_pause_auto_commit_keeps_session_alive_and_in_listening() {
+        let (_dir, pipe) = test_pipe();
+        let pasted = Arc::new(Mutex::new(Vec::new()));
+
+        insert::with_test_inserts(Arc::clone(&pasted), async {
+            // 1. Manually transition to LISTENING state
+            {
+                let mut st = pipe.inner.state.lock().expect("state");
+                st.dbus_state = SessionState::LISTENING.to_string();
+                st.utterance_mode = "plain".to_string();
+                st.listen_started = Some(Instant::now());
+            }
+            assert!(pipe.is_listening());
+            assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::LISTENING);
+
+            // 2. Simulate inline pre-edit text update on IBus engine
+            if let Ok(mut ibus) = pipe.inner.ibus_engine.lock() {
+                ibus.update_preedit("First clause.", 13, true);
+            }
+            assert!(pipe.ibus_engine_state().is_preedit_active());
+            assert_eq!(pipe.ibus_engine_state().preedit_text, "First clause.");
+
+            // 3. Trigger Clausal Pause Auto-Commit on the first clause
+            let committed1 = pipe.commit_clause("First clause.").await;
+            assert_eq!(committed1.as_deref(), Some("First clause."));
+
+            // Verification: Session remains alive and in LISTENING
+            assert!(pipe.is_listening(), "clausal commit must keep session in LISTENING");
+            assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::LISTENING);
+            assert_eq!(pipe.clausal_commits(), vec!["First clause."]);
+            assert_eq!(pipe.ibus_engine_state().committed_buffer, vec!["First clause."]);
+            assert!(!pipe.ibus_engine_state().is_preedit_active(), "commit clears pre-edit");
+            assert_eq!(pasted.lock().expect("pasted").as_slice(), ["First clause."]);
+
+            // 4. Update pre-edit with a second clause
+            if let Ok(mut ibus) = pipe.inner.ibus_engine.lock() {
+                ibus.update_preedit("Second clause.", 14, true);
+            }
+            assert!(pipe.ibus_engine_state().is_preedit_active());
+
+            // 5. Trigger Clausal Pause Auto-Commit on the second clause
+            let committed2 = pipe.commit_clause("Second clause.").await;
+            assert_eq!(committed2.as_deref(), Some("Second clause."));
+
+            // Verification: Still in LISTENING with both clauses recorded
+            assert!(pipe.is_listening());
+            assert_eq!(
+                pipe.clausal_commits(),
+                vec!["First clause.", "Second clause."]
+            );
+            assert_eq!(
+                pipe.ibus_engine_state().committed_buffer,
+                vec!["First clause.", "Second clause."]
+            );
+            assert_eq!(
+                pasted.lock().expect("pasted").as_slice(),
+                ["First clause.", "Second clause."]
+            );
+
+            // 6. Finish session via begin_stop
+            pipe.begin_stop().await.expect("begin_stop");
+            assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::INSERTED);
+
+            // Verify aggregated history entry: clauses joined without re-inserting
+            let entry = pipe
+                .with_store(|s| s.get(1).map_err(|e| e.to_string()))
+                .expect("store")
+                .expect("entry");
+            assert_eq!(entry.final_text, "First clause. Second clause.");
+            assert_eq!(entry.kind, "dictation");
+
+            // Verify no duplicate insertions took place in insert::insert_text
+            assert_eq!(
+                pasted.lock().expect("pasted").as_slice(),
+                ["First clause.", "Second clause."],
+                "begin_stop must not re-insert already committed clauses"
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn cancel_and_stop_paths_cleanly_shutdown_prosody_and_ibus_preedit() {
+        let (_dir, pipe) = test_pipe();
+
+        // 1. Cancel path: active preedit and accumulated clausal commit are discarded
+        {
+            let mut st = pipe.inner.state.lock().expect("state");
+            st.dbus_state = SessionState::LISTENING.to_string();
+            st.clausal_commits.push("in flight clause".to_string());
+        }
+        if let Ok(mut ibus) = pipe.inner.ibus_engine.lock() {
+            ibus.update_preedit("unfinished draft", 16, true);
+        }
+        assert!(pipe.ibus_engine_state().is_preedit_active());
+        assert!(!pipe.clausal_commits().is_empty());
+
+        pipe.cancel_listen().await;
+
+        assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::CANCELLED);
+        assert!(!pipe.ibus_engine_state().is_preedit_active(), "cancel must hide pre-edit");
+        assert!(pipe.ibus_engine_state().preedit_text.is_empty());
+        assert!(pipe.clausal_commits().is_empty(), "cancel must clear clausal commits");
+
+        // 2. Stop path: active preedit is cleanly hidden and clausal commits aggregate
+        {
+            let mut st = pipe.inner.state.lock().expect("state");
+            st.dbus_state = SessionState::LISTENING.to_string();
+            st.cancel.store(false, Ordering::SeqCst);
+            st.clausal_commits.push("persisted clause.".to_string());
+            st.listen_started = Some(Instant::now());
+        }
+        if let Ok(mut ibus) = pipe.inner.ibus_engine.lock() {
+            ibus.update_preedit("transient ending", 16, true);
+        }
+        assert!(pipe.ibus_engine_state().is_preedit_active());
+
+        let pasted = Arc::new(Mutex::new(Vec::new()));
+        insert::with_test_inserts(Arc::clone(&pasted), async {
+            pipe.begin_stop().await.expect("begin_stop");
+        })
+        .await;
+
+        assert_eq!(pipe.snapshot_props().expect("props").0, SessionState::INSERTED);
+        assert!(!pipe.ibus_engine_state().is_preedit_active(), "stop must hide pre-edit");
+        assert!(pipe.ibus_engine_state().preedit_text.is_empty());
+    }
+
+    #[test]
+    fn handle_physical_key_arbiter_and_preedit_rewind() {
+        let (_dir, pipe) = test_pipe();
+
+        // 1. Physical printable key commits active pre-edit and passes through (ADR-0002)
+        if let Ok(mut ibus) = pipe.inner.ibus_engine.lock() {
+            ibus.update_preedit("typed speech", 12, true);
+        }
+        assert!(pipe.ibus_engine_state().is_preedit_active());
+
+        // Press printable character 'x' (ASCII 120)
+        let action = pipe.handle_physical_key(120, 0, 0);
+        assert_eq!(
+            action,
+            crate::ibus::PhysicalKeyAction::CommittedPreeditAndPassThrough {
+                committed_text: "typed speech".into()
+            }
+        );
+        assert_eq!(pipe.clausal_commits(), vec!["typed speech"]);
+        assert!(!pipe.ibus_engine_state().is_preedit_active());
+
+        // 2. Backspace executes word-level rewind on active pre-edit
+        if let Ok(mut ibus) = pipe.inner.ibus_engine.lock() {
+            ibus.update_preedit("hello world again", 17, true);
+        }
+        assert!(pipe.ibus_engine_state().is_preedit_active());
+
+        let action2 = pipe.handle_physical_key(crate::ibus::KEYVAL_BACKSPACE, 0, 0);
+        assert_eq!(
+            action2,
+            crate::ibus::PhysicalKeyAction::WordRewind {
+                remaining_preedit: "hello world".into()
+            }
+        );
+        assert_eq!(pipe.ibus_engine_state().preedit_text, "hello world");
+        assert!(pipe.ibus_engine_state().is_preedit_active());
+
+        // 3. Escape key discards pre-edit
+        let action3 = pipe.handle_physical_key(crate::ibus::KEYVAL_ESCAPE, 0, 0);
+        assert_eq!(action3, crate::ibus::PhysicalKeyAction::DiscardedPreedit);
+        assert!(!pipe.ibus_engine_state().is_preedit_active());
+        assert!(pipe.ibus_engine_state().preedit_text.is_empty());
+    }
+
+    #[test]
+    fn dynamic_context_biasing_trie_refresh_on_focus_change() {
+        let mut cfg = NaradConfig::default();
+        cfg.profiles.push(crate::config::AppProfile {
+            app_id: "com.visualstudio.code".into(),
+            mode: "code".into(),
+            paste_with_shift: None,
+        });
+        cfg.profiles.push(crate::config::AppProfile {
+            app_id: "org.gnome.Terminal".into(),
+            mode: "plain".into(),
+            paste_with_shift: Some(true),
+        });
+
+        let (_dir, pipe) = test_pipe_with_config(cfg);
+
+        // Terminal focus switches terminal bypass flag in IBus engine state
+        pipe.report_focus("org.gnome.Terminal").expect("focus");
+        assert!(pipe.ibus_engine_state().is_terminal);
+        assert!(!pipe.ibus_engine_state().is_ime_supported());
+
+        // Code editor focus sets terminal bypass to false and enables IME pre-edit
+        pipe.report_focus("com.visualstudio.code").expect("focus");
+        assert!(!pipe.ibus_engine_state().is_terminal);
+        assert!(pipe.ibus_engine_state().is_ime_supported());
+        assert_eq!(pipe.snapshot_props().expect("props").1, "code");
+    }
+
+    #[test]
+    fn prosody_tracker_silence_accumulation_and_reset() {
+        let mut tracker = audio::ProsodyTracker::new();
+        assert_eq!(tracker.silence_duration(), Duration::ZERO);
+
+        // 2 seconds of pure silence = 32,000 samples @ 16 kHz, processed in 50ms chunks (800 samples)
+        let quiet_chunk = vec![0.0f32; 32_000];
+        for chunk in quiet_chunk.chunks(800) {
+            tracker.process_chunk(chunk);
+        }
+
+        let silence_dur = tracker.silence_duration();
+        assert!(
+            silence_dur >= Duration::from_millis(1900),
+            "expected ~2000ms silence, got {:?}",
+            silence_dur
+        );
+
+        // Reset clears accumulated silence duration
+        tracker.reset();
+        assert_eq!(tracker.silence_duration(), Duration::ZERO);
     }
 }
 

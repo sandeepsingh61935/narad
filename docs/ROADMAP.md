@@ -52,6 +52,9 @@ Daemon + hotkey (hold/tap) + floating HUD + record + VAD + ASR + paste insert + 
 
 - Paste-last, undo-last (FR-INS-4/5)
 - Voice commands, dictionary, replacements, code dictation (FR-TXT-1..4)
+- Contextual symbol protection, eager escape, speech repairs, homophone collocations, punctuation precedence (FR-TXT-9..12)
+- Acoustic prosody auto-punctuation (FR-AUD-7), Prefix Trie Joiner biasing (FR-ASR-9)
+- Dual-buffer simultaneous typing, Word-Level Rewind, syntactic pre-edit ceiling (FR-INS-9/10)
 - Auto-stop, max duration, mic picker, noise suppression (FR-AUD-3/4/5)
 - App context recording (FR-CTX-1)
 - Audio retention, retention policy, pause, history extras, export, stats (FR-HIS-5..8)

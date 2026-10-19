@@ -61,23 +61,23 @@ Rust, single binary, `tokio` runtime with dedicated inference threads.
 |---|---|---|
 | `ipc` | D-Bus service `dev.narad.Daemon` (methods, signals, properties) | `zbus` |
 | `hotkeys` | Portal session, bind shortcuts, hold/tap state machine | `ashpd` |
-| `audio` | PipeWire capture, ring buffer, resample to 16 kHz mono f32, 50ms chunk pump | `pipewire` (or `cpal`), `rubato` |
+| `audio` | PipeWire capture, ring buffer, resample to 16 kHz mono f32, 50ms chunk pump, real-time YIN F0 pitch tracking & energy decay | `pipewire` (or `cpal`), `rubato`, pure Rust |
 | `denoise` | Optional RNNoise | `nnnoiseless` |
 | `vad` | Silero VAD: real-time speech boundary, auto-stop, silence rejection | `sherpa-onnx` |
-| `asr` | Polymorphic `NaradAsrEngine`: Online streaming (Zipformer), Chunked (Moonshine/Whisper), Direct Translation (Whisper Lang A→B) | `sherpa-onnx` |
-| `ibus` | Native IBus IME Engine (`org.freedesktop.IBus.Engine`), live underlined pre-edit, cursor anchoring, surrounding-text receiver | `zbus` |
+| `asr` | Polymorphic `NaradAsrEngine`: Online streaming (Zipformer) with dynamic Prefix Trie Joiner biasing, Chunked (Moonshine/Whisper), Direct Translation | `sherpa-onnx`, pure Rust |
+| `ibus` | Native IBus IME Engine (`org.freedesktop.IBus.Engine`), live underlined pre-edit, cursor anchoring, surrounding-text receiver, dual-buffer keystroke arbiter, word-level rewind on Backspace | `zbus`, pure Rust |
 | `hardware`| CPU topology & SIMD profiler (AVX2/AVX-512/AMX), dynamic BYOM model manifest parser, thread tuning | pure Rust |
 | `context` | AT-SPI2 accessibility crawler, active window tracker, IDE symbol harvester, dynamic hotword biasing | `zbus`, pure Rust |
-| `text` | Voice commands, dictionary, replacements, code-case rules, hallucination filter | pure Rust |
+| `text` | Spoken commands, 3-token syntactic lookaround, eager escape, homophone collocations, code mode spacing, punctuation precedence | pure Rust |
 | `translate`| MT pack runner / single-pass Whisper cross-lingual translator | `sherpa-onnx`, `ct2rs` |
-| `cleanup` | LLM prompts per mode, grounding guard | `llama-cpp-2` (llama.cpp, GGUF) |
+| `cleanup` | Speech repair pruner, GroundingGuard with homophone equivalence whitelist (ADR-0001), optional local LLM modes | `llama-cpp-2` (llama.cpp, GGUF), pure Rust |
 | `insert` | Fallback clipboard save/set/restore, paste keystroke via libei, terminal detection, undo | `ashpd`, `reis` |
 | `store` | SQLite schema, FTS5 search, retention jobs, audio spool, auto-learning dictionary | `rusqlite` |
 | `models` | Registry of installed packs, zero-downtime hot-swap (`arc_swap`), benchmark | `arc_swap` |
 | `mcp` | Local stdio/Unix Model Context Protocol server for coding agents | pure Rust |
 | `config` | TOML config, live reload | `serde`, `toml`, `notify` |
 
-`sherpa-onnx` is the unified runtime for VAD, streaming ASR, offline chunked ASR, multilingual translation, wake-word spotting, and diarization.
+`sherpa-onnx` is the unified runtime for VAD, streaming ASR, offline chunked ASR, multilingual translation, wake-word spotting, and diarization. See `docs/adr/` for foundational architectural decision records (ADR-0001 through ADR-0004).
 
 ### 3.2 GNOME extension (`extension/`)
 
@@ -103,17 +103,24 @@ Built-in Model Context Protocol server exposing daemon tools (`dictate`, `get_hi
 t0       hotkey Activated (portal)
          ├─ open PipeWire stream, play start cue, signal state=listening
          ├─ harvest AT-SPI2 screen context & IDE variables (async, cached)
+         ├─ swap active ContextBiasingTrie via atomic pointer (ADR-0003)
          └─ attach IBus input context to active client window
 t_stream (every 50ms audio chunk)
+         ├─ YIN F0 pitch tracking & energy decay estimation (audio.rs)
          ├─ VAD chunk check → push to OnlineRecognizer stream
-         ├─ decode partial tokens (15–35ms latency on CPU)
-         ├─ format punctuation & case heuristics
+         ├─ beam search with Joiner Prefix Trie logit boost (asr.rs)
+         ├─ decode partial tokens + format punctuation precedence (ADR-0004)
+         ├─ eager escape stripping & 3-token syntactic lookaround (text.rs)
          ├─ IBus UpdatePreeditText (underlined preview directly at blinking cursor)
+         ├─ check 20-word soft ceiling → Clause Commit if sentence closed (ADR-0004)
          └─ emit D-Bus PartialTranscript (updates floating HUD companion pill)
-t1       hotkey Deactivated (hold release) | second tap | VAD auto-stop
-         ├─ close stream, signal state=processing
-         ├─ flush remaining audio frames through ASR stream
-         ├─ apply voice commands → dictionary replacements → cleanup guard
+t_key    physical keystroke during streaming (ADR-0002)
+         ├─ character key: atomically commit pre-edit, passthrough key, keep mic open
+         └─ backspace: Word-Level Rewind on active pre-edit without forwarding key
+t1       hotkey Deactivated (hold release) | second tap | natural pause commit
+         ├─ close stream (or continue listening across clause pause)
+         ├─ speech repair pruner & homophone collocation resolver
+         ├─ GroundingGuard validation with homophone equivalence whitelist (ADR-0001)
          ├─ IBus CommitText (underlined preview locks into final text instantly)
          └─ IBus HidePreeditText
 t2       write history row + async user-edit diff learner (off hot path)

@@ -4,6 +4,7 @@
 - **Phase**: Streaming Dictation & Input Method Integration (Phase 5 Extension)
 - **Status**: Ready for Implementation
 - **Triage Label**: `ready-for-agent`
+- **Companion Spec**: [`docs/superpowers/specs/2026-10-19-acoustic-prosody-and-contextual-disambiguation-design.md`](./2026-10-19-acoustic-prosody-and-contextual-disambiguation-design.md) (Acoustic prosody, Joiner Trie biasing, and syntactic disambiguation)
 
 ---
 

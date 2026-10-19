@@ -2,6 +2,7 @@
 
 - **Goal**: Implement real-time streaming speech-to-text, native IBus inline pre-edit, continuous dictation across pauses, and post-stop heuristic sentence transformation.
 - **Spec**: `docs/superpowers/specs/2026-10-18-native-streaming-dictation-design.md`
+- **Unified Plan**: [`docs/superpowers/plans/2026-10-19-acoustic-prosody-and-contextual-disambiguation.md`](./2026-10-19-acoustic-prosody-and-contextual-disambiguation.md) (Acoustic prosody, Joiner Trie biasing, syntactic lookaround, and dual-buffer typing)
 - **Branch**: `feat/native-streaming-dictation`
 - **Worktree**: `.worktrees/feat-native-streaming-dictation`
 

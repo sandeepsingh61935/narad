@@ -25,7 +25,7 @@ A spoken prefix (such as "literal" or "word") that immediately strips the prefix
 _Avoid_: Force literal, escape command
 
 **Speech Repair**:
-A conversational false-start where the speaker backtracks using verbal markers ("no wait", "actually no") to correct their utterance.
+A conversational false-start where the speaker backtracks using verbal markers ("no wait", "actually no") to correct their utterance. Active in Clean and Code modes to excise false starts; bypassed in Plain mode to preserve literal verbatim speech.
 _Avoid_: Scratch that, mistake correction
 
 **Constituent Phrase Scope**:
@@ -37,7 +37,7 @@ Automatic intermediate commit of a completed sentence or clause triggered by a n
 _Avoid_: Auto-pause, silence stop
 
 **Pre-edit Ceiling**:
-A threshold (soft ceiling of ~20 words / 120 characters) at which completed sentences are committed to prevent UI rendering degradation and horizontal scroll jitter during continuous speech.
+A threshold (soft ceiling of ~20 words / 120 characters) at which completed sentences are committed at terminal punctuation ('.' or '?') while retaining subsequent clauses to prevent UI rendering degradation and horizontal scroll jitter during continuous speech.
 _Avoid_: Buffer limit, max preedit
 
 **Punctuation Precedence**:
@@ -53,11 +53,11 @@ A deterministic gate checking length ratios and novel-word counts to prevent ung
 _Avoid_: Hallucination filter, safety check
 
 **Word-Level Rewind**:
-An input method action where physical Backspace intercepts and pops the trailing recognized word from an active pre-edit hypothesis rather than deleting a single character.
+An input method action where physical Backspace intercepts and pops the trailing recognized word from an active pre-edit hypothesis in `IbusEngineState` without resetting the underlying ASR decoder or causing screen flicker.
 _Avoid_: Character backspace, token delete
 
 **Prefix Trie Biasing**:
-A runtime trie indexing contextual hotwords and active application identifiers to additively boost logit scores in the Transducer Joiner layer without mutating base model weights.
+A runtime trie indexing contextual hotwords and active application identifiers to additively boost logit scores in the Transducer Joiner layer without mutating base model weights, serialized directly to `OnlineRecognizer::create_stream_with_hotwords`.
 _Avoid_: Hotword list, keyword booster
 
 **Energy Decay Fallback**:

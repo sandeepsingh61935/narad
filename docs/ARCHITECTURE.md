@@ -213,39 +213,17 @@ narad/
 
 ## 8. Architectural Decision Records (ADRs)
 
-### ADR-001: Native IBus Pre-Edit Engine vs. Simulated Keystroke/Clipboard Paste
-- **Context:** Wispr Flow and legacy dictation tools rely on simulated `Ctrl+V` / `Cmd+V` clipboard pastes. This clobbers the user's system clipboard, disrupts web applications (e.g. Monaco editor in VS Code, Slack message boxes, Google Docs), and prevents users from seeing words appear live as they speak.
-- **Decision:** Implement a native Linux Input Method Engine (`org.freedesktop.IBus.Engine`). Partial transcription tokens are emitted directly to the active application context via `UpdatePreeditText`, displaying an underlined inline preview at the blinking cursor. Upon utterance end or natural pause, text is atomically locked in via `CommitText`.
-- **Fallback:** If an application lacks an active IBus context (e.g. raw VTE terminals or legacy XWayland applications), the daemon gracefully falls back to clipboard paste via the RemoteDesktop portal (`libei`).
-- **Consequences:** Eliminates clipboard race conditions, provides immediate visual feedback, works identically across Wayland and X11, and delivers lower latency than simulated keystroke injection.
+Detailed records live in individual documents under [`docs/adr/`](./adr/):
 
-### ADR-002: Polymorphic Universal BYOM ASR Dispatcher & Hardware Profiler
-- **Context:** Users require running diverse ASR models matched to their hardware capabilities (from ultra-low-power Zipformer int8 on 4-thread CPUs to Whisper large or Moonshine on AVX-512 / GPU workstations), plus cross-lingual translation (Lang A → Lang B). Hardcoding a single model architecture blocks model diversity.
-- **Decision:** Introduce a polymorphic `NaradAsrEngine` trait with three execution modes:
-  1. **True Online Streaming:** Driven by `sherpa_onnx::OnlineRecognizer` for Zipformer Transducer/CTC models (sub-35ms token latency).
-  2. **Sliding-Window Chunked Pseudo-Streaming:** Driven by `sherpa_onnx::OfflineRecognizer` for Moonshine and Whisper models with overlapping 500ms sliding windows.
-  3. **Direct Single-Pass Multilingual Translation:** Driven by Whisper offline translation mode (`task = "translate"`), decoding directly from source speech in Language A to target text in Language B.
-  A runtime hardware profiler checks CPU SIMD flags (AVX2, AVX-512, AMX), cache topology, and memory bandwidth, dynamically tailoring thread allocations and recommending model tiers.
-- **Consequences:** Enables universal Bring-Your-Own-Model (BYOM) folder drops with automatic `manifest.toml` generation while maximizing CPU efficiency.
-
-### ADR-003: Transactional Zero-Downtime Hot-Swapping via `ArcSwap`
-- **Context:** In traditional architectures, changing models in settings requires stopping the daemon, causing dropped audio frames, UI disconnects, and hotkey unregistration.
-- **Decision:** Wrap the active inference engine in `arc_swap::ArcSwapOption<Box<dyn NaradAsrEngine>>`. Background threads load and verify new model weights into RAM. Once verified, an atomic pointer swap replaces the resident engine with zero lock contention. In-flight utterances finish processing on the old engine instance before it is dropped.
-- **Consequences:** Zero-downtime model switching; audio recording and hotkey pipelines continue uninterrupted.
-
-### ADR-004: Local Desktop Accessibility (AT-SPI2) & Surrounding-Text Context Harvesting
-- **Context:** Wispr Flow achieves high transcription accuracy by harvesting accessibility trees (`ax_context`), screen OCR, and IDE symbol names. Replicating this via cloud transmission would violate Narad's core local-only privacy contract.
-- **Decision:** Harvest context 100% locally on-device:
-  1. Inspect the focused application's accessibility tree via AT-SPI2 D-Bus (`org.a11y.Bus`) to retrieve input field roles and visible text labels.
-  2. Query IBus surrounding-text context via `SetSurroundingText` to detect preceding punctuation, sentence capitalization, and spacing.
-  3. Scan active project directories for code identifiers and variable names.
-  Harvested tokens are loaded directly into Sherpa-ONNX's in-memory dynamic hotword biasing table (`OnlineRecognizer::create_stream_with_hotwords`). Zero pixels, audio, or text leave the device.
-- **Consequences:** Delivers context-aware dictation accuracy matching or exceeding Wispr Flow while maintaining a zero-cloud, 100% private security boundary.
-
-### ADR-005: Local Model Context Protocol (MCP) Server
-- **Context:** Modern coding environments are driven by autonomous AI agents (Antigravity, Claude, Cursor) that need seamless access to dictation, history, and voice-command operations.
-- **Decision:** Embed a native stdio and Unix domain socket Model Context Protocol (MCP) server directly inside `naradd`. Agents can query transcription history, inject domain vocabulary, inspect current engine status, and trigger dictation flows.
-- **Consequences:** Positions Narad as the primary voice interface for autonomous AI coding agents.
+- **[ADR-0001: Native IBus Pre-Edit Engine vs. Simulated Keystroke/Clipboard Paste](./adr/0001-native-ibus-preedit-engine.md)**: Emits uncommitted tokens via `UpdatePreeditText` at the cursor, locking text with `CommitText`; falls back to `libei` on non-IBus targets.
+- **[ADR-0002: Polymorphic Universal BYOM ASR Dispatcher & Hardware Profiler](./adr/0002-polymorphic-byom-asr-dispatcher.md)**: Online streaming (Zipformer), chunked pseudo-streaming (Whisper/Moonshine), and multilingual direct translation behind `NaradAsrEngine`.
+- **[ADR-0003: Transactional Zero-Downtime Hot-Swapping via `ArcSwap`](./adr/0003-transactional-zero-downtime-hot-swapping.md)**: Background weight loading and atomic pointer swap without dropping hotkeys, audio frames, or client D-Bus connections.
+- **[ADR-0004: Local Desktop Accessibility (AT-SPI2) & Surrounding-Text Context Harvesting](./adr/0004-local-desktop-context-harvesting.md)**: 100% on-device AT-SPI2 D-Bus label extraction and IBus surrounding text loaded into `OnlineRecognizer::create_stream_with_hotwords`.
+- **[ADR-0005: Local Model Context Protocol (MCP) Server](./adr/0005-local-model-context-protocol-server.md)**: Native stdio and Unix domain socket MCP server inside `naradd` for AI coding agents.
+- **[ADR-0006: Deterministic Acoustic-Prosodic Heuristics over Generative SLMs](./adr/0006-deterministic-prosodic-pipeline-over-slm.md)**: Three-tier deterministic pipeline (YIN F0 pitch tracking, IBus keystroke arbitration, syntactic lookaround) rejecting high-latency generative SLMs.
+- **[ADR-0007: Dual-Buffer IME Keystroke Arbitration with Word-Level Backspace Rewind](./adr/0007-dual-buffer-ime-keystroke-arbitration.md)**: Typing printable keys commits active pre-edit and passes through without stopping dictation; physical Backspace pops trailing spoken word.
+- **[ADR-0008: Lock-Free Dynamic Hotword Biasing via Atomic Trie Swapping](./adr/0008-lock-free-dynamic-hotword-biasing.md)**: Active application hotwords and contacts compiled into dynamic prefix tries and passed to recognizer streams without mutating model weights.
+- **[ADR-0009: Spoken Punctuation Precedence and Syntactic Pre-edit Soft Ceiling](./adr/0009-punctuation-precedence-and-preedit-ceiling.md)**: Spoken commands atomically supersede prosodic marks; pre-edit soft ceiling triggers clause commit on sentence boundaries when exceeding 20 words.
 
 ---
 

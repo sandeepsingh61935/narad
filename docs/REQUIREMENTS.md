@@ -92,7 +92,7 @@ Visual/surface authority: Stitch **Quiet Precision** + `narad_floating_hud_compo
 | FR-ASR-6 | Transcribe dropped audio/video files from the dashboard (and via CLI). | 2 |
 | FR-ASR-7 | Real-time online streaming speech recognition with sub-35ms partial token emissions via `sherpa_onnx::OnlineRecognizer` (Zipformer Transducer/CTC). | 1 |
 | FR-ASR-8 | Universal BYOM (Bring-Your-Own-Model) dynamic discovery & runtime hardware profiler: auto-detects user-dropped models, benchmarks AVX2/AVX-512 SIMD cores, and tunes inference threads. | 2 |
-| FR-ASR-9 | Dynamic Joiner Prefix Trie biasing: injects additive logit boosts for custom dictionary and active app hotwords during streaming beam search (ADR-0003). | 2 |
+| FR-ASR-9 | Dynamic Joiner Prefix Trie biasing: injects additive logit boosts for custom dictionary and active app hotwords during streaming beam search (ADR-0008). | 2 |
 
 ### 4.5 Text processing pipeline
 
@@ -107,11 +107,11 @@ Order: raw transcript → voice commands → dictionary/replacements → transla
 | FR-TXT-5 | Translation A → B via installed translation pack or single-pass Whisper translation; skipped when A = B. | 3 |
 | FR-TXT-6 | AI cleanup with a local LLM: filler removal, hallucination removal, formatting, restructure, rephrase. | 4 |
 | FR-TXT-7 | Cleanup is per-mode: **off for Plain dictation**, on for modes that need it. | 4 |
-| FR-TXT-8 | Cleanup guard: if LLM output adds content not grounded in the transcript (length/novel-word thresholds), fall back to the pre-cleanup text and flag the entry (ADR-0001). | 4 |
+| FR-TXT-8 | Cleanup guard: if LLM output adds content not grounded in the transcript (length/novel-word thresholds), fall back to the pre-cleanup text and flag the entry (ADR-0006). | 4 |
 | FR-TXT-9 | Contextual Disambiguation & Spoken Symbol Protection: 3-token syntactic lookaround protects literal nouns ("colon cancer", "colonial period") from being converted into symbols, with eager escape ("literal colon"). | 2 |
-| FR-TXT-10 | Speech Repair Pruner: Detects conversational false-starts ("no wait", "actually no") and prunes abandoned constituent phrases. | 2 |
+| FR-TXT-10 | Speech Repair Pruner: Detects conversational false-starts ("no wait", "actually no") and prunes abandoned constituent phrases in Clean and Code modes (off in Plain dictation per FR-TXT-7). | 2 |
 | FR-TXT-11 | Homophone Collocation Resolver: Resolves homophone collisions (their/there/they're, cache/cash) via Part-of-Speech bigrams. | 2 |
-| FR-TXT-12 | Punctuation Precedence: Spoken punctuation commands atomically supersede and replace prior prosodic marks (ADR-0004). | 2 |
+| FR-TXT-12 | Punctuation Precedence: Spoken punctuation commands atomically supersede and replace prior prosodic marks (ADR-0009). | 2 |
 | FR-VOC-3 | Auto-learning dictionary: semantic diff-match-patch detects post-insertion user edits and learns corrections into the local SQLite dictionary. | 2 |
 
 Built-in modes (editable, user can add more):
@@ -138,8 +138,8 @@ Built-in modes (editable, user can add more):
 | FR-INS-6 | Selection command mode: select text, press selection hotkey, speak an instruction ("make this formal", "translate to Hindi", "shorten") → selection replaced. | 4 |
 | FR-INS-7 | Primary streaming method: Native IBus Input Method Engine (`org.freedesktop.IBus.Engine`) shows underlined pre-edit tokens directly at the blinking cursor in real time; commits atomically on silence pause or hotkey release. | 1 |
 | FR-INS-8 | Surrounding-text context via IBus `SetSurroundingText` dynamically determines capitalization, sentence boundaries, and word spacing without overwriting existing text. | 1 |
-| FR-INS-9 | Dual-Buffer IME Keystroke Arbitration: Physical typing during active pre-edit commits pre-edit text atomically and passes the key through without session termination; physical Backspace triggers Word-Level Rewind on active pre-edit (ADR-0002). | 1 |
-| FR-INS-10 | Syntactic Pre-edit Soft Ceiling: Auto-commits completed sentences when uncommitted pre-edit exceeds 20 words during continuous speech (ADR-0004). | 1 |
+| FR-INS-9 | Dual-Buffer IME Keystroke Arbitration: Physical typing during active pre-edit commits pre-edit text atomically and passes the key through without session termination; physical Backspace triggers Word-Level Rewind on active pre-edit (ADR-0007). | 1 |
+| FR-INS-10 | Syntactic Pre-edit Soft Ceiling: Auto-commits completed sentences when uncommitted pre-edit exceeds 20 words during continuous speech (ADR-0009). | 1 |
 
 ### 4.7 Dashboard and history
 

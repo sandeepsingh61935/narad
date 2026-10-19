@@ -1,6 +1,9 @@
 //! Offline and online streaming ASR via sherpa-onnx (FR-ASR-1/2/5, FR-MDL-6, Task 1).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use sherpa_onnx::{
@@ -78,8 +81,8 @@ fn has_whisper_files(dir: &Path) -> bool {
 }
 
 /// No pack in this phase has a hotword path. Parakeet CTC stays post-correction only (FR-TXT-2).
-pub fn supports_vocabulary_bias(_model_id: &str) -> bool {
-    false
+pub fn supports_vocabulary_bias(model_id: &str) -> bool {
+    model_id.contains("streaming") || model_id.contains("zipformer")
 }
 
 /// Warm-loaded English ASR recogniser.
@@ -254,6 +257,477 @@ impl AsrEngine {
     }
 }
 
+/// Dynamic hotword boost weights (ADR-0003, spec §1).
+pub const CUSTOM_DICT_BOOST: f32 = 2.5;
+pub const APP_PROFILE_BOOST: f32 = 1.5;
+pub const WINDOW_TITLE_BOOST: f32 = 1.0;
+
+#[derive(Debug, Clone, Default)]
+struct TrieNode {
+    children: HashMap<i32, usize>,
+    boost: f32,
+    is_terminal: bool,
+}
+
+/// Prefix Trie mapping BPE token sequences from tokens.txt to additive logit boosts (FR-ASR-9, ADR-0003).
+#[derive(Debug, Clone)]
+pub struct ContextBiasingTrie {
+    nodes: Vec<TrieNode>,
+    token_to_id: HashMap<String, i32>,
+    id_to_token: HashMap<i32, String>,
+    phrases: Vec<(String, f32)>,
+}
+
+impl Default for ContextBiasingTrie {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ContextBiasingTrie {
+    /// Create a new ContextBiasingTrie with a root node (state 0).
+    /// If default online model tokens are found, loads them; otherwise initializes fallback ASCII tokens.
+    pub fn new() -> Self {
+        let mut trie = Self {
+            nodes: vec![TrieNode::default()],
+            token_to_id: HashMap::new(),
+            id_to_token: HashMap::new(),
+            phrases: Vec::new(),
+        };
+
+        // Attempt best-effort load from default streaming model directory
+        if let Ok(dir) = resolve_model_dir(DEFAULT_ONLINE_ASR_ID) {
+            let tokens_path = dir.join("tokens.txt");
+            if tokens_path.is_file() {
+                let _ = trie.load_tokens_file(&tokens_path);
+            }
+        }
+
+        // If no tokens loaded, ensure fallback ASCII letters are available
+        if trie.token_to_id.is_empty() {
+            trie.init_ascii_fallback();
+        }
+
+        trie
+    }
+
+    /// Construct a trie from a specific tokens.txt file path.
+    pub fn from_tokens_file(path: impl AsRef<Path>) -> Result<Self> {
+        let mut trie = Self {
+            nodes: vec![TrieNode::default()],
+            token_to_id: HashMap::new(),
+            id_to_token: HashMap::new(),
+            phrases: Vec::new(),
+        };
+        trie.load_tokens_file(path)?;
+        Ok(trie)
+    }
+
+    /// Load tokens from a tokens.txt file path.
+    pub fn load_tokens_file(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        let content = std::fs::read_to_string(path)?;
+        self.load_tokens_str(&content);
+        Ok(())
+    }
+
+    /// Load tokens from a string in `token_str token_id` format.
+    pub fn load_tokens_str(&mut self, content: &str) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Some((tok, id_str)) = line.rsplit_once(' ') {
+                if let Ok(id) = id_str.trim().parse::<i32>() {
+                    self.token_to_id.insert(tok.to_string(), id);
+                    self.id_to_token.insert(id, tok.to_string());
+                }
+            }
+        }
+    }
+
+    fn init_ascii_fallback(&mut self) {
+        for b in b'A'..=b'Z' {
+            let s = (b as char).to_string();
+            let id = b as i32;
+            self.token_to_id.insert(s.clone(), id);
+            self.id_to_token.insert(id, s);
+        }
+        for b in b'0'..=b'9' {
+            let s = (b as char).to_string();
+            let id = b as i32;
+            self.token_to_id.insert(s.clone(), id);
+            self.id_to_token.insert(id, s);
+        }
+    }
+
+    /// Add a custom token mapping directly.
+    pub fn add_token(&mut self, token: &str, id: i32) {
+        self.token_to_id.insert(token.to_string(), id);
+        self.id_to_token.insert(id, token.to_string());
+    }
+
+    /// Lookup token ID for a string piece.
+    pub fn get_token_id(&self, token: &str) -> Option<i32> {
+        self.token_to_id.get(token).copied()
+    }
+
+    /// Tokenize text into uppercase BPE token IDs matching tokens.txt.
+    pub fn tokenize(&self, phrase: &str) -> Vec<i32> {
+        let upper = phrase.to_uppercase();
+        let words: Vec<&str> = upper.split_whitespace().collect();
+        let mut token_ids = Vec::new();
+
+        for word in words {
+            let sp_word = format!("\u{2581}{}", word);
+            let mut matched = self.greedy_tokenize_piece(&sp_word);
+            if matched.is_empty() {
+                matched = self.greedy_tokenize_piece(word);
+            }
+            token_ids.extend(matched);
+        }
+
+        token_ids
+    }
+
+    fn greedy_tokenize_piece(&self, piece: &str) -> Vec<i32> {
+        let mut ids = Vec::new();
+        let chars: Vec<char> = piece.chars().collect();
+        let mut i = 0;
+
+        while i < chars.len() {
+            let mut longest_len = 0;
+            let mut best_id = None;
+
+            for j in (i + 1)..=chars.len() {
+                let sub: String = chars[i..j].iter().collect();
+                if let Some(&id) = self.token_to_id.get(&sub) {
+                    longest_len = j - i;
+                    best_id = Some(id);
+                }
+            }
+
+            if let Some(id) = best_id {
+                ids.push(id);
+                i += longest_len;
+            } else {
+                let ch = chars[i];
+                let ch_str = ch.to_string();
+                if let Some(&id) = self.token_to_id.get(&ch_str) {
+                    ids.push(id);
+                } else if ch.is_ascii_alphanumeric() {
+                    ids.push(ch as i32);
+                }
+                i += 1;
+            }
+        }
+
+        ids
+    }
+
+    /// Insert a phrase with an additive logit boost.
+    pub fn insert(&mut self, phrase: &str, boost: f32) {
+        let phrase_trimmed = phrase.trim();
+        if phrase_trimmed.is_empty() {
+            return;
+        }
+        self.phrases.push((phrase_trimmed.to_string(), boost));
+        let token_ids = self.tokenize(phrase_trimmed);
+        self.insert_token_ids(&token_ids, boost);
+    }
+
+    /// Insert a token sequence directly with an additive logit boost.
+    pub fn insert_token_ids(&mut self, token_ids: &[i32], boost: f32) {
+        if token_ids.is_empty() {
+            return;
+        }
+        let mut curr = 0;
+        for &tok in token_ids {
+            let next = if let Some(&child) = self.nodes[curr].children.get(&tok) {
+                child
+            } else {
+                let child = self.nodes.len();
+                self.nodes.push(TrieNode::default());
+                self.nodes[curr].children.insert(tok, child);
+                child
+            };
+            if boost > self.nodes[next].boost {
+                self.nodes[next].boost = boost;
+            }
+            curr = next;
+        }
+        self.nodes[curr].is_terminal = true;
+    }
+
+    /// Step from the current state with token_id.
+    /// Returns (next_state, boost).
+    /// If token_id matches a child transition, moves to child with child boost.
+    /// If not, falls back to root transitions if matching, otherwise resets to 0 with 0.0 boost.
+    pub fn step(&self, state: usize, token_id: i32) -> (usize, f32) {
+        if state >= self.nodes.len() {
+            return (0, 0.0);
+        }
+
+        // 1. Direct transition from current state
+        if let Some(&child) = self.nodes[state].children.get(&token_id) {
+            return (child, self.nodes[child].boost);
+        }
+
+        // 2. Fallback to root node
+        if state != 0 {
+            if let Some(&root_child) = self.nodes[0].children.get(&token_id) {
+                return (root_child, self.nodes[root_child].boost);
+            }
+        }
+
+        // 3. Reset to root
+        (0, 0.0)
+    }
+
+    /// Total number of nodes in the Trie.
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Phrases registered in this Trie.
+    pub fn phrases(&self) -> &[(String, f32)] {
+        &self.phrases
+    }
+
+    /// Wrap this Trie in an Arc for lock-free pointer swapping (ADR-0003).
+    pub fn into_shared(self) -> Arc<Self> {
+        Arc::new(self)
+    }
+
+    /// Dynamically populate the Trie from active application profile, custom dictionary, and window title.
+    pub fn populate_context(
+        &mut self,
+        app_profile: Option<&crate::config::AppProfile>,
+        custom_dict: &[impl AsRef<str>],
+        window_title: Option<&str>,
+    ) {
+        // 1. Active App Profile (boost = 1.5)
+        if let Some(profile) = app_profile {
+            for part in profile.app_id.split(['.', '-', '_', ' ']) {
+                let part = part.trim();
+                if part.len() >= 3 {
+                    self.insert(part, APP_PROFILE_BOOST);
+                }
+            }
+            if !profile.mode.is_empty() && profile.mode != "plain" {
+                self.insert(&profile.mode, APP_PROFILE_BOOST);
+            }
+        }
+
+        // 2. Custom Dictionary (boost = 2.5)
+        for phrase in custom_dict {
+            let p = phrase.as_ref().trim();
+            if !p.is_empty() {
+                self.insert(p, CUSTOM_DICT_BOOST);
+            }
+        }
+
+        // 3. Active Window Title (boost = 1.0)
+        if let Some(title) = window_title {
+            for word in title.split(|c: char| !c.is_alphanumeric() && c != '_') {
+                let word = word.trim();
+                if word.len() >= 3 && !is_hallucination(word) {
+                    self.insert(word, WINDOW_TITLE_BOOST);
+                }
+            }
+        }
+    }
+}
+
+/// Acoustic prosodic event emitted by prosody tracking (FR-ASR-9, ADR-0001, ADR-0004).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ProsodicEvent {
+    FallingIntonation,
+    RisingIntonation,
+    LevelContinuation,
+    Silence(Duration),
+}
+
+/// Prosodic punctuation action resulting from intonation and pause duration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProsodicPunctuationAction {
+    pub mark: char,
+    pub capitalize_next: bool,
+}
+
+impl ProsodicPunctuationAction {
+    pub fn period() -> Self {
+        Self {
+            mark: '.',
+            capitalize_next: true,
+        }
+    }
+
+    pub fn question_mark() -> Self {
+        Self {
+            mark: '?',
+            capitalize_next: true,
+        }
+    }
+
+    pub fn comma() -> Self {
+        Self {
+            mark: ',',
+            capitalize_next: false,
+        }
+    }
+}
+
+/// State machine combining acoustic prosodic events with pause durations (FR-ASR-9, ADR-0004).
+///
+/// Boundary rules:
+/// - Falling pitch + silence >= 380ms -> auto-period ('.') + capitalize next token.
+/// - Rising pitch + silence >= 250ms -> auto-question mark ('?') + capitalize next token.
+/// - Level pitch + pause 160..380ms -> auto-comma (',').
+/// - In `Code` mode, disables prosodic punctuation to preserve exact code syntax.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProsodicPunctuationTrigger {
+    mode: String,
+    last_intonation: Option<ProsodicEvent>,
+    accumulated_silence: Duration,
+    triggered_in_current_pause: bool,
+    pub capitalize_next: bool,
+}
+
+impl Default for ProsodicPunctuationTrigger {
+    fn default() -> Self {
+        Self::new("plain")
+    }
+}
+
+impl ProsodicPunctuationTrigger {
+    pub fn new(mode: &str) -> Self {
+        Self {
+            mode: mode.to_string(),
+            last_intonation: None,
+            accumulated_silence: Duration::ZERO,
+            triggered_in_current_pause: false,
+            capitalize_next: false,
+        }
+    }
+
+    pub fn set_mode(&mut self, mode: &str) {
+        self.mode = mode.to_string();
+    }
+
+    pub fn mode(&self) -> &str {
+        &self.mode
+    }
+
+    pub fn is_code_mode(&self) -> bool {
+        self.mode.eq_ignore_ascii_case("code")
+    }
+
+    pub fn reset(&mut self) {
+        self.last_intonation = None;
+        self.accumulated_silence = Duration::ZERO;
+        self.triggered_in_current_pause = false;
+    }
+
+    pub fn reset_all(&mut self) {
+        self.reset();
+        self.capitalize_next = false;
+    }
+
+    /// Ingest a prosodic event (pitch contour or silence).
+    /// Returns any punctuation action triggered by this event.
+    pub fn feed_event(&mut self, event: ProsodicEvent) -> Option<ProsodicPunctuationAction> {
+        match event {
+            ProsodicEvent::FallingIntonation
+            | ProsodicEvent::RisingIntonation
+            | ProsodicEvent::LevelContinuation => {
+                self.last_intonation = Some(event);
+                self.accumulated_silence = Duration::ZERO;
+                self.triggered_in_current_pause = false;
+                None
+            }
+            ProsodicEvent::Silence(dur) => {
+                if dur > self.accumulated_silence {
+                    self.accumulated_silence = dur;
+                } else {
+                    self.accumulated_silence += dur;
+                }
+                self.evaluate_trigger()
+            }
+        }
+    }
+
+    /// Feed pause duration directly.
+    pub fn feed_pause(&mut self, pause_duration: Duration) -> Option<ProsodicPunctuationAction> {
+        self.accumulated_silence = pause_duration;
+        self.evaluate_trigger()
+    }
+
+    fn evaluate_trigger(&mut self) -> Option<ProsodicPunctuationAction> {
+        if self.is_code_mode() {
+            return None;
+        }
+        if self.triggered_in_current_pause {
+            return None;
+        }
+
+        let silence_ms = self.accumulated_silence.as_millis();
+        let action = match self.last_intonation {
+            Some(ProsodicEvent::FallingIntonation) if silence_ms >= 380 => {
+                Some(ProsodicPunctuationAction::period())
+            }
+            Some(ProsodicEvent::RisingIntonation) if silence_ms >= 250 => {
+                Some(ProsodicPunctuationAction::question_mark())
+            }
+            Some(ProsodicEvent::LevelContinuation) if silence_ms >= 160 && silence_ms < 380 => {
+                Some(ProsodicPunctuationAction::comma())
+            }
+            _ => None,
+        };
+
+        if let Some(act) = action {
+            self.triggered_in_current_pause = true;
+            if act.capitalize_next {
+                self.capitalize_next = true;
+            }
+            Some(act)
+        } else {
+            None
+        }
+    }
+}
+
+/// Strip trailing punctuation and trailing whitespace (ADR-0004).
+pub fn pop_trailing_punctuation(s: &mut String) {
+    while s.ends_with(char::is_whitespace) {
+        s.pop();
+    }
+    while let Some(c) = s.chars().last() {
+        if c == ',' || c == '.' || c == '?' || c == '!' || c == ';' || c == ':' {
+            s.pop();
+        } else {
+            break;
+        }
+    }
+}
+
+/// Format streaming punctuation with an optional prosodic punctuation action (ADR-0004).
+///
+/// If `text` contains spoken punctuation commands (e.g. "period", "comma"), they atomically
+/// supersede any prosodic mark.
+pub fn format_streaming_punctuation_with_prosody(
+    text: &str,
+    prosodic_action: Option<ProsodicPunctuationAction>,
+) -> String {
+    let mut formatted = format_streaming_punctuation(text);
+    if let Some(act) = prosodic_action {
+        if !formatted.ends_with(|c| c == '.' || c == '?' || c == '!' || c == ',') {
+            formatted.push(act.mark);
+        }
+    }
+    formatted
+}
+
 /// Real-time punctuation mapping for streaming dictation.
 /// Capitalize first letter of sentences and lowercase others for all-caps transcripts.
 pub fn to_sentence_case(text: &str) -> String {
@@ -309,10 +783,12 @@ pub fn format_streaming_punctuation(text: &str) -> String {
         if let Some(next_tok) = tokens.get(i + 1) {
             let next_lower = next_tok.to_ascii_lowercase();
             if lower == "question" && next_lower == "mark" {
+                pop_trailing_punctuation(&mut result);
                 result.push('?');
                 i += 2;
                 continue;
             } else if lower == "exclamation" && next_lower == "mark" {
+                pop_trailing_punctuation(&mut result);
                 result.push('!');
                 i += 2;
                 continue;
@@ -321,10 +797,12 @@ pub fn format_streaming_punctuation(text: &str) -> String {
 
         // Check 1-word tokens: "comma", "period"
         if lower == "comma" {
+            pop_trailing_punctuation(&mut result);
             result.push(',');
             i += 1;
             continue;
         } else if lower == "period" {
+            pop_trailing_punctuation(&mut result);
             result.push('.');
             i += 1;
             continue;
@@ -357,14 +835,79 @@ pub fn map_punctuation_token(token: &str) -> Option<&'static str> {
     }
 }
 
-/// Streaming online ASR stream wrapper.
+/// Streaming online ASR stream wrapper with dynamic Context Biasing Trie and Prosodic Punctuation Trigger.
 pub struct OnlineAsrStream {
     stream: OnlineStream,
+    pub context_trie: Option<Arc<ContextBiasingTrie>>,
+    pub prosody_trigger: ProsodicPunctuationTrigger,
+    pub prosody_mark: Option<char>,
+    pub trie_state: usize,
 }
 
 impl OnlineAsrStream {
     pub fn new(stream: OnlineStream) -> Self {
-        Self { stream }
+        Self {
+            stream,
+            context_trie: None,
+            prosody_trigger: ProsodicPunctuationTrigger::new("plain"),
+            prosody_mark: None,
+            trie_state: 0,
+        }
+    }
+
+    /// Create a new stream with a specific context trie.
+    pub fn new_with_trie(stream: OnlineStream, trie: Arc<ContextBiasingTrie>) -> Self {
+        Self {
+            stream,
+            context_trie: Some(trie),
+            prosody_trigger: ProsodicPunctuationTrigger::new("plain"),
+            prosody_mark: None,
+            trie_state: 0,
+        }
+    }
+
+    /// Set active context biasing trie.
+    pub fn set_context_trie(&mut self, trie: Arc<ContextBiasingTrie>) {
+        self.context_trie = Some(trie);
+    }
+
+    /// Access active context biasing trie.
+    pub fn context_trie(&self) -> Option<&Arc<ContextBiasingTrie>> {
+        self.context_trie.as_ref()
+    }
+
+    /// Set dictation mode (e.g. "plain", "code") on the prosody trigger.
+    pub fn set_mode(&mut self, mode: &str) {
+        self.prosody_trigger.set_mode(mode);
+    }
+
+    /// Feed a prosodic event to this stream's trigger.
+    pub fn feed_prosodic_event(&mut self, event: ProsodicEvent) -> Option<ProsodicPunctuationAction> {
+        let action = self.prosody_trigger.feed_event(event);
+        if let Some(act) = action {
+            self.prosody_mark = Some(act.mark);
+        }
+        action
+    }
+
+    /// Feed pause duration to this stream's trigger.
+    pub fn feed_prosodic_pause(&mut self, duration: Duration) -> Option<ProsodicPunctuationAction> {
+        let action = self.prosody_trigger.feed_pause(duration);
+        if let Some(act) = action {
+            self.prosody_mark = Some(act.mark);
+        }
+        action
+    }
+
+    /// Advance Prefix Trie state with token_id and return additive logit boost.
+    pub fn step_biasing(&mut self, token_id: i32) -> f32 {
+        if let Some(trie) = &self.context_trie {
+            let (next, boost) = trie.step(self.trie_state, token_id);
+            self.trie_state = next;
+            boost
+        } else {
+            0.0
+        }
     }
 
     /// Ingest a mono PCM audio chunk.
@@ -383,7 +926,13 @@ impl OnlineAsrStream {
         if trimmed.is_empty() {
             None
         } else {
-            Some(format_streaming_punctuation(trimmed))
+            let mut formatted = format_streaming_punctuation(trimmed);
+            if let Some(mark) = self.prosody_mark {
+                if !formatted.ends_with(|c| c == '.' || c == '?' || c == '!' || c == ',') {
+                    formatted.push(mark);
+                }
+            }
+            Some(formatted)
         }
     }
 
@@ -393,16 +942,32 @@ impl OnlineAsrStream {
         while recognizer.is_ready(&self.stream) {
             recognizer.decode(&self.stream);
         }
-        recognizer
+        let result = recognizer
             .get_result(&self.stream)
-            .map(|r| format_streaming_punctuation(r.text.trim()))
-            .unwrap_or_default()
+            .map(|r| {
+                let trimmed = r.text.trim();
+                let mut formatted = format_streaming_punctuation(trimmed);
+                if let Some(mark) = self.prosody_mark {
+                    if !formatted.ends_with(|c| c == '.' || c == '?' || c == '!' || c == ',') {
+                        formatted.push(mark);
+                    }
+                }
+                formatted
+            })
+            .unwrap_or_default();
+        self.prosody_trigger.reset();
+        self.prosody_mark = None;
+        self.trie_state = 0;
+        result
     }
 
     /// Reset stream state after clause or utterance boundary.
     #[allow(dead_code)]
     pub fn reset(&mut self, recognizer: &OnlineRecognizer) {
         recognizer.reset(&self.stream);
+        self.prosody_trigger.reset();
+        self.prosody_mark = None;
+        self.trie_state = 0;
     }
 
     /// Check if recognizer detected an endpoint.
@@ -431,6 +996,7 @@ pub struct OnlineAsrEngine {
     pub model_id: String,
     #[allow(dead_code)]
     pub model_dir: PathBuf,
+    pub context_trie: Option<Arc<ContextBiasingTrie>>,
 }
 
 fn validate_model_file(p: &Path) -> Result<()> {
@@ -521,18 +1087,45 @@ impl OnlineAsrEngine {
         let recognizer = OnlineRecognizer::create(&config)
             .ok_or_else(|| anyhow!("OnlineRecognizer::create failed for {model_id}"))?;
 
+        let tokens = find_file_with_filter(
+            &model_dir,
+            &["tokens.txt"],
+            |s| s.ends_with("tokens.txt"),
+        );
+        let mut context_trie = None;
+        if let Ok(tokens_path) = tokens {
+            if let Ok(trie) = ContextBiasingTrie::from_tokens_file(&tokens_path) {
+                context_trie = Some(Arc::new(trie));
+            }
+        }
+
         info!(model_id, "streaming online ASR model warm");
         Ok(Self {
             recognizer,
             model_id: model_id.to_string(),
             model_dir,
+            context_trie,
         })
     }
 
-    /// Create a new online recognition stream.
+    /// Create a new online recognition stream, inheriting the active context biasing trie.
     pub fn create_stream(&self) -> Result<OnlineAsrStream> {
         let stream = self.recognizer.create_stream();
-        Ok(OnlineAsrStream::new(stream))
+        let mut asr_stream = OnlineAsrStream::new(stream);
+        if let Some(trie) = &self.context_trie {
+            asr_stream.set_context_trie(Arc::clone(trie));
+        }
+        Ok(asr_stream)
+    }
+
+    /// Set the active context biasing trie on the engine for subsequent streams.
+    pub fn set_context_trie(&mut self, trie: Arc<ContextBiasingTrie>) {
+        self.context_trie = Some(trie);
+    }
+
+    /// Access the active context biasing trie.
+    pub fn context_trie(&self) -> Option<&Arc<ContextBiasingTrie>> {
+        self.context_trie.as_ref()
     }
 
     /// Transcribe a complete waveform buffer using this online recognizer.
@@ -1249,5 +1842,149 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn prefix_trie_insertion_and_boosts() {
+        let mut trie = ContextBiasingTrie::new();
+        // Insert custom token sequence
+        trie.insert_token_ids(&[100, 200, 300], 2.5);
+        let (s1, b1) = trie.step(0, 100);
+        assert!(s1 > 0);
+        assert_eq!(b1, 2.5);
+        let (s2, b2) = trie.step(s1, 200);
+        assert!(s2 > 0);
+        assert_eq!(b2, 2.5);
+        let (s3, b3) = trie.step(s2, 300);
+        assert!(s3 > 0);
+        assert_eq!(b3, 2.5);
+
+        // Fallback to root on unknown token
+        let (s_fail, b_fail) = trie.step(s3, 9999);
+        assert_eq!(s_fail, 0);
+        assert_eq!(b_fail, 0.0);
+
+        // Word insertion with ASCII fallback or BPE tokens
+        trie.insert("HELLO", 3.0);
+        let tokens = trie.tokenize("HELLO");
+        assert!(!tokens.is_empty());
+        let mut state = 0;
+        let mut matched_boost = 0.0;
+        for tok in &tokens {
+            let (next_s, boost) = trie.step(state, *tok);
+            state = next_s;
+            matched_boost = boost;
+        }
+        assert!(state > 0);
+        assert_eq!(matched_boost, 3.0);
+
+        // Atomic pointer swap test (ADR-0003)
+        let shared = trie.into_shared();
+        let clone_ptr = Arc::clone(&shared);
+        assert_eq!(clone_ptr.step(0, 100).1, 2.5);
+
+        // Dynamic context population test
+        let mut ctx_trie = ContextBiasingTrie::new();
+        let app_prof = crate::config::AppProfile {
+            app_id: "com.visualstudio.code".into(),
+            mode: "code".into(),
+            paste_with_shift: None,
+        };
+        let custom_dict = vec!["kubernetes".to_string(), "transducer".to_string()];
+        let window_title = "asr.rs - Visual Studio Code";
+        ctx_trie.populate_context(Some(&app_prof), &custom_dict, Some(window_title));
+
+        let phrases: Vec<&str> = ctx_trie.phrases().iter().map(|(p, _)| p.as_str()).collect();
+        assert!(phrases.contains(&"code"));
+        assert!(phrases.contains(&"kubernetes"));
+        assert!(phrases.contains(&"transducer"));
+        assert!(phrases.contains(&"visualstudio"));
+        assert!(phrases.contains(&"asr"));
+    }
+
+    #[test]
+    fn prosodic_punctuation_trigger_state_transitions() {
+        let mut trigger = ProsodicPunctuationTrigger::new("plain");
+
+        // 1. Falling intonation + silence >= 380ms -> '.' + capitalize next
+        trigger.feed_event(ProsodicEvent::FallingIntonation);
+        assert!(trigger.feed_event(ProsodicEvent::Silence(Duration::from_millis(200))).is_none());
+        assert!(trigger.feed_event(ProsodicEvent::Silence(Duration::from_millis(300))).is_none());
+        let act = trigger.feed_event(ProsodicEvent::Silence(Duration::from_millis(380))).expect("period trigger");
+        assert_eq!(act.mark, '.');
+        assert!(act.capitalize_next);
+        assert!(trigger.capitalize_next);
+
+        // In same pause, no duplicate trigger
+        assert!(trigger.feed_event(ProsodicEvent::Silence(Duration::from_millis(450))).is_none());
+
+        // 2. Rising intonation + silence >= 250ms -> '?' + capitalize next
+        trigger.feed_event(ProsodicEvent::RisingIntonation);
+        assert!(trigger.feed_event(ProsodicEvent::Silence(Duration::from_millis(150))).is_none());
+        let act = trigger.feed_event(ProsodicEvent::Silence(Duration::from_millis(250))).expect("question trigger");
+        assert_eq!(act.mark, '?');
+        assert!(act.capitalize_next);
+
+        // 3. Level continuation + pause 160..380ms -> ','
+        trigger.feed_event(ProsodicEvent::LevelContinuation);
+        assert!(trigger.feed_event(ProsodicEvent::Silence(Duration::from_millis(100))).is_none());
+        let act = trigger.feed_event(ProsodicEvent::Silence(Duration::from_millis(200))).expect("comma trigger");
+        assert_eq!(act.mark, ',');
+        assert!(!act.capitalize_next);
+
+        // 4. Level continuation pause outside 160..380ms -> no comma
+        let mut trigger2 = ProsodicPunctuationTrigger::new("plain");
+        trigger2.feed_event(ProsodicEvent::LevelContinuation);
+        assert!(trigger2.feed_event(ProsodicEvent::Silence(Duration::from_millis(100))).is_none());
+
+        // 5. Code mode disables prosodic auto-punctuation
+        trigger.set_mode("code");
+        trigger.feed_event(ProsodicEvent::FallingIntonation);
+        assert!(trigger.feed_event(ProsodicEvent::Silence(Duration::from_millis(500))).is_none());
+        trigger.feed_event(ProsodicEvent::RisingIntonation);
+        assert!(trigger.feed_event(ProsodicEvent::Silence(Duration::from_millis(500))).is_none());
+        trigger.feed_event(ProsodicEvent::LevelContinuation);
+        assert!(trigger.feed_event(ProsodicEvent::Silence(Duration::from_millis(200))).is_none());
+    }
+
+    #[test]
+    fn spoken_command_precedence_over_prosodic_marks() {
+        // Spoken period supersedes prior prosodic comma
+        assert_eq!(format_streaming_punctuation("hello, period"), "hello.");
+        assert_eq!(format_streaming_punctuation("hello comma period"), "hello.");
+
+        // Spoken period supersedes prior prosodic question mark
+        assert_eq!(format_streaming_punctuation("hello? period"), "hello.");
+
+        // Spoken comma supersedes prior prosodic period
+        assert_eq!(format_streaming_punctuation("hello. comma"), "hello,");
+
+        // Spoken question mark supersedes prior prosodic comma
+        assert_eq!(format_streaming_punctuation("hello, question mark"), "hello?");
+
+        // Spoken exclamation mark supersedes prior prosodic comma
+        assert_eq!(format_streaming_punctuation("hello, exclamation mark"), "hello!");
+
+        // Spoken period in a continuous sentence replaces prosodic mark cleanly
+        assert_eq!(
+            format_streaming_punctuation("we arrived at the station, period the train was delayed"),
+            "we arrived at the station. the train was delayed"
+        );
+        assert_eq!(
+            format_streaming_punctuation("WE ARRIVED AT THE STATION, PERIOD THE TRAIN WAS DELAYED"),
+            "We arrived at the station. The train was delayed"
+        );
+
+        // format_streaming_punctuation_with_prosody helper
+        let act_comma = ProsodicPunctuationAction::comma();
+        assert_eq!(
+            format_streaming_punctuation_with_prosody("hello world", Some(act_comma)),
+            "hello world,"
+        );
+        // Spoken command inside text takes precedence over attached action
+        assert_eq!(
+            format_streaming_punctuation_with_prosody("hello world period", Some(act_comma)),
+            "hello world."
+        );
     }
 }

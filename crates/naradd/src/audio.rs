@@ -418,9 +418,597 @@ fn cue_search_paths(kind: &str) -> Vec<std::path::PathBuf> {
     paths
 }
 
+// ---------------------------------------------------------------------------
+// Real-time DSP Prosody Extraction: YIN F0 Pitch Tracker & Energy Decay (Task 3)
+// ---------------------------------------------------------------------------
+
+/// Frame size for prosodic analysis: 512 samples (32 ms @ 16 kHz).
+pub const PROSODY_FRAME_SIZE: usize = 512;
+/// Minimum lag for human vocal range (500 Hz @ 16 kHz).
+pub const PROSODY_MIN_LAG: usize = 32;
+/// Maximum lag for human vocal range (50 Hz @ 16 kHz).
+pub const PROSODY_MAX_LAG: usize = 320;
+/// Absolute dip threshold theta for YIN CMNDF.
+pub const YIN_THRESHOLD: f32 = 0.15;
+
+/// High-level prosodic event emitted by pitch/energy classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProsodicEvent {
+    /// Terminal declarative drop: Delta F0 <= -35 Hz and dE/dt < -0.10 dB/ms (or energy decay fallback).
+    FallingIntonation,
+    /// Terminal interrogative rise: Delta F0 >= +30 Hz.
+    RisingIntonation,
+    /// Clausal continuation: |Delta F0| < 18 Hz.
+    LevelContinuation,
+    /// Pause/silence with accumulated duration.
+    Silence(Duration),
+}
+
+impl ProsodicEvent {
+    /// Returns true if this event indicates a terminal clause or sentence boundary.
+    pub fn is_terminal_boundary(&self) -> bool {
+        matches!(self, ProsodicEvent::FallingIntonation)
+    }
+}
+
+/// Instantaneous prosodic frame features.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProsodyFrame {
+    pub pitch_hz: f32,
+    pub energy_db: f32,
+    pub energy_slope: f32,
+    pub is_voiced: bool,
+}
+
+/// Real-time YIN fundamental frequency ($F_0$) pitch tracker and energy decay estimator.
+///
+/// Designed with zero heap allocations in the hot processing loop to achieve
+/// < 0.2 ms CPU compute cost per 32 ms audio frame.
+#[derive(Debug)]
+pub struct ProsodyTracker {
+    sample_rate: u32,
+    ring_buffer: [f32; 2048],
+    ring_write_pos: usize,
+    ring_len: usize,
+    energy_history: [(f32, f32); 5],
+    energy_history_len: usize,
+    pitch_history: [(f32, f32); 32],
+    pitch_history_len: usize,
+    current_time_ms: f32,
+    silence_duration: Duration,
+    last_pitch: f32,
+    last_energy_db: f32,
+    last_energy_slope: f32,
+    last_pitch_delta: f32,
+    is_voiced: bool,
+}
+
+impl Default for ProsodyTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProsodyTracker {
+    /// Create a new prosody tracker at the default 16 kHz sample rate.
+    pub fn new() -> Self {
+        Self::with_sample_rate(TARGET_SAMPLE_RATE as u32)
+    }
+
+    /// Create a prosody tracker with a custom sample rate.
+    pub fn with_sample_rate(sample_rate: u32) -> Self {
+        Self {
+            sample_rate,
+            ring_buffer: [0.0; 2048],
+            ring_write_pos: 0,
+            ring_len: 0,
+            energy_history: [(0.0, 0.0); 5],
+            energy_history_len: 0,
+            pitch_history: [(0.0, 0.0); 32],
+            pitch_history_len: 0,
+            current_time_ms: 0.0,
+            silence_duration: Duration::ZERO,
+            last_pitch: 0.0,
+            last_energy_db: -120.0,
+            last_energy_slope: 0.0,
+            last_pitch_delta: 0.0,
+            is_voiced: false,
+        }
+    }
+
+    /// Reset internal state, histories, and ring buffer.
+    pub fn reset(&mut self) {
+        self.ring_write_pos = 0;
+        self.ring_len = 0;
+        self.energy_history_len = 0;
+        self.pitch_history_len = 0;
+        self.current_time_ms = 0.0;
+        self.silence_duration = Duration::ZERO;
+        self.last_pitch = 0.0;
+        self.last_energy_db = -120.0;
+        self.last_energy_slope = 0.0;
+        self.last_pitch_delta = 0.0;
+        self.is_voiced = false;
+    }
+
+    /// Push samples into the internal ring buffer without processing.
+    pub fn push_samples(&mut self, samples: &[f32]) {
+        for &s in samples {
+            self.ring_buffer[self.ring_write_pos] = s;
+            self.ring_write_pos = (self.ring_write_pos + 1) % self.ring_buffer.len();
+            if self.ring_len < self.ring_buffer.len() {
+                self.ring_len += 1;
+            }
+        }
+    }
+
+    /// Number of valid samples currently held in the ring buffer.
+    pub fn ring_len(&self) -> usize {
+        self.ring_len
+    }
+
+    /// Extract the latest 512 samples from the ring buffer into `out`.
+    pub fn copy_latest_frame(&self, out: &mut [f32; PROSODY_FRAME_SIZE]) -> bool {
+        if self.ring_len < PROSODY_FRAME_SIZE {
+            return false;
+        }
+        let cap = self.ring_buffer.len();
+        let start = (self.ring_write_pos + cap - PROSODY_FRAME_SIZE) % cap;
+        for i in 0..PROSODY_FRAME_SIZE {
+            out[i] = self.ring_buffer[(start + i) % cap];
+        }
+        true
+    }
+
+    /// Current sample rate in Hz.
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    /// Current fundamental pitch F0 in Hz (0.0 if unvoiced).
+    pub fn current_pitch(&self) -> f32 {
+        self.last_pitch
+    }
+
+    /// Current frame log energy in dB.
+    pub fn current_energy_db(&self) -> f32 {
+        self.last_energy_db
+    }
+
+    /// Current linear regression energy decay slope (dE/dt) in dB/ms.
+    pub fn current_energy_slope(&self) -> f32 {
+        self.last_energy_slope
+    }
+
+    /// Pitch change over the trailing ~150 ms in Hz.
+    pub fn pitch_delta_150ms(&self) -> f32 {
+        self.last_pitch_delta
+    }
+
+    /// Accumulated silence duration during non-speech/pause.
+    pub fn silence_duration(&self) -> Duration {
+        self.silence_duration
+    }
+
+    /// Returns true if the most recent frame was classified as voiced speech.
+    pub fn is_voiced(&self) -> bool {
+        self.is_voiced
+    }
+
+    /// Snapshot of the latest prosodic frame features.
+    pub fn current_frame(&self) -> ProsodyFrame {
+        ProsodyFrame {
+            pitch_hz: self.last_pitch,
+            energy_db: self.last_energy_db,
+            energy_slope: self.last_energy_slope,
+            is_voiced: self.is_voiced,
+        }
+    }
+
+    /// Compute frame log energy: E = 10 * log10( (1/W) * sum(x_i^2) + 1e-12 ).
+    pub fn compute_frame_energy(&self, window: &[f32]) -> f32 {
+        let n = window.len().min(PROSODY_FRAME_SIZE);
+        if n == 0 {
+            return -120.0;
+        }
+        let sum_sq: f32 = window[..n].iter().map(|&x| x * x).sum();
+        let mean_sq = sum_sq / (n as f32);
+        10.0 * (mean_sq + 1e-12).log10()
+    }
+
+    /// Compute fundamental pitch F0 on a window using the YIN algorithm with parabolic interpolation.
+    pub fn compute_pitch(&self, window: &[f32]) -> Option<f32> {
+        let (pitch, _) = self.compute_pitch_and_cmndf_dip(window);
+        pitch
+    }
+
+    /// Compute pitch and whether a dip below YIN threshold was found.
+    pub fn compute_pitch_and_cmndf_dip(&self, window: &[f32]) -> (Option<f32>, bool) {
+        if window.len() < PROSODY_FRAME_SIZE {
+            return (None, false);
+        }
+
+        let limit = if window.len() >= PROSODY_FRAME_SIZE + PROSODY_MAX_LAG {
+            PROSODY_FRAME_SIZE
+        } else {
+            PROSODY_FRAME_SIZE - PROSODY_MAX_LAG // 192
+        };
+
+        // Difference function d_t(tau) for tau in [1, PROSODY_MAX_LAG]
+        let mut d = [0.0f32; PROSODY_MAX_LAG + 1];
+        for tau in 1..=PROSODY_MAX_LAG {
+            let s1 = &window[..limit];
+            let s2 = &window[tau..tau + limit];
+            let mut sum0 = 0.0f32;
+            let mut sum1 = 0.0f32;
+            let mut sum2 = 0.0f32;
+            let mut sum3 = 0.0f32;
+            let c1 = s1.chunks_exact(4);
+            let c2 = s2.chunks_exact(4);
+            for (w1, w2) in c1.zip(c2) {
+                let d0 = w1[0] - w2[0];
+                let d1 = w1[1] - w2[1];
+                let d2 = w1[2] - w2[2];
+                let d3 = w1[3] - w2[3];
+                sum0 += d0 * d0;
+                sum1 += d1 * d1;
+                sum2 += d2 * d2;
+                sum3 += d3 * d3;
+            }
+            d[tau] = (sum0 + sum1) + (sum2 + sum3);
+        }
+
+        // Cumulative Mean Normalized Difference Function (CMNDF) d'_t(tau)
+        let mut cmnd = [1.0f32; PROSODY_MAX_LAG + 1];
+        let mut running_sum = 0.0f32;
+        cmnd[0] = 1.0;
+        for tau in 1..=PROSODY_MAX_LAG {
+            running_sum += d[tau];
+            if running_sum > 1e-12 {
+                cmnd[tau] = (d[tau] * (tau as f32)) / running_sum;
+            } else {
+                cmnd[tau] = 1.0;
+            }
+        }
+
+        // Absolute thresholding theta = 0.15
+        let mut tau_est = None;
+        for tau in PROSODY_MIN_LAG..=PROSODY_MAX_LAG {
+            if cmnd[tau] < YIN_THRESHOLD {
+                let mut best_tau = tau;
+                while best_tau + 1 <= PROSODY_MAX_LAG && cmnd[best_tau + 1] < cmnd[best_tau] {
+                    best_tau += 1;
+                }
+                tau_est = Some(best_tau);
+                break;
+            }
+        }
+
+        let has_dip = tau_est.is_some();
+        if let Some(best_tau) = tau_est {
+            let x0 = best_tau.saturating_sub(1);
+            let x2 = (best_tau + 1).min(PROSODY_MAX_LAG);
+            let s0 = cmnd[x0];
+            let s1 = cmnd[best_tau];
+            let s2 = cmnd[x2];
+            let denom = 2.0 * (2.0 * s1 - s0 - s2);
+            let delta = if denom.abs() > 1e-12 {
+                (s2 - s0) / denom
+            } else {
+                0.0
+            };
+            let refined_tau = best_tau as f32 + delta;
+            if refined_tau > 0.0 {
+                let f0 = (self.sample_rate as f32) / refined_tau;
+                return (Some(f0), true);
+            }
+        }
+
+        (None, has_dip)
+    }
+
+    fn push_energy(&mut self, t_ms: f32, energy_db: f32) {
+        if self.energy_history_len < 5 {
+            self.energy_history[self.energy_history_len] = (t_ms, energy_db);
+            self.energy_history_len += 1;
+        } else {
+            for i in 0..4 {
+                self.energy_history[i] = self.energy_history[i + 1];
+            }
+            self.energy_history[4] = (t_ms, energy_db);
+        }
+    }
+
+    fn calculate_energy_slope(&self) -> f32 {
+        if self.energy_history_len < 2 {
+            return 0.0;
+        }
+        let n = self.energy_history_len as f32;
+        let mut sum_t = 0.0f32;
+        let mut sum_e = 0.0f32;
+        for i in 0..self.energy_history_len {
+            sum_t += self.energy_history[i].0;
+            sum_e += self.energy_history[i].1;
+        }
+        let mean_t = sum_t / n;
+        let mean_e = sum_e / n;
+
+        let mut num = 0.0f32;
+        let mut den = 0.0f32;
+        for i in 0..self.energy_history_len {
+            let dt = self.energy_history[i].0 - mean_t;
+            let de = self.energy_history[i].1 - mean_e;
+            num += dt * de;
+            den += dt * dt;
+        }
+        if den > 1e-12 {
+            num / den
+        } else {
+            0.0
+        }
+    }
+
+    fn push_pitch(&mut self, t_ms: f32, pitch: f32) {
+        if self.pitch_history_len < 32 {
+            self.pitch_history[self.pitch_history_len] = (t_ms, pitch);
+            self.pitch_history_len += 1;
+        } else {
+            for i in 0..31 {
+                self.pitch_history[i] = self.pitch_history[i + 1];
+            }
+            self.pitch_history[31] = (t_ms, pitch);
+        }
+    }
+
+    fn calculate_pitch_delta_150ms(&self, current_t_ms: f32, current_f0: f32) -> f32 {
+        if self.pitch_history_len < 2 {
+            return 0.0;
+        }
+        let target_t = current_t_ms - 150.0;
+        let mut best_diff = f32::MAX;
+        let mut best_f0 = self.pitch_history[0].1;
+        let mut best_t = self.pitch_history[0].0;
+
+        for i in 0..self.pitch_history_len {
+            let (t, f0) = self.pitch_history[i];
+            let diff = (t - target_t).abs();
+            if diff < best_diff {
+                best_diff = diff;
+                best_f0 = f0;
+                best_t = t;
+            }
+        }
+        if (current_t_ms - best_t).abs() > 350.0 {
+            return 0.0;
+        }
+        current_f0 - best_f0
+    }
+
+    /// Process a single 32 ms frame (512 samples) and return any classified prosodic event.
+    ///
+    /// Executes with zero heap allocations on the hot path.
+    pub fn process_frame(&mut self, frame: &[f32]) -> Option<ProsodicEvent> {
+        self.push_samples(frame);
+        let frame_duration_ms = (PROSODY_FRAME_SIZE as f32 / self.sample_rate as f32) * 1000.0;
+        let t_ms = self.current_time_ms + frame_duration_ms;
+        self.current_time_ms = t_ms;
+
+        let energy_db = self.compute_frame_energy(frame);
+        self.last_energy_db = energy_db;
+        self.push_energy(t_ms, energy_db);
+        let energy_slope = self.calculate_energy_slope();
+        self.last_energy_slope = energy_slope;
+
+        let (pitch_opt, has_dip) = self.compute_pitch_and_cmndf_dip(frame);
+        let is_voiced = pitch_opt.is_some() && energy_db > -45.0;
+        self.is_voiced = is_voiced;
+
+        if is_voiced {
+            let f0 = pitch_opt.unwrap();
+            self.last_pitch = f0;
+            self.push_pitch(t_ms, f0);
+            let delta_f0 = self.calculate_pitch_delta_150ms(t_ms, f0);
+            self.last_pitch_delta = delta_f0;
+            self.silence_duration = Duration::ZERO;
+
+            if delta_f0 <= -35.0 && energy_slope < -0.10 {
+                Some(ProsodicEvent::FallingIntonation)
+            } else if delta_f0 >= 30.0 {
+                Some(ProsodicEvent::RisingIntonation)
+            } else if delta_f0.abs() < 18.0 {
+                Some(ProsodicEvent::LevelContinuation)
+            } else {
+                None
+            }
+        } else {
+            self.last_pitch = 0.0;
+            self.silence_duration += Duration::from_secs_f32(frame_duration_ms / 1000.0);
+
+            // Energy decay fallback: when CMNDF has no dip (unvoiced/noise) but dE/dt < -0.15 dB/ms with silence >= 450ms, classify as terminal boundary
+            if !has_dip && energy_slope < -0.15 && self.silence_duration >= Duration::from_millis(450) {
+                Some(ProsodicEvent::FallingIntonation)
+            } else {
+                Some(ProsodicEvent::Silence(self.silence_duration))
+            }
+        }
+    }
+
+    /// Process a streaming audio chunk of arbitrary size, consuming frames from the ring buffer.
+    pub fn process_chunk(&mut self, samples: &[f32]) -> Vec<ProsodicEvent> {
+        let mut events = Vec::new();
+        self.push_samples(samples);
+        let mut frame_buf = [0.0f32; PROSODY_FRAME_SIZE];
+        while self.ring_len >= PROSODY_FRAME_SIZE {
+            if self.copy_latest_frame(&mut frame_buf) {
+                if let Some(ev) = self.process_frame(&frame_buf) {
+                    events.push(ev);
+                }
+            }
+            break;
+        }
+        events
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::PI;
+    use std::time::Instant;
+
+    fn generate_sine(freq: f32, n_samples: usize, sample_rate: f32) -> Vec<f32> {
+        (0..n_samples)
+            .map(|i| (2.0 * PI * freq * (i as f32) / sample_rate).sin())
+            .collect()
+    }
+
+    #[test]
+    fn test_yin_pitch_detection_synthetic_sines() {
+        let tracker = ProsodyTracker::new();
+        for &freq in &[100.0f32, 220.0f32, 440.0f32] {
+            let sine = generate_sine(freq, PROSODY_FRAME_SIZE, TARGET_SAMPLE_RATE as f32);
+            let detected = tracker.compute_pitch(&sine).expect("pitch should be detected");
+            let error = (detected - freq).abs();
+            assert!(
+                error < 2.0,
+                "Pitch detection error for {freq} Hz must be < 2 Hz, got {error:.4} Hz ({detected:.2} Hz detected)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_falling_pitch_classification_sweep() {
+        let mut tracker = ProsodyTracker::new();
+        let sample_rate = TARGET_SAMPLE_RATE as f32;
+        let duration_sec = 0.250f32;
+        let n_samples = (sample_rate * duration_sec) as usize;
+        let mut sweep_falling = Vec::with_capacity(n_samples);
+        let mut phase = 0.0f32;
+        for i in 0..n_samples {
+            let t = i as f32 / sample_rate;
+            let frac = t / duration_sec;
+            let freq = 200.0 - 70.0 * frac; // 200 Hz -> 130 Hz
+            let amp = 0.8 * (-3.0 * frac).exp(); // decay energy
+            phase += 2.0 * PI * freq / sample_rate;
+            sweep_falling.push(amp * phase.sin());
+        }
+
+        let mut falling_detected = false;
+        for chunk in sweep_falling.chunks(PROSODY_FRAME_SIZE) {
+            if chunk.len() == PROSODY_FRAME_SIZE {
+                if let Some(event) = tracker.process_frame(chunk) {
+                    if event == ProsodicEvent::FallingIntonation {
+                        falling_detected = true;
+                    }
+                }
+            }
+        }
+        assert!(falling_detected, "Falling intonation (200 Hz -> 130 Hz) should be detected");
+    }
+
+    #[test]
+    fn test_rising_pitch_classification_sweep() {
+        let mut tracker = ProsodyTracker::new();
+        let sample_rate = TARGET_SAMPLE_RATE as f32;
+        let duration_sec = 0.250f32;
+        let n_samples = (sample_rate * duration_sec) as usize;
+        let mut sweep_rising = Vec::with_capacity(n_samples);
+        let mut phase = 0.0f32;
+        for i in 0..n_samples {
+            let t = i as f32 / sample_rate;
+            let frac = t / duration_sec;
+            let freq = 180.0 + 70.0 * frac; // 180 Hz -> 250 Hz
+            phase += 2.0 * PI * freq / sample_rate;
+            sweep_rising.push(0.5 * phase.sin());
+        }
+
+        let mut rising_detected = false;
+        for chunk in sweep_rising.chunks(PROSODY_FRAME_SIZE) {
+            if chunk.len() == PROSODY_FRAME_SIZE {
+                if let Some(event) = tracker.process_frame(chunk) {
+                    if event == ProsodicEvent::RisingIntonation {
+                        rising_detected = true;
+                    }
+                }
+            }
+        }
+        assert!(rising_detected, "Rising intonation (180 Hz -> 250 Hz) should be detected");
+    }
+
+    #[test]
+    fn test_level_continuation() {
+        let mut tracker = ProsodyTracker::new();
+        let sine = generate_sine(220.0, PROSODY_FRAME_SIZE * 5, TARGET_SAMPLE_RATE as f32);
+        let mut level_seen = false;
+        for chunk in sine.chunks(PROSODY_FRAME_SIZE) {
+            if chunk.len() == PROSODY_FRAME_SIZE {
+                if let Some(event) = tracker.process_frame(chunk) {
+                    if event == ProsodicEvent::LevelContinuation {
+                        level_seen = true;
+                    }
+                }
+            }
+        }
+        assert!(level_seen, "Level continuation should be detected for steady pitch");
+    }
+
+    #[test]
+    fn test_prosody_benchmark_per_frame() {
+        let mut tracker = ProsodyTracker::new();
+        let frame = generate_sine(220.0, PROSODY_FRAME_SIZE, TARGET_SAMPLE_RATE as f32);
+        // Warm up
+        for _ in 0..10 {
+            let _ = tracker.process_frame(&frame);
+        }
+        let iters = 100;
+        let start = Instant::now();
+        for _ in 0..iters {
+            let _ = tracker.process_frame(&frame);
+        }
+        let elapsed = start.elapsed();
+        let per_frame = elapsed / iters;
+        eprintln!("Benchmark: {per_frame:?} per 32ms frame");
+
+        #[cfg(not(debug_assertions))]
+        {
+            assert!(
+                per_frame < Duration::from_micros(200),
+                "Release compute cost must be < 0.2ms, got {per_frame:?}"
+            );
+        }
+        #[cfg(debug_assertions)]
+        {
+            eprintln!("Note: Running in unoptimized debug mode ({per_frame:?}/frame); release mode achieves < 0.2ms");
+            assert!(
+                per_frame < Duration::from_millis(100),
+                "Debug compute sanity check failed: {per_frame:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_energy_decay_fallback() {
+        let mut tracker = ProsodyTracker::new();
+        tracker.current_time_ms = 128.0;
+        tracker.energy_history = [
+            (0.0, 0.0),
+            (32.0, -10.0),
+            (64.0, -20.0),
+            (96.0, -35.0),
+            (128.0, -50.0),
+        ];
+        tracker.energy_history_len = 5;
+        tracker.silence_duration = Duration::from_millis(460);
+
+        let silence_frame = vec![0.0f32; PROSODY_FRAME_SIZE];
+        let event = tracker.process_frame(&silence_frame);
+        assert_eq!(
+            event,
+            Some(ProsodicEvent::FallingIntonation),
+            "Energy decay fallback must classify as terminal boundary (FallingIntonation)"
+        );
+        assert!(event.unwrap().is_terminal_boundary());
+    }
 
     #[test]
     fn contains_speech_matches_energy_gate() {
